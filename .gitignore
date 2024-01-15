@@ -1,0 +1,6 @@
+# Ignore Everything
+/*
+
+# Except for these files
+!.gitignore
+!/.tmux.conf
