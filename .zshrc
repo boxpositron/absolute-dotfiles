@@ -4,8 +4,9 @@
 # Enable 256 colors
 # export TERM="xterm-256color"
 
+
 # Path to your oh-my-zsh installation.
-export ZSH="/Users/davidibia/.oh-my-zsh"
+export ZSH="$HOME/.oh-my-zsh"
 
 # Set name of the theme to load --- if set to "random", it will
 # load a random theme each time oh-my-zsh is loaded, in which case,
@@ -116,8 +117,8 @@ export PATH="$HOME/flutter/bin:$PATH"
 export PATH="$HOME/bin:$PATH"
 
 ###-tns-completion-start-###
-if [ -f /Users/davidibia/.tnsrc ]; then
-  source /Users/davidibia/.tnsrc
+if [ -f "$HOME/.tnsrc" ]; then
+  source "$HOME/.tnsrc"
 fi
 ###-tns-completion-end-###
 
@@ -142,7 +143,7 @@ alias vim='nvim'
 [[ -s "/etc/grc.zsh" ]] && source /etc/grc.zsh
 
 # pnpm
-export PNPM_HOME="/Users/davidibia/Library/pnpm"
+export PNPM_HOME="$HOME/Library/pnpm"
 export PATH="$PNPM_HOME:$PATH"
 alias pn=pnpm
 # pnpm end
@@ -153,14 +154,14 @@ alias pn=pnpm
 
 # >>> conda initialize >>>
 # !! Contents within this block are managed by 'conda init' !!
-__conda_setup="$('/Users/davidibia/miniconda3/bin/conda' 'shell.zsh' 'hook' 2>/dev/null)"
+__conda_setup="$('$HOME/miniconda3/bin/conda' 'shell.zsh' 'hook' 2>/dev/null)"
 if [ $? -eq 0 ]; then
   eval "$__conda_setup"
 else
-  if [ -f "/Users/davidibia/miniconda3/etc/profile.d/conda.sh" ]; then
-    . "/Users/davidibia/miniconda3/etc/profile.d/conda.sh"
+  if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    . "$HOME/miniconda3/etc/profile.d/conda.sh"
   else
-    export PATH="/Users/davidibia/miniconda3/bin:$PATH"
+    export PATH="$HOME/miniconda3/bin:$PATH"
   fi
 fi
 unset __conda_setup
@@ -174,7 +175,7 @@ export ANDROID_HOME=$HOME/Library/Android/sdk
 export PATH=$PATH:$ANDROID_HOME/platform-tools
 
 # bun completions
-[ -s "/Users/davidibia/.bun/_bun" ] && source "/Users/davidibia/.bun/_bun"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"
@@ -219,8 +220,8 @@ export PATH=$GEM_HOME/bin:$PATH
 export PATH=$HOME/flutter/bin:$PATH
 
 
-PATH="/U/Users/davidibia/sers/davidibia/perl5/bin${PATH:+:${PATH}}"; export PATH;
-PERL5LIB="/Users/davidibia/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"; export PERL5LIB;
-PERL_LOCAL_LIB_ROOT="/Users/davidibia/perl5${PERL_LOCAL_LIB_ROOT:+:${PERL_LOCAL_LIB_ROOT}}"; export PERL_LOCAL_LIB_ROOT;
-PERL_MB_OPT="--install_base \"/Users/davidibia/perl5\""; export PERL_MB_OPT;
-PERL_MM_OPT="INSTALL_BASE=/Users/davidibia/perl5"; export PERL_MM_OPT;
+PATH="$HOME/perl5/bin${PATH:+:${PATH}}"; export PATH;
+PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"; export PERL5LIB;
+PERL_LOCAL_LIB_ROOT="$HOME/perl5${PERL_LOCAL_LIB_ROOT:+:${PERL_LOCAL_LIB_ROOT}}"; export PERL_LOCAL_LIB_ROOT;
+PERL_MB_OPT="--install_base \"$HOME/perl5\""; export PERL_MB_OPT;
+PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
