@@ -71,14 +71,16 @@ COMPLETION_WAITING_DOTS="true"
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(git asdf zsh-syntax-highlighting colorize )
-
-ZSH_COLORIZE_STYLE="colorful"
-ZSH_TMUX_AUTOSTART="true"
+plugins=(git asdf zsh-syntax-highlighting)
 
 source $ZSH/oh-my-zsh.sh
 
 # User configuration
+
+# Setup oh-my-posh
+if [ "$TERM_PROGRAM" != "Apple_Terminal" ]; then
+  eval "$(oh-my-posh init zsh)"
+fi
 
 # export MANPATH="/usr/local/man:$MANPATH"
 
