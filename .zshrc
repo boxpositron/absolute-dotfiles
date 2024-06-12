@@ -79,7 +79,7 @@ source $ZSH/oh-my-zsh.sh
 
 # Setup oh-my-posh
 if [ "$TERM_PROGRAM" != "Apple_Terminal" ]; then
-  eval "$(oh-my-posh init zsh)"
+  eval "$(oh-my-posh init zsh --config $HOME/.config/ohmyposh/zen.toml)"
 fi
 
 # export MANPATH="/usr/local/man:$MANPATH"
@@ -134,9 +134,7 @@ alias ll='eza -l --color=always --group-directories-first --icons'  # long forma
 alias lt='eza -aT --color=always --group-directories-first --icons' # tree 
 alias l.='eza -a --icons | egrep "^\."'
 
-alias cat="bat --theme=\$(defaults read -globalDomain AppleInterfaceStyle &> /dev/null && echo default || echo base16)"
-# Lets set the bat theme
-export BAT_THEME="ansi"
+alias cat="bat --theme=\$(defaults read -globalDomain AppleInterfaceStyle &> /dev/null && echo ansi || echo base16)"
 
 # alias vim to neovim
 alias vim='nvim'
