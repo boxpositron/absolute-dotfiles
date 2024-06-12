@@ -31,6 +31,38 @@ else
     brew install git
 fi
 
+# Check if coreutils is installed
+
+if command -v gdate &> /dev/null; then
+    echo "coreutils is installed."
+else
+    echo "coreutils is not installed."
+    echo "Installing coreutils..."
+    brew install coreutils
+fi
+
+# Check if OhMyPosh is installed
+
+if command -v oh-my-posh &> /dev/null; then
+    echo "OhMyPosh is installed."
+else
+    echo "OhMyPosh is not installed."
+    echo "Installing OhMyPosh..."
+    brew install jandedobbeleer/oh-my-posh/oh-my-posh
+fi
+
+# Check if asdf is installed
+if command -v asdf &> /dev/null; then
+    echo "asdf is installed."
+else
+    echo "asdf is not installed."
+    echo "Installing asdf..."
+    brew install asdf
+
+    echo "Adding asdf plugins..."
+    asdf plugin add nodejs https://github.com/asdf-vm/asdf-nodejs.git
+fi
+
 # Check if NodeJS is installed
 if command -v node &> /dev/null; then
     echo "NodeJS is installed."
