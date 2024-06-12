@@ -110,7 +110,7 @@ export PATH="/usr/local/go/bin:$PATH"
 
 # Flutter Setup
 
-export PATH="$HOME/flutter/bin:$PATH"
+export PATH="$HOME/fvm/default/bin:$PATH"
 
 # Act Setup
 
@@ -126,15 +126,15 @@ fi
 
 alias nmap='grc nmap'
 
-alias ls='exa -a --color=always --group-directories-first --icons'  #my preferred listing
-alias la='exa -a --color=always --group-directories-first --icons'  # all files and dirs
-alias ll='exa -l --color=always --group-directories-first --icons'  # long format
-alias lt='exa -aT --color=always --group-directories-first --icons' # tree 
-alias l.='exa -a --icons | egrep "^\."'
+alias ls='eza -a --color=always --group-directories-first --icons'  #my preferred listing
+alias la='eza -a --color=always --group-directories-first --icons'  # all files and dirs
+alias ll='eza -l --color=always --group-directories-first --icons'  # long format
+alias lt='eza -aT --color=always --group-directories-first --icons' # tree 
+alias l.='eza -a --icons | egrep "^\."'
 
-alias cat='bat'
+alias cat="bat --theme=\$(defaults read -globalDomain AppleInterfaceStyle &> /dev/null && echo default || echo base16)"
 # Lets set the bat theme
-export BAT_THEME="Visual Studio Dark+"
+export BAT_THEME="ansi"
 
 # alias vim to neovim
 alias vim='nvim'
@@ -152,34 +152,12 @@ alias pn=pnpm
 . "$HOME/.cargo/env"
 
 
-# >>> conda initialize >>>
-# !! Contents within this block are managed by 'conda init' !!
-__conda_setup="$('$HOME/miniconda3/bin/conda' 'shell.zsh' 'hook' 2>/dev/null)"
-if [ $? -eq 0 ]; then
-  eval "$__conda_setup"
-else
-  if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-    . "$HOME/miniconda3/etc/profile.d/conda.sh"
-  else
-    export PATH="$HOME/miniconda3/bin:$PATH"
-  fi
-fi
-unset __conda_setup
-# <<< conda initialize <<<
-
 # Curl Setup
 export LDFLAGS="-L/opt/homebrew/opt/curl/lib"
 export CPPFLAGS="-I/opt/homebrew/opt/curl/include"
 
 export ANDROID_HOME=$HOME/Library/Android/sdk
 export PATH=$PATH:$ANDROID_HOME/platform-tools
-
-# bun completions
-[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
-
-# bun
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
 
 if [ -d "$HOME/.local/bin" ] ; then
     PATH="$HOME/.local/bin:$PATH"
@@ -197,20 +175,8 @@ function tmn() {
     tmux new -s $1 -c $PWD | title "Workspace"
 }
 
-# TMUX Setup End
-
-# Setup Github SSH
-eval "$(ssh-agent -s)" >/dev/null 2>&1
-
-ssh-add --apple-use-keychain ~/.ssh/github >/dev/null 2>&1 || echo "Unable to setup Github SSH Identity"
-
-
-# Setup Starship
-eval "$(starship init zsh)"
-
-# Setup Zoxide
-eval "$(zoxide init --cmd zd zsh)"
-
+# Setup Flutter
+export PATH="$HOME/.pub-cache/bin:$PATH"
 
 # Setup FZF
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
@@ -225,3 +191,14 @@ PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"; export PERL5LIB;
 PERL_LOCAL_LIB_ROOT="$HOME/perl5${PERL_LOCAL_LIB_ROOT:+:${PERL_LOCAL_LIB_ROOT}}"; export PERL_LOCAL_LIB_ROOT;
 PERL_MB_OPT="--install_base \"$HOME/perl5\""; export PERL_MB_OPT;
 PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
+
+
+## [Completion]
+## Completion scripts setup. Remove the following line to uninstall
+[[ -f /Users/davidibia/.dart-cli-completion/zsh-config.zsh ]] && . /Users/davidibia/.dart-cli-completion/zsh-config.zsh || true
+## [/Completion]
+
+
+#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+export SDKMAN_DIR="$HOME/.sdkman"
+[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
