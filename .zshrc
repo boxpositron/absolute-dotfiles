@@ -71,7 +71,7 @@ COMPLETION_WAITING_DOTS="true"
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(git asdf zsh-syntax-highlighting)
+plugins=(git asdf zsh-syntax-highlighting tmux)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -193,6 +193,8 @@ export PATH="$HOME/.pub-cache/bin:$PATH"
 export GEM_HOME=$HOME/.gem
 export PATH=$GEM_HOME/bin:$PATH
 export PATH=$HOME/flutter/bin:$PATH
+
+export XDG_CONFIG_HOME="$HOME/.config"
 
 
 PATH="$HOME/perl5/bin${PATH:+:${PATH}}"; export PATH;
