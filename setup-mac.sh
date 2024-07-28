@@ -10,17 +10,6 @@ else
     echo "Installing Homebrew..."
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 fi
-
-# Check if Nix is installed
-
-if command -v nix &> /dev/null; then
-    echo "Nix is installed."
-else
-    echo "Nix is not installed."
-    echo "Installing Nix..."
-    sh <(curl -L https://nixos.org/nix/install) --yes
-fi
-
 # Check if Git is installed
 
 if command -v git &> /dev/null; then
@@ -95,6 +84,15 @@ else
     sudo sh -c "echo $(which zsh) >> /etc/shells"
 fi
 
+# Check if Generic Colorizer is installed
+
+if command -v grc &> /dev/null; then
+    echo "Generic Colorizer is installed."
+else
+    echo "Generic Colorizer is not installed."
+    echo "Installing Generic Colorizer..."
+    brew install grc
+fi
 
 # Check if bat is installed
 
@@ -113,7 +111,7 @@ if command -v eza &> /dev/null; then
 else
     echo "eza is not installed."
     echo "Installing eza..."
-    nix-env -i eza
+    brew install eza
 fi
 
 # Install global pnpm package
