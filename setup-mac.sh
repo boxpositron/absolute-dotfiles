@@ -71,6 +71,22 @@ else
     brew install neovim
 fi
 
+# Check if WezTerm is installed
+
+
+if command -v wezterm &> /dev/null; then
+    echo "WezTerm is installed."
+else
+    echo "WezTerm is not installed."
+    echo "Installing WezTerm..."
+    brew install wezterm
+fi
+
+
+# Ensure fira font is installed
+
+brew install font-fira-code-nerd-font
+
 # Check if Zsh is installed
 
 if command -v zsh &> /dev/null; then
