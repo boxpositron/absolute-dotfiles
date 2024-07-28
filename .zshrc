@@ -77,11 +77,6 @@ source $ZSH/oh-my-zsh.sh
 
 # User configuration
 
-# Setup oh-my-posh
-if [ "$TERM_PROGRAM" != "Apple_Terminal" ]; then
-  eval "$(oh-my-posh init zsh --config $HOME/.config/ohmyposh/zen.toml)"
-fi
-
 # export MANPATH="/usr/local/man:$MANPATH"
 
 # You may need to manually set your language environment
@@ -127,20 +122,33 @@ fi
 # aliases for extra commands
 
 alias nmap='grc nmap'
+alias ping='grc ping'
 
-alias ls='eza -a --color=always --group-directories-first --icons'  #my preferred listing
-alias la='eza -a --color=always --group-directories-first --icons'  # all files and dirs
-alias ll='eza -l --color=always --group-directories-first --icons'  # long format
-alias lt='eza -aT --color=always --group-directories-first --icons' # tree 
-alias l.='eza -a --icons | egrep "^\."'
+# Check if eza is installed
 
-alias cat="bat --theme=\$(defaults read -globalDomain AppleInterfaceStyle &> /dev/null && echo ansi || echo base16)"
+if [ -x "$(command -v eza)" ]; then
+    alias ls='eza -a --color=always --group-directories-first --icons'  #my preferred listing
+    alias la='eza -a --color=always --group-directories-first --icons'  # all files and dirs
+    alias ll='eza -l --color=always --group-directories-first --icons'  # long format
+    alias lt='eza -aT --color=always --group-directories-first --icons' # tree 
+    alias l.='eza -a --icons | egrep "^\."'
+else
+    echo "eza is not installed. Please install it to use the custom ls commands."
+fi
+
+# Check if bat is installed
+
+if [ -x "$(command -v bat)" ]; then
+    alias cat="bat --theme=\$(defaults read -globalDomain AppleInterfaceStyle &> /dev/null && echo ansi || echo base16)"
+else
+    echo "bat is not installed. Please install it to use the custom cat command."
+fi
 
 # alias vim to neovim
 alias vim='nvim'
 
 
-[[ -s "/etc/grc.zsh" ]] && source /etc/grc.zsh
+# [[ -s "/etc/grc.zsh" ]] && source /etc/grc.zsh
 
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
@@ -181,6 +189,7 @@ export PATH="$HOME/.pub-cache/bin:$PATH"
 # Setup FZF
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
+
 export GEM_HOME=$HOME/.gem
 export PATH=$GEM_HOME/bin:$PATH
 export PATH=$HOME/flutter/bin:$PATH
@@ -195,10 +204,19 @@ PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
 
 ## [Completion]
 ## Completion scripts setup. Remove the following line to uninstall
-[[ -f /Users/davidibia/.dart-cli-completion/zsh-config.zsh ]] && . /Users/davidibia/.dart-cli-completion/zsh-config.zsh || true
+[[ -f $HOME/.dart-cli-completion/zsh-config.zsh ]] && . $HOME/.dart-cli-completion/zsh-config.zsh || true
+
+## Setup fzf
+[[ -f ~/.fzf.zsh  ]] && source <(fzf --zsh)
 ## [/Completion]
 
 
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+
+# Init Starship
+export STARSHIP_CONFIG="$HOME/.config/starship.toml"
+eval "$(starship init zsh)"
+
+
