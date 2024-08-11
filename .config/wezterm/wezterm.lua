@@ -16,7 +16,7 @@ config.window_background_opacity = .9
 config.background = {
     {
         source = {
-            Color = "#000000",
+            Color = "#1C1F26",
         },
         width = "100%",
         height = "100%",
