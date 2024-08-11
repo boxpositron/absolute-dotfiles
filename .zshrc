@@ -173,14 +173,59 @@ fi
 
 # TMUX Setup Start
 
-alias tml="tmux ls"
-
-function tma() {
-    tmux attach -t $1 | title "Workspace"
+function tml() {
+    sessions=$(tmux ls | sed -E 's/:.*$//')
+    for session in $sessions; do
+        echo $session
+    done
 }
 
+
+function tma() {
+
+    # If no argument is passed, show the list of tmux sessions with fzf
+    
+    if [ -z "$1" ]; then
+        tmux attach -t $(tml | fzf)
+        return
+    fi
+
+    # If an argument is passed, attach to the session with that name
+    tmux attach -t $1 
+
+}
+
+function get_tmn_recommendation() {
+    # Get the list of directories in the current directory
+    list_of_directories_in_current_directory=$(ls -d */ | sed 's/\/$//')
+
+    # Return the list of directories as newline-separated strings
+    for dir in $list_of_directories_in_current_directory; do
+        echo $dir
+    done
+}
+
+
 function tmn() {
-    tmux new -s $1 -c $PWD | title "Workspace"
+
+   
+    # If no argument is passed, get the recommendations and show them with fzf
+
+    if [ -z "$1" ]; then
+        random_tag_name=$(date +%s)
+        tmux new -s $(get_tmn_recommendation | fzf) | title $("Workspace - $random_tag_name")
+        return
+    fi
+
+    tmux new -s $1 
+}
+
+_fzf_complete_tma() {
+  _fzf_complete --multi --reverse --prompt="tma> " -- "$@" < <(tmux ls | sed -E 's/:.*$//')
+}
+
+_fzf_complete_tmn() {
+  _fzf_complete --multi --reverse --prompt="tmn> " -- "$@" < <( get_tmn_recommendation )
 }
 
 # Setup Flutter
