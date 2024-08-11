@@ -13,17 +13,17 @@ config.cursor_blink_rate = 0
 config.font = wezterm.font("FiraCode Nerd Font", { weight = 450, stretch = "Normal", style = "Normal" })
 config.font_size = 14
 config.window_background_opacity = .9
--- background = {
---     {
---         source = {
---             Color = "#1a1b26",
---         },
---         width = "100%",
---         height = "100%",
---         opacity = 0.90,
---
---     }
--- },
+config.background = {
+    {
+        source = {
+            Color = "#000000",
+        },
+        width = "100%",
+        height = "100%",
+        opacity = 0.90,
+
+    }
+}
 config.window_padding = {
     left = 3,
     right = 3,
