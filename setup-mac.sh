@@ -190,3 +190,14 @@ else
     echo "Installing sdkman..."
     curl -s "https://get.sdkman.io" | bash
 fi
+
+
+# Install Aerospace
+
+if command -v aerospace &> /dev/null; then
+    echo "aerospace is installed."
+else
+    echo "aerospace is not installed."
+    echo "Installing aerospace..."
+    brew install --cask nikitabobko/tap/aerospace
+fi
