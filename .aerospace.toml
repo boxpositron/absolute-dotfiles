@@ -197,6 +197,9 @@ alt-shift-l = ['join-with right', 'mode main']
 cmd-h = [] # Disable "hide application"
 cmd-alt-h = [] #
 
+[[on-window-detected]]
+check-further-callbacks = true
+run = 'layout tiling'
 
 [[on-window-detected]]
 if.app-id = "com.github.wez.wezterm"
