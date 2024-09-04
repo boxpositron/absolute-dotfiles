@@ -27,7 +27,7 @@ enable-normalization-opposite-orientation-for-nested-containers = true
 accordion-padding = 60
 
 # Possible values: tiles|accordion
-default-root-container-layout = 'tiles'
+default-root-container-layout = 'accordion'
 
 # Possible values: horizontal|vertical|auto
 # 'auto' means: wide monitor (anything wider than high) gets horizontal orientation,
@@ -202,9 +202,24 @@ check-further-callbacks = true
 run = 'layout tiling'
 
 [[on-window-detected]]
+if.app-id = 'company.thebrowser.Browser'
+check-further-callbacks = true
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'company.thebrowser.Browser'
+if.window-title-regex-substring = '^[^Space|Little]'
+check-further-callbacks = true
+run = 'layout tiling'
+
+
+[[on-window-detected]]
 if.app-id = "com.github.wez.wezterm"
 run = "move-node-to-workspace T"
 
+[[on-window-detected]]
+if.app-id = "com.postmanlabs.mac"
+run = "move-node-to-workspace T"
 
 [[on-window-detected]]
 if.app-id = "net.whatsapp.WhatsApp"
@@ -229,6 +244,4 @@ run = "move-node-to-workspace 2"
 [[on-window-detected]]
 if.app-id = "md.obsidian"
 run = "move-node-to-workspace N"
-
-
 
