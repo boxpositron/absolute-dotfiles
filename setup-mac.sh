@@ -169,6 +169,16 @@ else
     curl -sSL https://install.python-poetry.org | python3 -
 fi
 
+# Check if anaconda is installed
+
+if command -v conda &> /dev/null; then
+    echo "anaconda is installed."
+else
+    echo "anaconda is not installed."
+    echo "Installing anaconda..."
+    brew install --cask anaconda
+fi
+
 # Install Flutter version manager
 
 if command -v fvm &> /dev/null; then
