@@ -116,7 +116,6 @@ alt-6 = 'workspace 6'
 alt-7 = 'workspace 7'
 alt-8 = 'workspace 8'
 alt-9 = 'workspace 9'
-alt-a = 'workspace A' # In your config, you can drop workspace bindings that you don't need
 alt-b = 'workspace B'
 # alt-c = 'workspace C'
 # alt-d = 'workspace D'
@@ -149,7 +148,7 @@ alt-shift-6 = ['move-node-to-workspace 6', 'workspace 6']
 alt-shift-7 = ['move-node-to-workspace 7', 'workspace 7']
 alt-shift-8 = ['move-node-to-workspace 8', 'workspace 8']
 alt-shift-9 = ['move-node-to-workspace 9', 'workspace 9']
-alt-shift-a = 'move-node-to-workspace A'
+# alt-shift-a = 'move-node-to-workspace A'
 alt-shift-b = 'move-node-to-workspace B'
 # alt-shift-c = 'move-node-to-workspace C'
 # alt-shift-d = 'move-node-to-workspace D'
@@ -199,7 +198,12 @@ cmd-alt-h = [] #
 
 [[on-window-detected]]
 check-further-callbacks = true
-run = 'layout tiling'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.Finder'
+check-further-callbacks = true
+run = 'layout floating'
 
 [[on-window-detected]]
 if.app-id = 'company.thebrowser.Browser'
@@ -210,7 +214,7 @@ run = 'layout floating'
 if.app-id = 'company.thebrowser.Browser'
 if.window-title-regex-substring = '^[^Space|Little]'
 check-further-callbacks = true
-run = 'layout tiling'
+run = 'layout floating'
 
 
 [[on-window-detected]]
@@ -218,35 +222,62 @@ if.app-id = 'com.dmitrynikolaev.numi'
 check-further-callbacks = true
 run = 'layout floating'
 
+
+[[on-window-detected]]
+if.app-id = 'com.google.Chrome'
+if.window-title-regex-substring = 'Picture in Picture'
+check-further-callbacks = true
+run = 'layout floating'
+
+
+[[on-window-detected]]
+if.app-id = "com.apple.Preview"
+check-further-callbacks = true
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.quicklook.ThumbnailsAgent'
+check-further-callbacks = true
+run = 'layout floating'
+
+
 [[on-window-detected]]
 if.app-id = "com.github.wez.wezterm"
+check-further-callbacks = true
 run = "move-node-to-workspace T"
 
 [[on-window-detected]]
 if.app-id = "com.postmanlabs.mac"
+check-further-callbacks = true
 run = "move-node-to-workspace T"
 
 [[on-window-detected]]
 if.app-id = "net.whatsapp.WhatsApp"
+check-further-callbacks = true
 run = "move-node-to-workspace M"
 
 [[on-window-detected]]
 if.app-id = "com.hnc.Discord"
+check-further-callbacks = true
 run = "move-node-to-workspace M"
 
 [[on-window-detected]]
 if.app-id = "company.thebrowser.Browser"
+check-further-callbacks = true
 run = "move-node-to-workspace B"
 
 [[on-window-detected]]
 if.app-id = "com.google.Chrome"
+check-further-callbacks = true
 run = "move-node-to-workspace B"
 
 [[on-window-detected]]
 if.app-id = "com.apple.MobileSMS"
+check-further-callbacks = true
 run = "move-node-to-workspace 2"
 
 [[on-window-detected]]
 if.app-id = "md.obsidian"
+check-further-callbacks = true
 run = "move-node-to-workspace N"
 
