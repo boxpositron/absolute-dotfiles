@@ -177,6 +177,7 @@ else
     echo "anaconda is not installed."
     echo "Installing anaconda..."
     brew install --cask anaconda
+
 fi
 
 # Install Flutter version manager
