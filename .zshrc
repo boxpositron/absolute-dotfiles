@@ -71,7 +71,7 @@ COMPLETION_WAITING_DOTS="true"
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(git asdf zsh-syntax-highlighting tmux)
+plugins=(git asdf tmux)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -157,7 +157,9 @@ alias pn=pnpm
 # pnpm end
 
 # Initiate cargo
-. "$HOME/.cargo/env"
+if [ -d "$HOME/.cargo" ] ; then
+    . "$HOME/.cargo/env"
+fi
 
 
 # Curl Setup
@@ -258,9 +260,6 @@ PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
 ## [/Completion]
 
 
-## Setup anaconda
-# export PATH="/opt/homebrew/anaconda3/bin:$PATH"  # commented out by conda initialize
-
 #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
 export SDKMAN_DIR="$HOME/.sdkman"
 [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
@@ -269,20 +268,12 @@ export SDKMAN_DIR="$HOME/.sdkman"
 export STARSHIP_CONFIG="$HOME/.config/starship.toml"
 eval "$(starship init zsh)"
 
+# Poetry Shell
+fpath+=~/.zfunc
+autoload -Uz compinit && compinit
 
+# Pyenv Virtualenv init
+eval "$(pyenv init -)"
+eval "$(pyenv virtualenv-init -)"
 
-# >>> conda initialize >>>
-# !! Contents within this block are managed by 'conda init' !!
-__conda_setup="$('/opt/homebrew/anaconda3/bin/conda' 'shell.zsh' 'hook' 2> /dev/null)"
-if [ $? -eq 0 ]; then
-    eval "$__conda_setup"
-else
-    if [ -f "/opt/homebrew/anaconda3/etc/profile.d/conda.sh" ]; then
-        . "/opt/homebrew/anaconda3/etc/profile.d/conda.sh"
-    else
-        export PATH="/opt/homebrew/anaconda3/bin:$PATH"
-    fi
-fi
-unset __conda_setup
-# <<< conda initialize <<<
-
+source /usr/local/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
