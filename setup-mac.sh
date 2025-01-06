@@ -169,6 +169,31 @@ else
     curl -sSL https://install.python-poetry.org | python3 -
 fi
 
+# Check if gh is installed
+if command -v gh &> /dev/null; then
+    echo "gh is installed"
+else
+    echo "gh is not installed"
+    echo "Installing gh with brew..."
+    brew install gh
+
+# Check if pyenv is installed
+
+if command -v pyenv &> /dev/null; then
+    echo "pyenv is installed."
+else
+    echo "pyenv is not installed."
+    echo "Installing pyenv with brew..."
+    brew install pyenv
+
+# Check if pyenv-virtualenv is installed
+if command -v pyenv &> /dev/null; then
+    echo "pyenv-virtualenv is installed."
+else
+    echo "pyenv-virtualenv is not installed."
+    echo "Installing pyenv-virtualenv with brew..."
+    brew install pyenv-virtualenv
+
 # Check if anaconda is installed
 
 if command -v conda &> /dev/null; then
