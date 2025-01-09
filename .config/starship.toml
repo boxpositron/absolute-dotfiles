@@ -6,16 +6,18 @@ $git_branch\
 $git_state\
 $git_status\
 $hg_branch\
-$cmd_duration\
 $line_break\
 $lua\
 $elixir\
 $python\
 $zig\
-$character"""
+$character\
+"""
 
 right_format = """
-$time"""
+$cmd_duration\
+$time\
+"""
 
 
 command_timeout = 3000
