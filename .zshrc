@@ -163,11 +163,17 @@ fi
 
 
 # Curl Setup
-export LDFLAGS="-L/opt/homebrew/opt/curl/lib"
-export CPPFLAGS="-I/opt/homebrew/opt/curl/include"
+if [ -d "/opt/homebrew/opt/curl" ] ; then
+    export LDFLAGS="-L/opt/homebrew/opt/curl/lib"
+    export CPPFLAGS="-I/opt/homebrew/opt/curl/include"
+fi
 
-export ANDROID_HOME=$HOME/Library/Android/sdk
-export PATH=$PATH:$ANDROID_HOME/platform-tools
+
+# Android setup
+if [ -d "$HOME/Library/Android/sdk" ] ; then
+    export ANDROID_HOME=$HOME/Library/Android/sdk
+    export PATH=$PATH:$ANDROID_HOME/platform-tools
+fi
 
 if [ -d "$HOME/.local/bin" ] ; then
     PATH="$HOME/.local/bin:$PATH"
@@ -231,11 +237,9 @@ _fzf_complete_tmn() {
 }
 
 # Setup Flutter
+
+
 export PATH="$HOME/.pub-cache/bin:$PATH"
-
-# Setup FZF
-[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
-
 
 export GEM_HOME=$HOME/.gem
 export PATH=$GEM_HOME/bin:$PATH
@@ -259,11 +263,6 @@ PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
 [[ -f ~/.fzf.zsh  ]] && source <(fzf --zsh)
 ## [/Completion]
 
-
-#THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
-export SDKMAN_DIR="$HOME/.sdkman"
-[[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
-
 # Init Starship
 export STARSHIP_CONFIG="$HOME/.config/starship.toml"
 eval "$(starship init zsh)"
@@ -273,10 +272,12 @@ fpath+=~/.zfunc
 autoload -Uz compinit && compinit
 
 # Pyenv Virtualenv init
-export PYENV_ROOT="$HOME/.pyenv" >> ~/.zshrc
+export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
 
 eval "$(pyenv init -)"
 eval "$(pyenv virtualenv-init -)"
 
-source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+if [ -d "/opt/homebrew/share/zsh-syntax-highlighting" ]; then
+    source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+fi
