@@ -273,6 +273,9 @@ fpath+=~/.zfunc
 autoload -Uz compinit && compinit
 
 # Pyenv Virtualenv init
+export PYENV_ROOT="$HOME/.pyenv" >> ~/.zshrc
+[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
+
 eval "$(pyenv init -)"
 eval "$(pyenv virtualenv-init -)"
 
