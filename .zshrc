@@ -281,3 +281,8 @@ eval "$(pyenv virtualenv-init -)"
 if [ -d "/opt/homebrew/share/zsh-syntax-highlighting" ]; then
     source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 fi
+
+# Handle neovim if built from source
+if [ -d "$HOME/neovim/bin" ]; then
+    export PATH="$HOME/neovim/bin:$PATH"
+fi
