@@ -14,10 +14,10 @@ $zig\
 $character\
 """
 
-right_format = """
-$cmd_duration\
-$time\
-"""
+# right_format = """
+# $cmd_duration\
+# $time\
+# """
 
 
 command_timeout = 3000
