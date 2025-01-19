@@ -141,7 +141,12 @@ fi
 if [ -x "$(command -v bat)" ]; then
     alias cat="bat --theme=\$(defaults read -globalDomain AppleInterfaceStyle &> /dev/null && echo ansi || echo base16)"
 else
-    echo "bat is not installed. Please install it to use the custom cat command."
+
+    if [-x "$(command -v batcat)"]; then
+        alias cat="batcat"
+    else
+        echo "bat is not installed. Please install it to use the custom cat command."
+    fi
 fi
 
 # alias vim to neovim
