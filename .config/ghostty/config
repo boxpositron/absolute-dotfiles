@@ -1,0 +1,13 @@
+title = CCC
+config-file = colorscheme
+background-opacity = .8
+background-blur = true
+font-family = "JetBrainsMono Nerd Font"
+font-size = 15
+macos-titlebar-style = hidden
+command = zsh --login -c "if command -v tmux >/dev/null 2>&1; then tmux attach || tmux; else zsh; fi"
+custom-shader = shaders/bloom025.glsl
+shell-integration = zsh
+confirm-close-surface = false
+shell-integration-features = no-cursor,sudo,no-title
+mouse-hide-while-typing = true
