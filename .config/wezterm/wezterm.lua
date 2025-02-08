@@ -24,9 +24,9 @@ config.background = {
 	},
 }
 config.window_padding = {
-	left = 3,
-	right = 3,
-	top = 10,
+	left = 0,
+	right = 0,
+	top = 0,
 	bottom = 0,
 }
 
