@@ -184,7 +184,12 @@ if [ -d "$HOME/.local/bin" ] ; then
     PATH="$HOME/.local/bin:$PATH"
 fi
 
-# TMUX Setup Start
+_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# TMUX  + FZF Setup Start
+#
 
 function tml() {
     sessions=$(tmux ls | sed -E 's/:.*$//')
