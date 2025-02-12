@@ -1,9 +1,13 @@
-title = CCC
 config-file = colorscheme
-background-opacity = .8
+cursor-opacity = .5
+maximize = true
+background-opacity = .85
+unfocused-split-opacity = .85
+unfocused-split-fill = 000000
+split-divider-color = ffffff
 background-blur = true
 font-family = "JetBrainsMono Nerd Font"
-font-size = 15
+font-size = 14
 macos-titlebar-style = hidden
 command = zsh --login -c "if command -v tmux >/dev/null 2>&1; then tmux attach || tmux; else zsh; fi"
 custom-shader = shaders/bloom025.glsl
