@@ -199,6 +199,18 @@ function tml() {
 }
 
 
+function tmx(){
+    current_session=$(tmux display-message -p '#S')  # Get current session name
+    next_session=$(tmux list-sessions | grep -v "^$current_session" | head -n1 | cut -d: -f1)
+
+    if [ -n "$next_session" ]; then
+        tmux switch-client -t "$next_session"  # Switch to next session
+        tmux kill-session -t "$current_session"  # Kill the current session
+    else
+        tmux kill-session -t "$current_session"  # Kill the session if no others exist
+    fi
+}
+
 function tma() {
 
     # If no argument is passed, show the list of tmux sessions with fzf
@@ -235,7 +247,7 @@ function tmn() {
         return
     fi
 
-    tmux new -s $1 
+    TMUX= tmux new-session -d -s $1 
 }
 
 _fzf_complete_tma() {
@@ -296,3 +308,5 @@ fi
 if [ -d "$HOME/neovim/bin" ]; then
     export PATH="$HOME/neovim/bin:$PATH"
 fi
+
+. "$HOME/.deno/env"
