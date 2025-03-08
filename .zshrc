@@ -269,6 +269,12 @@ export PATH=$HOME/flutter/bin:$PATH
 
 export XDG_CONFIG_HOME="$HOME/.config"
 
+# Load OpenAI Secrets if it exists
+# .config/openai/setup.sh
+
+if [ -f "$HOME/.config/openai/setup.sh" ]; then
+    source "$HOME/.config/openai/setup.sh"
+fi
 
 PATH="$HOME/perl5/bin${PATH:+:${PATH}}"; export PATH;
 PERL5LIB="$HOME/perl5/lib/perl5${PERL5LIB:+:${PERL5LIB}}"; export PERL5LIB;
