@@ -1,1 +1,3 @@
 .config/wezterm/colorscheme
+.config/openai/setup.sh
+.env
