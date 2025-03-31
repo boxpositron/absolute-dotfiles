@@ -2,3 +2,5 @@
 .config/openai/setup.sh
 .env
 .opencommit
+.opencommit.backup.local
+.opencommit.backup.openai
