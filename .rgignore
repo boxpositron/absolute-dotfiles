@@ -1,3 +1,4 @@
 !.config/openai/setup.sh
 !.opencommit
 !.env
+!.envrc
