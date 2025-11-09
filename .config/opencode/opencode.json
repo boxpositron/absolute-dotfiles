@@ -1,0 +1,92 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "autoupdate": true,
+    "share": "disabled",
+    "disabled_providers": [
+        "openai"
+    ],
+    "instructions": [
+        "docs/guidelines.md",
+        "docs/development-standards.md",
+        "test/testing-guidelines.md",
+        "packages/*/AGENTS.md"
+    ],
+    "agent": {
+        "setup": {
+            "description": "Generates project-specific documentation and guidelines through interactive discovery"
+        },
+        "review": {
+            "description": "Reviews code for best practices and potential issues"
+        },
+        "test": {
+            "description": "Runs tests and analyzes test results"
+        },
+        "docs": {
+            "description": "Generates and maintains documentation"
+        },
+        "refactor": {
+            "description": "Refactors code for better quality and maintainability"
+        },
+        "debug": {
+            "description": "Debugs issues and troubleshoots problems"
+        },
+        "security": {
+            "description": "Audits code for security vulnerabilities"
+        },
+        "webgen": {
+            "description": "Generates complete web pages from ideas using any framework"
+        }
+    },
+    "mcp": {
+        "time": {
+            "type": "local",
+            "command": [
+                "/Users/davidibia/.local/bin/uvx",
+                "mcp-server-time",
+                "--local-timezone=Africa/Lagos"
+            ],
+            "enabled": true
+        },
+        "shadcn": {
+            "type": "local",
+            "command": [
+                "npx",
+                "shadcn@latest",
+                "mcp"
+            ],
+            "enabled": true
+        },
+        "astro": {
+            "type": "remote",
+            "url": "https://mcp.docs.astro.build/mcp",
+            "enabled": true
+        },
+        "context7": {
+            "type": "remote",
+            "url": "https://mcp.context7.com/mcp",
+            "headers": {
+                "CONTEXT7_API_KEY": "env:CONTEXT7_API_KEY"
+            },
+            "enabled": true
+        },
+        "ast-grep": {
+            "type": "local",
+            "command": [
+                "uv",
+                "--directory",
+                "/Users/davidibia/Projects/MCP/ast-grep-mcp",
+                "run",
+                "main.py"
+            ],
+            "enabled": true
+        },
+        "chrome-devtools": {
+            "type": "local",
+            "command": [
+                "npx",
+                "chrome-devtools-mcp@latest"
+            ],
+            "enabled": true
+        }
+    }
+}
