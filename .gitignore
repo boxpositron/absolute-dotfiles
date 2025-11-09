@@ -4,3 +4,4 @@
 .opencommit
 .opencommit.backup.local
 .opencommit.backup.openai
+.envrc
