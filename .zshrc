@@ -92,7 +92,7 @@ fi
 # Compilation flags
 # export ARCHFLAGS="-arch x86_64"
 
-# Set personal aliases, overriding those provided by oh-my-zsh libs,
+# Set personal aliases, overriding those provided by oh-my-zsh libs,zsh
 # plugins, and themes. Aliases can be placed here, though oh-my-zsh
 # users are encouraged to define aliases within the ZSH_CUSTOM folder.
 # For a full list of active aliases, run `alias`.
@@ -328,3 +328,29 @@ fpath=($HOME/.docker/completions $fpath)
 autoload -Uz compinit
 compinit
 # End of Docker CLI completions
+
+# Added by LM Studio CLI (lms)
+export PATH="$PATH:$HOME/.cache/lm-studio/bin"
+# End of LM Studio CLI section
+
+# The following lines have been added by Docker Desktop to enable Docker CLI completions.
+fpath=($HOME/.docker/completions $fpath)
+autoload -Uz compinit
+compinit
+# End of Docker CLI completions
+#
+
+# direnv setup
+eval "$(direnv hook zsh)"
+
+# bun completions
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+# opencode
+export PATH=$HOME/.opencode/bin:$PATH
+
+eval "$(zoxide init zsh)"
