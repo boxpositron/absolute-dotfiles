@@ -54,12 +54,12 @@
                 "shadcn@latest",
                 "mcp"
             ],
-            "enabled": true
+            "enabled": false
         },
         "astro": {
             "type": "remote",
             "url": "https://mcp.docs.astro.build/mcp",
-            "enabled": true
+            "enabled": false
         },
         "context7": {
             "type": "remote",
@@ -67,7 +67,7 @@
             "headers": {
                 "CONTEXT7_API_KEY": "env:CONTEXT7_API_KEY"
             },
-            "enabled": true
+            "enabled": false
         },
         "ast-grep": {
             "type": "local",
@@ -86,7 +86,7 @@
                 "npx",
                 "chrome-devtools-mcp@latest"
             ],
-            "enabled": true
+            "enabled": false
         }
     }
 }
