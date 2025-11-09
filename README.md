@@ -1,6 +1,6 @@
 # Dotfiles
 
-A comprehensive collection of configuration files for macOS development environment, featuring Neovim, terminal emulators, shell configurations, and development tools.
+A comprehensive collection of configuration files for macOS development environment, featuring Neovim, terminal emulators, shell configurations, and AI-powered development tools.
 
 ## Table of Contents
 
@@ -11,6 +11,7 @@ A comprehensive collection of configuration files for macOS development environm
 - [Components](#components)
 - [Configuration](#configuration)
 - [Customization](#customization)
+- [Documentation](#documentation)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)
@@ -21,12 +22,12 @@ This repository contains personal dotfiles for configuring a complete developmen
 
 ## Features
 
-- **Neovim Configuration**: Extensive Lua-based configuration with LSP support, debugging, and productivity plugins
-- **Terminal Emulators**: Configurations for Ghostty and WezTerm with custom themes and shaders
-- **Shell Environment**: Optimized Zsh configuration with useful aliases and functions
-- **Window Management**: AeroSpace tiling window manager configuration
-- **Development Tools**: Pre-configured settings for Git, tmux, and various language servers
-- **AI Integration**: Built-in configurations for Claude and other AI coding assistants
+- **Neovim Configuration**: Extensive Lua-based configuration with LSP support, debugging, and 50+ productivity plugins
+- **Terminal Emulators**: Configurations for Ghostty and WezTerm with custom themes and visual effects
+- **Shell Environment**: Optimized Zsh configuration with Starship prompt and useful aliases
+- **AI Integration**: OpenCode CLI with specialized agents for debugging, testing, refactoring, and more
+- **Development Tools**: Pre-configured settings for Git, tmux, direnv, and various language servers
+- **Documentation Management**: with-context MCP integration for knowledge management
 
 ## Prerequisites
 
@@ -36,8 +37,9 @@ Before installing these dotfiles, ensure you have the following:
 - **Package Manager**: [Homebrew](https://brew.sh/) installed
 - **Shell**: Zsh (default on modern macOS)
 - **Git**: Version control system
-- **Node.js**: Required for many Neovim plugins
-- **Python**: Required for certain development tools
+- **Node.js**: Required for many Neovim plugins and LSP servers
+- **Python**: Required for certain development tools and Neovim plugins
+- **Rust**: (Optional) Required for some tools like ripgrep, fd, etc.
 
 ## Installation
 
@@ -61,7 +63,6 @@ Before installing these dotfiles, ensure you have the following:
    ln -s ~/dotfiles/.config ~/.config
    ln -s ~/dotfiles/.zshrc ~/.zshrc
    ln -s ~/dotfiles/.tmux.conf ~/.tmux.conf
-   ln -s ~/dotfiles/.aerospace.toml ~/.aerospace.toml
    ```
 
 ### Manual Installation
@@ -114,32 +115,54 @@ Key features:
 
 ### Shell Configuration (`.zshrc`)
 
-- Optimized PATH management
-- Custom aliases and functions
-- Integration with development tools
-- Environment variable management
-- Prompt customization with Starship
-
-### Window Management (`.aerospace.toml`)
-
-- Tiling window manager configuration
-- Custom workspace layouts
-- Application-specific rules
-- Keyboard-driven workflow
+- Optimized PATH management for development tools
+- Custom aliases and functions for productivity
+- Integration with direnv, asdf, and other version managers
+- Environment variable management with `.env` and `.envrc`
+- Starship prompt with custom configuration
+- Auto-completion and syntax highlighting
 
 ### Development Tools
 
-- **tmux** (`.tmux.conf`): Terminal multiplexer configuration
-- **Git**: Global gitignore patterns
-- **Starship** (`starship.toml`): Cross-shell prompt
-- **Oh My Posh** (`.config/ohmyposh/`): Terminal prompt themes
-- **Zellij** (`.config/zellij/`): Modern terminal workspace
+- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings
+- **Git**: Global gitignore patterns (`.rgignore`, `.gitignore`)
+- **Starship** (`starship.toml`): Cross-shell prompt with Git integration
+- **Oh My Posh** (`.config/ohmyposh/`): Alternative prompt theme (zen.toml)
+- **Zellij** (`.config/zellij/`): Modern terminal workspace (config.kdl)
+- **direnv** (`.config/direnv/`): Environment variable management per directory
+- **OpenCommit** (`.opencommit`): AI-powered commit message generation
 
 ### AI and Coding Assistants
 
-- **OpenCode** (`.config/opencode/`): Agent configurations for various development tasks
-- **Claude integration**: Built into Neovim configuration
-- **Copilot support**: GitHub Copilot integration
+#### OpenCode (`.config/opencode/`)
+
+Specialized AI agents for different development workflows:
+
+- **debug**: Debugging assistance and troubleshooting
+- **docs**: Documentation generation and maintenance
+- **qa**: Quality assurance and code analysis
+- **refactor**: Code refactoring patterns and best practices
+- **review**: Code review guidelines and automation
+- **security**: Security audits and vulnerability scanning
+- **setup**: Project initialization and setup workflows
+- **test**: Test generation and execution
+- **webgen**: Web page generation from ideas
+
+Custom commands:
+- `/setup-mcp`: MCP server configuration
+- Additional commands in `.config/opencode/command/`
+
+Plugins:
+- **terminal-bell**: Terminal notification system
+- **websearch**: Web search integration
+- **with-context**: Documentation management with Obsidian vault
+
+#### Neovim AI Integration
+
+- **CodeCompanion**: AI pair programming with multiple providers
+- **Copilot**: GitHub Copilot support
+- **Gen.nvim**: Local LLM integration
+- **LLM.nvim**: Additional LLM capabilities
 
 ## Configuration
 
@@ -154,23 +177,61 @@ cp .envrc.example .envrc
 
 ### Local Binaries
 
-Custom scripts and binaries are stored in `.local/bin/`. Ensure this directory is in your PATH:
+Custom scripts and binaries are stored in `.local/bin/`:
+
+- `brave-debug`: Launch Brave browser in debug mode
+- `cl`: Claude CLI wrapper
+- `claude-tmux`: Claude integration with tmux
+- `cldir`: Change directory with Claude context
+
+Ensure this directory is in your PATH:
 
 ```bash
 export PATH="$HOME/dotfiles/.local/bin:$PATH"
 ```
+
+### Local Servers
+
+Docker Compose configuration for local development services in `local_servers/`.
 
 ## Customization
 
 ### Adding Custom Configurations
 
 1. **Neovim Plugins**: Add new plugins in `.config/nvim/lua/absolute/plugins/`
-2. **Shell Aliases**: Modify `.zshrc` to add custom aliases
-3. **Git Configuration**: Update `.gitignore` for global ignore patterns
+   - Configure in `.config/nvim/lua/absolute/after/`
+2. **Shell Aliases**: Modify `.zshrc` to add custom aliases and functions
+3. **Git Configuration**: Update `.gitignore` or `.rgignore` for global ignore patterns
+4. **OpenCode Agents**: Create custom agents in `.config/opencode/agent/`
+5. **OpenCode Commands**: Add custom commands in `.config/opencode/command/`
 
 ### Theme Customization
 
-Current theme configuration is managed in `.config/nvim/lua/current-theme.lua`. Modify this file to change the active colorscheme across Neovim.
+Current theme configuration is managed in `.config/nvim/lua/current-theme.lua`. Available themes:
+
+- Catppuccin
+- Tokyo Night
+- Rose Pine
+- Nightfly
+
+Terminal themes are configured in:
+- Ghostty: `.config/ghostty/colorscheme`
+- WezTerm: `.config/wezterm/wezterm.lua`
+
+## Documentation
+
+This repository uses the with-context MCP server for documentation management. See `AGENTS.md` for detailed guidelines on:
+
+- Documentation delegation patterns
+- Local vs. vault documentation
+- OpenCode agent workflows
+- Best practices for AI agents
+
+Key documentation files:
+
+- `AGENTS.md`: AI agent guidelines and with-context MCP usage
+- `.withcontextignore`: Patterns for documentation delegation
+- Component READMEs: Tool-specific documentation in respective directories
 
 ## Troubleshooting
 
@@ -201,13 +262,15 @@ nvim -V10nvim.log
 
 ## Contributing
 
-Contributions are welcome! If you have improvements or bug fixes:
+These are personal dotfiles, but contributions are welcome! If you have improvements or bug fixes:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/improvement`)
-3. Commit your changes (`git commit -am 'Add new feature'`)
+3. Commit your changes (use OpenCommit: `.opencommit` configuration available)
 4. Push to the branch (`git push origin feature/improvement`)
 5. Open a Pull Request
+
+**Note**: Review the code before applying these configurations. These are personalized settings that may need adjustment for your setup.
 
 ## License
 
@@ -215,10 +278,25 @@ This project is open source and available under the MIT License. See individual 
 
 ## Acknowledgments
 
-- [Absolute VIM](https://github.com/boxpositron/absolute-vim) - Previous Vim configuration
+- [Absolute VIM](https://github.com/boxpositron/absolute-vim) - Neovim configuration foundation
 - The open-source community for the amazing tools and plugins
+- OpenCode team for AI-powered development workflows
 - Contributors and users who provide feedback and improvements
+
+## Resources
+
+- **OpenCode Documentation**: https://opencode.ai/docs
+- **Neovim Plugin Ecosystem**: https://github.com/rockerBOO/awesome-neovim
+- **Dotfiles Community**: https://dotfiles.github.io
 
 ## Support
 
 For questions, issues, or suggestions, please open an issue on the GitHub repository.
+
+---
+
+**Last Updated**: 2025  
+**Platform**: macOS (Darwin)  
+**Primary Editor**: Neovim  
+**Shell**: Zsh  
+**AI Tools**: OpenCode, Claude, Copilot
