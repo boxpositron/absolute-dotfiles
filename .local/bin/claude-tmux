@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# tmux-aware Claude profile helper
+# Works in bash/zsh. No external deps except optional fzf and tmux.
+
+set -euo pipefail
+
+# Optional: set a directory to copy as a template when new profiles are created.
+# Default: if ~/.claude exists it will be copied; otherwise create an empty dir.
+CLAUDE_TEMPLATE_DIR="${CLAUDE_TEMPLATE_DIR:-}"
+
+bin_exists() { command -v "$1" >/dev/null 2>&1; }
+
+tmux_session_name() {
+  if [[ -n "${TMUX:-}" ]] && bin_exists tmux; then
+    tmux display-message -p '#S'
+  else
+    printf ''
+  fi
+}
+
+sanitize_session() {
+  # lowercase, spaces->-, keep alnum . _ : -
+  printf '%s' "$1" \
+    | tr '[:upper:] ' '[:lower:]-' \
+    | tr -cd '[:alnum:]._:-'
+}
+
+profile_dir_for_session() {
+  local s="$1"
+  case "$s" in
+    ""|"default"|"personal"|"main") printf '%s\n' "$HOME/.claude" ;;
+    *) printf '%s\n' "$HOME/.claude-$(sanitize_session "$s")" ;;
+  esac
+}
+
+ensure_profile_dir() {
+  local dir="$1"
+  if [[ -d "$dir" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$dir"
+  # Copy from template if provided, else from ~/.claude if present
+  local from="${CLAUDE_TEMPLATE_DIR:-}"
+  if [[ -z "$from" && -d "$HOME/.claude" ]]; then
+    from="$HOME/.claude"
+  fi
+  if [[ -n "$from" && -d "$from" ]]; then
+    # Copy only if empty
+    if [[ -z "$(ls -A "$dir")" ]]; then
+      cp -a "$from"/. "$dir"/
+    fi
+  fi
+}
+
+run_claude_with_profile() {
+  local dir="$1"; shift || true
+  if ! bin_exists claude; then
+    printf 'claude-tmux: "claude" binary not found in PATH\n' >&2
+    exit 127
+  fi
+  ensure_profile_dir "$dir"
+  CLAUDE_CONFIG_DIR="$dir" command claude "$@"
+}
+
+fzf_pick_session() {
+  local list new_label sel
+  if ! bin_exists tmux; then
+    printf 'claude-tmux: tmux not installed\n' >&2
+    return 1
+  fi
+  new_label="[new session]"
+  # Gather sessions, newest first
+  list="$(tmux list-sessions -F '#{session_last_attached} #{session_name}' 2>/dev/null \
+           | sort -rn | awk '{ $1=""; sub(/^ /,""); print }')"
+  if bin_exists fzf; then
+    sel="$(printf '%s\n%s\n' "$new_label" "$list" | fzf --prompt='tmux session > ' --height=40% --reverse)"
+  else
+    printf '%s\n%s\n' "$new_label" "$list"
+    printf 'Pick a session (type exact name or "%s"): ' "$new_label" >&2
+    read -r sel
+  fi
+  printf '%s' "$sel"
+}
+
+create_and_launch_in_session() {
+  local name="$1" dir cmd
+  dir="$(profile_dir_for_session "$name")"
+  ensure_profile_dir "$dir"
+
+  # Start a session running Claude with the session’s profile
+  cmd="CLAUDE_CONFIG_DIR='${dir}' claude"
+  if tmux has-session -t "$name" 2>/dev/null; then
+    # Session exists: send keys and attach
+    tmux send-keys -t "$name" "$cmd" C-m
+    exec tmux attach -t "$name"
+  else
+    exec tmux new-session -s "$name" "$cmd"
+  fi
+}
+
+attach_and_launch_in_existing_session() {
+  local name="$1" dir cmd
+  dir="$(profile_dir_for_session "$name")"
+  ensure_profile_dir "$dir"
+  cmd="CLAUDE_CONFIG_DIR='${dir}' claude"
+  tmux send-keys -t "$name" "$cmd" C-m
+  exec tmux attach -t "$name"
+}
+
+# Subcommands:
+#   ensure <session>         ensure profile dir exists for session
+#   dir <session>            print profile dir for session
+#   run [args...]            run claude for current tmux session (inside tmux)
+#   pick                     fzf picker to choose or create a session and launch claude
+#   hook-ensure #{session_name}   for tmux hooks
+case "${1:-}" in
+  ensure)
+    shift; sess="${1:-}"
+    if [[ -z "$sess" ]]; then printf 'usage: claude-tmux ensure <session>\n' >&2; exit 2; fi
+    ensure_profile_dir "$(profile_dir_for_session "$sess")"
+    ;;
+  dir)
+    shift; sess="${1:-}"
+    if [[ -z "$sess" ]]; then printf 'usage: claude-tmux dir <session>\n' >&2; exit 2; fi
+    profile_dir_for_session "$sess"
+    ;;
+  run)
+    shift
+    sess="$(tmux_session_name)"
+    if [[ -z "$sess" ]]; then
+      printf 'claude-tmux: not inside tmux. Use "claude-tmux pick" or run inside a session.\n' >&2
+      exit 2
+    fi
+    run_claude_with_profile "$(profile_dir_for_session "$sess")" "$@"
+    ;;
+  pick)
+    shift
+    sel="$(fzf_pick_session)"
+    if [[ -z "$sel" ]]; then exit 130; fi
+    if [[ "$sel" == "[new session]" ]]; then
+      printf 'New tmux session name: ' >&2
+      read -r newname
+      if [[ -z "$newname" ]]; then printf 'Empty name. Aborting.\n' >&2; exit 2; fi
+      create_and_launch_in_session "$newname"
+    else
+      attach_and_launch_in_existing_session "$sel"
+    fi
+    ;;
+  hook-ensure)
+    # For tmux hooks like session-created / session-renamed
+    shift
+    sess="${1:-}"
+    if [[ -n "$sess" ]]; then
+      ensure_profile_dir "$(profile_dir_for_session "$sess")"
+    fi
+    ;;
+  *)
+    cat <<'EOF'
+claude-tmux: tmux-aware Claude profile helper
+
+Usage:
+  claude-tmux run                 Run Claude for the current tmux session
+  claude-tmux pick                Pick or create a tmux session with fzf, launch Claude, attach
+  claude-tmux ensure <session>    Ensure a Claude profile exists for <session>
+  claude-tmux dir <session>       Print the Claude profile dir for <session>
+  claude-tmux hook-ensure <name>  For tmux hooks (session-created / session-renamed)
+
+Env:
+  CLAUDE_TEMPLATE_DIR             Directory to copy into new profiles (optional)
+EOF
+    ;;
+esac

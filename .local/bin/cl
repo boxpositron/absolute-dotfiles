@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+function usecl() {
+    # Inside tmux: launch Claude with the session's profile
+    if [[ -n "${TMUX:-}" ]]; then
+        ~/.local/bin/claude-tmux run "$@"
+    else
+        # Not in tmux: pick or create a session, attach, and launch Claude there
+        ~/.local/bin/claude-tmux pick
+    fi
+}
+
+usecl "$@"

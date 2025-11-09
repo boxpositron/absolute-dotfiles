@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+function usecldir() {
+    # Optional convenience: quickly print the profile dir for this session
+    if [[ -n "${TMUX:-}" ]]; then
+        local s
+        s="$(tmux display-message -p '#S')"
+        ~/.local/bin/claude-tmux dir "$s"
+    else
+        echo "$HOME/.claude"
+    fi
+}
+
+usecldir "$@"
