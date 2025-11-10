@@ -7,3 +7,5 @@
 .envrc
 .withcontextignore
 AGENTS.md
+.config/opencode/plugin/node_modules
+.config/opencode/plugin/package-lock.json

@@ -1,0 +1,170 @@
+{
+  "$schema": "https://raw.githubusercontent.com/boxpositron/with-context-mcp/main/src/config/config-schema.json",
+
+  // Configuration generated based on repository analysis
+  // Project: dotfiles
+  // Type: dotfiles (macOS development environment configuration)
+  // Total Documentation Files: 17 (excluding node_modules)
+  //
+  // This configuration follows the Diátaxis framework and dotfiles best practices:
+  // - LOCAL = Essential files that must work for anyone cloning the repo
+  // - VAULT = Deep research, detailed guides, and cross-project knowledge
+
+  "version": "2.1",
+  "defaultBehavior": "vault",
+
+  // -----------------------------------------------------------------------------
+  // VAULT PATTERNS - Documentation delegated to Obsidian for deep research
+  // -----------------------------------------------------------------------------
+  // These patterns identify documentation that should be stored in the vault
+  // for cross-project knowledge sharing, detailed guides, and research notes.
+
+  "vault": [
+    // Detailed guides and tutorials (task-oriented, learning-oriented)
+    "docs/guides/**/*.md",
+    "docs/tutorials/**/*.md",
+    "docs/how-to/**/*.md",
+
+    // Architecture decisions and explanations (understanding-oriented)
+    "docs/architecture/**/*.md",
+    "docs/decisions/**/*.md",
+    "docs/adr/**/*.md",
+
+    // Research and investigation notes
+    "docs/research/**/*.md",
+    "docs/investigations/**/*.md",
+    "docs/explorations/**/*.md",
+
+    // Detailed reference documentation (information-oriented)
+    "docs/reference/**/*.md",
+    "docs/api/**/*.md",
+
+    // Changelog and historical documentation
+    "CHANGELOG.md",
+    "**/CHANGELOG.md",
+    "HISTORY.md",
+    "**/HISTORY.md",
+
+    // Meeting notes and collaboration
+    "docs/meetings/**/*.md",
+    "docs/notes/**/*.md"
+  ],
+
+  // -----------------------------------------------------------------------------
+  // LOCAL PATTERNS - Essential repository documentation
+  // -----------------------------------------------------------------------------
+  // These patterns keep critical files in the repository that must be
+  // accessible without vault access (onboarding, setup, quick reference).
+
+  "local": [
+    // Root documentation - Essential project documentation
+    "/README.md",
+    "/AGENTS.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/LICENSE.md",
+    "/CODE_OF_CONDUCT.md",
+
+    // Setup and installation - Must be accessible locally for bootstrapping
+    "/setup-mac.sh",
+    "/INSTALL.md",
+    "/INSTALLATION.md",
+    "/SETUP.md",
+
+    // Component-specific READMEs - Keep with their configurations
+    ".config/nvim/README.md",
+    ".config/ghostty/README.md",
+    ".config/wezterm/README.md",
+    ".config/ohmyposh/README.md",
+    ".config/zellij/README.md",
+    ".config/direnv/README.md",
+    ".config/aerospace/README.md",
+
+    // Generic pattern for any component READMEs
+    ".config/*/README.md",
+    ".config/**/README.md",
+
+    // OpenCode configuration - All AI agent and command documentation stays local
+    // This includes all markdown files, even those in node_modules subdirectories
+    ".config/opencode/",
+    ".config/opencode/**",
+    ".config/opencode/**/*.md",
+
+    // Work in progress - Keep drafts local until ready
+    "notes/",
+    "notes/**",
+    "scratch.md",
+    "todo.md",
+    "TODO.md",
+    "**/drafts/",
+    "**/drafts/**",
+    "**/*.draft.md",
+    "**/*.wip.md",
+    "**/*-draft.md",
+    "**/*-wip.md",
+    "**/scratch/**",
+
+    // Sensitive content - Never delegate to vault
+    ".env",
+    ".env.*",
+    ".envrc",
+    "**/*.secret.md",
+    "**/.secrets/",
+    "**/.secrets/**",
+    "**/confidential/**",
+    "**/*credentials*.md",
+    "**/*secrets*.md",
+    "**/*apikey*.md",
+
+    // Version control and system files - Infrastructure files
+    ".git/",
+    ".git/**",
+    ".gitignore",
+    ".gitmodules",
+    ".gitattributes",
+    ".DS_Store",
+    "**/.DS_Store",
+    "*.log",
+    "**/*.log",
+    ".rgignore",
+    ".opencommit",
+
+    // Build artifacts and dependencies - Never delegate
+    "node_modules/",
+    "node_modules/**",
+    "vendor/",
+    "vendor/**",
+    "dist/",
+    "dist/**",
+    "build/",
+    "build/**",
+    "out/",
+    "out/**",
+    "*.lock",
+    "**/*.lock",
+    "lazy-lock.json",
+    "**/lazy-lock.json",
+    "package-lock.json",
+    "**/package-lock.json",
+
+    // Local binaries and scripts - System-specific executables
+    ".local/bin/**",
+    "local_servers/**",
+
+    // Personal notes - Keep local unless explicitly needed in vault
+    "NOTES.md",
+    "PERSONAL.md",
+    "SCRATCHPAD.md",
+
+    // Quick reference guides - 1-2 page references stay local
+    "QUICKSTART.md",
+    "QUICK_REFERENCE.md",
+    "CHEATSHEET.md",
+    "**/QUICKSTART.md",
+    "**/QUICK_REFERENCE.md",
+    "**/CHEATSHEET.md"
+  ],
+
+  // When conflicts occur, local patterns take precedence
+  "conflictResolution": "local-wins"
+}
