@@ -321,25 +321,6 @@ export NVM_DIR="$HOME/.config/nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
-# Added by LM Studio CLI (lms)
-export PATH="$PATH:$HOME/.cache/lm-studio/bin"
-# The following lines have been added by Docker Desktop to enable Docker CLI completions.
-fpath=($HOME/.docker/completions $fpath)
-autoload -Uz compinit
-compinit
-# End of Docker CLI completions
-
-# Added by LM Studio CLI (lms)
-export PATH="$PATH:$HOME/.cache/lm-studio/bin"
-# End of LM Studio CLI section
-
-# The following lines have been added by Docker Desktop to enable Docker CLI completions.
-fpath=($HOME/.docker/completions $fpath)
-autoload -Uz compinit
-compinit
-# End of Docker CLI completions
-#
-
 # direnv setup
 eval "$(direnv hook zsh)"
 
@@ -355,17 +336,10 @@ export PATH=$HOME/.opencode/bin:$PATH
 
 eval "$(zoxide init zsh)"
 
-# Added by LM Studio CLI (lms)
+# LM Studio CLI
 export PATH="$PATH:$HOME/.cache/lm-studio/bin"
-# End of LM Studio CLI section
 
-
-# Added by LM Studio CLI (lms)
-export PATH="$PATH:/Users/davidibia/.cache/lm-studio/bin"
-# End of LM Studio CLI section
-
-# The following lines have been added by Docker Desktop to enable Docker CLI completions.
-fpath=(/Users/davidibia/.docker/completions $fpath)
+# Docker CLI completions
+fpath=($HOME/.docker/completions $fpath)
 autoload -Uz compinit
 compinit
-# End of Docker CLI completions
