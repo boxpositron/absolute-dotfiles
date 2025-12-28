@@ -3,168 +3,79 @@
 
   // Configuration generated based on repository analysis
   // Project: dotfiles
-  // Type: dotfiles (macOS development environment configuration)
-  // Total Documentation Files: 17 (excluding node_modules)
-  //
-  // This configuration follows the Diátaxis framework and dotfiles best practices:
-  // - LOCAL = Essential files that must work for anyone cloning the repo
-  // - VAULT = Deep research, detailed guides, and cross-project knowledge
+  // Type: unknown
 
   "version": "2.1",
-  "defaultBehavior": "vault",
 
-  // -----------------------------------------------------------------------------
-  // VAULT PATTERNS - Documentation delegated to Obsidian for deep research
-  // -----------------------------------------------------------------------------
-  // These patterns identify documentation that should be stored in the vault
-  // for cross-project knowledge sharing, detailed guides, and research notes.
+  // Default behavior for files not matching any patterns
+  "defaultBehavior": "local",
 
+  // Patterns for files to delegate to Obsidian vault
+  // Based on Diátaxis framework: guides, tutorials, reference, architecture
   "vault": [
-    // Detailed guides and tutorials (task-oriented, learning-oriented)
-    "docs/guides/**/*.md",
-    "docs/tutorials/**/*.md",
-    "docs/how-to/**/*.md",
-
-    // Architecture decisions and explanations (understanding-oriented)
-    "docs/architecture/**/*.md",
-    "docs/decisions/**/*.md",
-    "docs/adr/**/*.md",
-
-    // Research and investigation notes
-    "docs/research/**/*.md",
-    "docs/investigations/**/*.md",
-    "docs/explorations/**/*.md",
-
-    // Detailed reference documentation (information-oriented)
-    "docs/reference/**/*.md",
-    "docs/api/**/*.md",
-
-    // Changelog and historical documentation
-    "CHANGELOG.md",
-    "**/CHANGELOG.md",
-    "HISTORY.md",
-    "**/HISTORY.md",
-
-    // Meeting notes and collaboration
-    "docs/meetings/**/*.md",
-    "docs/notes/**/*.md"
+      "CHANGELOG.md"
   ],
 
-  // -----------------------------------------------------------------------------
-  // LOCAL PATTERNS - Essential repository documentation
-  // -----------------------------------------------------------------------------
-  // These patterns keep critical files in the repository that must be
-  // accessible without vault access (onboarding, setup, quick reference).
-
+  // Patterns for files to keep in local repository
+  // Essential files for repository operation and quick reference
   "local": [
-    // Root documentation - Essential project documentation
-    "/README.md",
-    "/AGENTS.md",
-    "/CONTRIBUTING.md",
-    "/LICENSE",
-    "/LICENSE.md",
-    "/CODE_OF_CONDUCT.md",
-
-    // Setup and installation - Must be accessible locally for bootstrapping
-    "/setup-mac.sh",
-    "/INSTALL.md",
-    "/INSTALLATION.md",
-    "/SETUP.md",
-
-    // Component-specific READMEs - Keep with their configurations
-    ".config/nvim/README.md",
-    ".config/ghostty/README.md",
-    ".config/wezterm/README.md",
-    ".config/ohmyposh/README.md",
-    ".config/zellij/README.md",
-    ".config/direnv/README.md",
-    ".config/aerospace/README.md",
-
-    // Generic pattern for any component READMEs
-    ".config/*/README.md",
-    ".config/**/README.md",
-
-    // OpenCode configuration - All AI agent and command documentation stays local
-    // This includes all markdown files, even those in node_modules subdirectories
-    ".config/opencode/",
-    ".config/opencode/**",
-    ".config/opencode/**/*.md",
-
-    // Work in progress - Keep drafts local until ready
-    "notes/",
-    "notes/**",
-    "scratch.md",
-    "todo.md",
-    "TODO.md",
-    "**/drafts/",
-    "**/drafts/**",
-    "**/*.draft.md",
-    "**/*.wip.md",
-    "**/*-draft.md",
-    "**/*-wip.md",
-    "**/scratch/**",
-
-    // Sensitive content - Never delegate to vault
-    ".env",
-    ".env.*",
-    ".envrc",
-    "**/*.secret.md",
-    "**/.secrets/",
-    "**/.secrets/**",
-    "**/confidential/**",
-    "**/*credentials*.md",
-    "**/*secrets*.md",
-    "**/*apikey*.md",
-
-    // Version control and system files - Infrastructure files
-    ".git/",
-    ".git/**",
-    ".gitignore",
-    ".gitmodules",
-    ".gitattributes",
-    ".DS_Store",
-    "**/.DS_Store",
-    "*.log",
-    "**/*.log",
-    ".rgignore",
-    ".opencommit",
-
-    // Build artifacts and dependencies - Never delegate
-    "node_modules/",
-    "node_modules/**",
-    "vendor/",
-    "vendor/**",
-    "dist/",
-    "dist/**",
-    "build/",
-    "build/**",
-    "out/",
-    "out/**",
-    "*.lock",
-    "**/*.lock",
-    "lazy-lock.json",
-    "**/lazy-lock.json",
-    "package-lock.json",
-    "**/package-lock.json",
-
-    // Local binaries and scripts - System-specific executables
-    ".local/bin/**",
-    "local_servers/**",
-
-    // Personal notes - Keep local unless explicitly needed in vault
-    "NOTES.md",
-    "PERSONAL.md",
-    "SCRATCHPAD.md",
-
-    // Quick reference guides - 1-2 page references stay local
-    "QUICKSTART.md",
-    "QUICK_REFERENCE.md",
-    "CHEATSHEET.md",
-    "**/QUICKSTART.md",
-    "**/QUICK_REFERENCE.md",
-    "**/CHEATSHEET.md"
+      // Root documentation (essential project files)
+      "README.md",
+      "/README.md",
+      "/CONTRIBUTING.md",
+      "/LICENSE",
+      "/AGENTS.md",
+      
+      // OpenCode configuration and documentation (must stay local per AGENTS.md)
+      ".config/opencode/**",
+      "opencode.json",
+      
+      // Component READMEs (stay with their configurations)
+      ".config/*/README.md",
+      
+      // Setup scripts and installation docs
+      "setup-mac.sh",
+      "INSTALL.md",
+      
+      // Work-in-progress and personal notes
+      "notes/**",
+      "scratch.md",
+      "NOTES.md",
+      "PERSONAL.md",
+      "todo.md",
+      
+      // Sensitive information
+      "**/*.secret.md",
+      "**/confidential/**",
+      
+      // Code documentation
+      "src/**/*.md",
+      "tests/**/*.md",
+      "examples/**/*.md",
+      
+      // Build artifacts and dependencies
+      "dist/**",
+      "node_modules/**",
+      "build/**",
+      "coverage/**",
+      
+      // Version control and IDE
+      ".git/**",
+      ".github/**",
+      ".vscode/**",
+      ".idea/**",
+      
+      // Draft files
+      "**/*.draft.md",
+      "**/*.wip.md",
+      
+      // Environment and config files
+      ".env*",
+      "*.config.*",
+      "package.json",
+      "tsconfig.json"
   ],
 
-  // When conflicts occur, local patterns take precedence
+  // Conflict resolution strategy
   "conflictResolution": "local-wins"
 }
