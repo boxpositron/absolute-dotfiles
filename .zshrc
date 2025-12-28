@@ -354,3 +354,18 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 export PATH=$HOME/.opencode/bin:$PATH
 
 eval "$(zoxide init zsh)"
+
+# Added by LM Studio CLI (lms)
+export PATH="$PATH:$HOME/.cache/lm-studio/bin"
+# End of LM Studio CLI section
+
+
+# Added by LM Studio CLI (lms)
+export PATH="$PATH:/Users/davidibia/.cache/lm-studio/bin"
+# End of LM Studio CLI section
+
+# The following lines have been added by Docker Desktop to enable Docker CLI completions.
+fpath=(/Users/davidibia/.docker/completions $fpath)
+autoload -Uz compinit
+compinit
+# End of Docker CLI completions
