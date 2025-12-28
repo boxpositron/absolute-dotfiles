@@ -125,6 +125,7 @@ Key features:
 ### Development Tools
 
 - **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings
+- **tmux server** (`.tmux-server.conf`): Lightweight tmux config for remote servers
 - **Git**: Global gitignore patterns (`.rgignore`, `.gitignore`)
 - **Starship** (`starship.toml`): Cross-shell prompt with Git integration
 - **Oh My Posh** (`.config/ohmyposh/`): Alternative prompt theme (zen.toml)
@@ -232,6 +233,49 @@ Key documentation files:
 - `AGENTS.md`: AI agent guidelines and with-context MCP usage
 - `.withcontextignore`: Patterns for documentation delegation
 - Component READMEs: Tool-specific documentation in respective directories
+
+## Server Configuration
+
+A lightweight tmux configuration (`.tmux-server.conf`) is available for remote servers. It's plugin-free and optimized for server environments.
+
+### Key Differences from Desktop Config
+
+| Feature | Desktop | Server |
+|---------|---------|--------|
+| Status bar | Top | Bottom |
+| Prefix key | `Ctrl+b` | `Ctrl+/` |
+| Plugins | Full (TPM, catppuccin, etc.) | None |
+| Theme | Catppuccin | Simple minimal |
+
+### Quick Setup on Remote Server
+
+**One-liner download and setup:**
+
+```bash
+# Using curl
+curl -fsSL https://raw.githubusercontent.com/boxpositron/dotfiles/main/.tmux-server.conf -o ~/.tmux.conf
+
+# Or using wget
+wget -qO ~/.tmux.conf https://raw.githubusercontent.com/boxpositron/dotfiles/main/.tmux-server.conf
+```
+
+**If tmux is already running**, reload the config:
+
+```bash
+tmux source-file ~/.tmux.conf
+```
+
+### Server Config Key Bindings
+
+| Binding | Action |
+|---------|--------|
+| `Ctrl+/` | Prefix key |
+| `Prefix + \|` | Vertical split |
+| `Prefix + -` | Horizontal split |
+| `Prefix + hjkl` | Resize panes |
+| `Ctrl + hjkl` | Navigate panes (vim-aware) |
+| `Prefix + m` | Toggle pane zoom |
+| `Prefix + r` | Reload config |
 
 ## Troubleshooting
 
