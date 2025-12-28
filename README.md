@@ -252,10 +252,10 @@ A lightweight tmux configuration (`.tmux-server.conf`) is available for remote s
 
 ```bash
 # Using curl
-curl -fsSL https://raw.githubusercontent.com/boxpositron/dotfiles/main/.tmux-server.conf -o ~/.tmux.conf
+curl -fsSL https://raw.githubusercontent.com/boxpositron/absolute-dotfiles/main/.tmux-server.conf -o ~/.tmux.conf
 
 # Or using wget
-wget -qO ~/.tmux.conf https://raw.githubusercontent.com/boxpositron/dotfiles/main/.tmux-server.conf
+wget -qO ~/.tmux.conf https://raw.githubusercontent.com/boxpositron/absolute-dotfiles/main/.tmux-server.conf
 ```
 
 **If tmux is already running**, reload the config:
