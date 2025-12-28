@@ -92,7 +92,7 @@ ln -s ~/dotfiles/.zshrc ~/.zshrc
 - **Themes**: Multiple colorschemes including Catppuccin, Tokyo Night, and Rose Pine
 
 Key features:
-- AI-powered coding assistance (Claude, Copilot)
+- AI-powered coding assistance (Claude, OpenCode)
 - Advanced Git integration
 - Flutter and mobile development support
 - Python environment management
@@ -161,7 +161,6 @@ Plugins:
 #### Neovim AI Integration
 
 - **CodeCompanion**: AI pair programming with multiple providers
-- **Copilot**: GitHub Copilot support
 - **Gen.nvim**: Local LLM integration
 - **LLM.nvim**: Additional LLM capabilities
 
@@ -343,4 +342,4 @@ For questions, issues, or suggestions, please open an issue on the GitHub reposi
 **Platform**: macOS (Darwin)  
 **Primary Editor**: Neovim  
 **Shell**: Zsh  
-**AI Tools**: OpenCode, Claude, Copilot
+**AI Tools**: OpenCode, Claude
