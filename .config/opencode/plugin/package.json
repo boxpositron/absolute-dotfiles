@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "OpenCode plugins for dotfiles",
   "dependencies": {
-    "@opencode-ai/plugin": "^1.0.51",
-    "with-context-mcp": "^3.0.4"
+    "@opencode-ai/plugin": "^1.0.51"
   }
 }

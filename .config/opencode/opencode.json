@@ -12,28 +12,42 @@
         "packages/*/AGENTS.md"
     ],
     "agent": {
+        "build": {
+            "mode": "all"
+        },
+        "plan": {
+            "mode": "primary"
+        },
         "setup": {
+            "mode": "subagent",
             "description": "Generates project-specific documentation and guidelines through interactive discovery"
         },
         "review": {
+            "mode": "subagent",
             "description": "Reviews code for best practices and potential issues"
         },
         "test": {
+            "mode": "subagent",
             "description": "Runs tests and analyzes test results"
         },
         "docs": {
+            "mode": "subagent",
             "description": "Generates and maintains documentation"
         },
         "refactor": {
+            "mode": "subagent",
             "description": "Refactors code for better quality and maintainability"
         },
         "debug": {
+            "mode": "subagent",
             "description": "Debugs issues and troubleshoots problems"
         },
         "security": {
+            "mode": "subagent",
             "description": "Audits code for security vulnerabilities"
         },
         "webgen": {
+            "mode": "subagent",
             "description": "Generates complete web pages from ideas using any framework"
         }
     },
@@ -86,6 +100,21 @@
                 "npx",
                 "chrome-devtools-mcp@latest"
             ],
+            "enabled": false
+        },
+        "with-context": {
+            "type": "local",
+            "command": [
+                "npx",
+                "-y",
+                "with-context-mcp"
+            ],
+            "environment": {
+                "OBSIDIAN_API_KEY": "env:OBSIDIAN_API_KEY",
+                "OBSIDIAN_API_URL": "env:OBSIDIAN_API_URL",
+                "OBSIDIAN_VAULT": "env:OBSIDIAN_VAULT",
+                "PROJECT_BASE_PATH": "env:PROJECT_BASE_PATH"
+            },
             "enabled": false
         }
     }
