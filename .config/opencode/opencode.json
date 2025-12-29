@@ -5,6 +5,9 @@
     "disabled_providers": [
         "openai"
     ],
+    "plugin": [
+        "oh-my-opencode"
+    ],
     "instructions": [
         "docs/guidelines.md",
         "docs/development-standards.md",
