@@ -93,6 +93,44 @@ test_parse_args() {
 }
 test_parse_args
 
+printf '\n=== run_timeout ===\n'
+
+test_run_timeout() {
+  local out rc
+
+  out="$(run_timeout 5 printf 'hello')"
+  assert_eq "returns command stdout" "hello" "$out"
+
+  run_timeout 5 true
+  assert_eq "propagates success" "0" "$?"
+
+  run_timeout 5 false
+  assert_eq "propagates failure" "1" "$?"
+
+  rc=0
+  run_timeout 1 sleep 5 || rc=$?
+  assert_eq "returns 124 on timeout" "124" "$rc"
+
+  # Force the pure-bash fallback by making bin_exists report nothing available.
+  # The override is scoped to a subshell so later tests still see the real one.
+  rc=0
+  (
+    # shellcheck disable=SC2329  # invoked indirectly by run_timeout's name lookup
+    bin_exists() { return 1; }
+    run_timeout 1 sleep 5
+  ) || rc=$?
+  assert_eq "fallback path also returns 124" "124" "$rc"
+
+  rc=0
+  out="$(
+    # shellcheck disable=SC2329  # invoked indirectly by run_timeout's name lookup
+    bin_exists() { return 1; }
+    run_timeout 5 printf 'fallback-ok'
+  )" || rc=$?
+  assert_eq "fallback path returns stdout" "fallback-ok" "$out"
+}
+test_run_timeout
+
 printf '\n=== summary ===\n'
 teardown_tmp
 printf 'ran %d, failed %d\n' "$TESTS_RUN" "$TESTS_FAILED"
