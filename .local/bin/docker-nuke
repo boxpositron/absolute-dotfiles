@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# docker-nuke — capture diagnostics from a wedged Docker Desktop, then
+# force-kill and restart it.
+#
+# Written for bash 3.2 compatibility (macOS /bin/bash).
+
+set -euo pipefail
+
+# --- configuration ----------------------------------------------------------
+#
+# The SC2034 directives below are per-line on purpose, not file-level: each
+# constant is consumed by a later task, and its directive is deleted at that
+# point. A file-level disable would silence SC2034 for the whole file forever,
+# hiding a genuinely dead variable added later. By the final task none of these
+# directives should remain.
+
+# shellcheck disable=SC2034
+HEALTH_TIMEOUT=6        # seconds to wait on `docker info` before calling it wedged
+# shellcheck disable=SC2034
+GRACEFUL_WAIT=8         # seconds to let Docker quit politely
+# shellcheck disable=SC2034
+TERM_WAIT=5             # seconds to wait after SIGTERM before SIGKILL
+# shellcheck disable=SC2034
+RESTART_TIMEOUT=90      # seconds to wait for the daemon to come back
+# shellcheck disable=SC2034
+POLL_INTERVAL=2         # seconds between daemon health polls
+# shellcheck disable=SC2034
+SAMPLE_DURATION=2       # seconds of stack sampling per process
+# shellcheck disable=SC2034
+SAMPLE_TIMEOUT=10       # hard cap on a single `sample` invocation
+# shellcheck disable=SC2034
+DUMP_RETENTION=10       # how many dump directories to keep
+# shellcheck disable=SC2034
+LOG_TAIL_LINES=2000     # lines of Docker log to copy (keeps dumps small)
+
+# shellcheck disable=SC2034
+DOCKER_APP="/Applications/Docker.app"
+# shellcheck disable=SC2034
+DOCKER_LOG_DIR="$HOME/Library/Containers/com.docker.docker/Data/log"
+# shellcheck disable=SC2034
+DOCKER_RAW="$HOME/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
+# shellcheck disable=SC2034
+CRASH_DIR="$HOME/Library/Logs/DiagnosticReports"
+
+# Overridable so tests never touch real state.
+# shellcheck disable=SC2034
+DUMP_ROOT="${DOCKER_NUKE_DUMP_ROOT:-$HOME/.local/state/docker-nuke}"
+
+OPT_FORCE=0
+OPT_NO_RESTART=0
+OPT_DRY_RUN=0
+OPT_DEEP=0
+
+# --- helpers ----------------------------------------------------------------
+
+bin_exists() { command -v "$1" >/dev/null 2>&1; }
+
+log()  { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "$*" >&2; }
+
+usage() {
+  cat <<'EOF'
+docker-nuke: force-restart a wedged Docker Desktop, capturing diagnostics first
+
+Usage:
+  docker-nuke [options]
+
+Options:
+  -f, --force        Skip the confirmation shown when Docker looks healthy
+  -n, --no-restart   Kill Docker but do not relaunch it
+      --dry-run      Report what would be killed and dumped; change nothing
+      --deep         Also stop root launchd helpers (com.docker.vmnetd); needs sudo
+  -h, --help         Show this help
+
+Diagnostics are written to ~/.local/state/docker-nuke/<timestamp>/ before
+anything is killed. The most recent 10 dumps are kept.
+
+Exit codes:
+  0  Docker killed and confirmed responsive again
+  1  Daemon did not come back within the restart timeout
+  2  Usage error, or aborted at the healthy-daemon prompt
+EOF
+}
+
+parse_args() {
+  OPT_FORCE=0
+  OPT_NO_RESTART=0
+  OPT_DRY_RUN=0
+  OPT_DEEP=0
+  while [ "$#" -gt 0 ]; do
+    # shellcheck disable=SC2034  # OPT_* are read by main once it is wired up
+    case "$1" in
+      -f|--force)      OPT_FORCE=1 ;;
+      -n|--no-restart) OPT_NO_RESTART=1 ;;
+      --dry-run)       OPT_DRY_RUN=1 ;;
+      --deep)          OPT_DEEP=1 ;;
+      -h|--help)       usage; return 3 ;;
+      *)
+        warn "docker-nuke: unknown option '$1'"
+        usage >&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+  return 0
+}
+
+# --- entrypoint -------------------------------------------------------------
+
+main() {
+  local rc=0
+  parse_args "$@" || rc=$?
+  if [ "$rc" -eq 3 ]; then return 0; fi
+  if [ "$rc" -ne 0 ]; then return "$rc"; fi
+  log "docker-nuke: not yet implemented"
+  return 0
+}
+
+# Only run when executed, not when sourced by the test harness.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
