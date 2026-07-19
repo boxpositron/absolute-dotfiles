@@ -15,10 +15,14 @@ set -euo pipefail
 # directives should remain.
 
 HEALTH_TIMEOUT=6        # seconds to wait on `docker info` before calling it wedged
-# shellcheck disable=SC2034
 GRACEFUL_WAIT=8         # seconds to let Docker quit politely
-# shellcheck disable=SC2034
 TERM_WAIT=5             # seconds to wait after SIGTERM before SIGKILL
+# Bounded number of "fresh docker_pids -> SIGKILL -> settle" rounds run if a
+# post-SIGKILL scan still finds live Docker processes. A supervisor such as
+# com.docker.backend can respawn a killed helper under a brand new pid the
+# entry snapshot never knew about, so this must be a real cap, never an
+# unbounded loop, or a respawning Docker could hang this tool forever.
+KILL_RETRY_ROUNDS=3
 # shellcheck disable=SC2034
 RESTART_TIMEOUT=90      # seconds to wait for the daemon to come back
 # shellcheck disable=SC2034
@@ -31,6 +35,12 @@ LOG_CAPTURE_TIMEOUT=20  # hard cap on the whole capture_logs step
 CRASH_CAPTURE_TIMEOUT=10 # hard cap on the whole capture_crashes step
 
 DOCKER_APP="/Applications/Docker.app"
+# The bundle path above cannot substitute for the AppleScript app name below:
+# the running GUI application is the nested "Contents/MacOS/Docker
+# Desktop.app", whose CFBundleName is "Docker Desktop", not the top-level
+# bundle path. Both are genuinely needed; this constant exists only so the
+# two literal identities for the same app cannot drift apart silently.
+DOCKER_APP_NAME="Docker Desktop"
 DOCKER_LOG_DIR="$HOME/Library/Containers/com.docker.docker/Data/log"
 DOCKER_RAW="$HOME/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
 CRASH_DIR="$HOME/Library/Logs/DiagnosticReports"
@@ -308,6 +318,158 @@ prune_dumps() {
   return 0
 }
 
+pids_alive() {
+  local pid alive="" stat
+  for pid in "$@"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      # kill -0 succeeds against a zombie (state Z, <defunct>): the process
+      # table entry is still there but the process has already exited and is
+      # only waiting for its parent to reap it. Treat that as dead so a slow
+      # reaper can never manufacture a spurious "survived SIGKILL" report
+      # (Fix 7). ps -o stat= can print extra flag letters after the primary
+      # state letter (e.g. Z+), so match a leading Z rather than equality.
+      stat="$(ps -o stat= -p "$pid" 2>/dev/null)" || true
+      case "$stat" in
+        Z*) : ;;
+        *) alive="$alive $pid" ;;
+      esac
+    fi
+  done
+  printf '%s' "${alive# }"
+}
+
+kill_pids() {
+  local sig="$1"
+  shift
+  local pid
+  for pid in "$@"; do
+    kill "-$sig" "$pid" 2>/dev/null || true
+  done
+  return 0
+}
+
+# Returns 0 once every PID is gone, 1 if SECONDS elapses first.
+wait_for_exit() {
+  local secs="$1"
+  shift
+  local waited=0
+  while [ "$waited" -lt "$secs" ]; do
+    if [ -z "$(pids_alive "$@")" ]; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if [ -z "$(pids_alive "$@")" ]; then
+    return 0
+  fi
+  return 1
+}
+
+# Stop root launchd helpers. Only called with --deep; needs a cached sudo
+# credential.
+stop_privileged_helpers() {
+  log "docker-nuke: stopping privileged helpers (sudo required)"
+  # -n (non-interactive) never prompts: sudo writes "Password:" to stderr but
+  # reads the answer from /dev/tty, so with stderr discarded and no cached
+  # credential a plain `sudo` blocks forever with no visible prompt -- and by
+  # the time this runs, Docker has already been SIGKILLed (Fix 3). -n instead
+  # fails fast into the warning below.
+  if ! sudo -n launchctl stop com.docker.vmnetd 2>/dev/null; then
+    warn "docker-nuke: sudo -n failed for com.docker.vmnetd (no cached credential, or not permitted); skipping"
+  fi
+  if ! sudo -n launchctl stop com.docker.socket 2>/dev/null; then
+    warn "docker-nuke: sudo -n failed for com.docker.socket (no cached credential, or not permitted); skipping"
+  fi
+}
+
+# Three-stage escalation: polite quit, SIGTERM, SIGKILL.
+#
+# Success at every stage is decided from a FRESH docker_pids scan, never from
+# the entry snapshot below or from wait_for_exit's own return value (Fix 1).
+# wait_for_exit still runs against the snapshot at each stage for TIMING --
+# it correctly answers "did the ones we signalled exit" -- but it cannot see
+# a Docker process that appeared after the snapshot was taken, so it can
+# never be trusted alone to answer "is Docker gone". Concretely:
+# com.docker.backend supervises helpers; SIGKILL order is numeric (sort -un
+# in docker_pids), unrelated to the supervision tree. A helper can be killed,
+# the still-alive backend respawns it under a NEW pid, then the backend
+# itself is killed. Every snapshot pid is now gone, but the respawned helper
+# is still running -- only a fresh docker_pids call can see it.
+nuke_docker() {
+  local pids fresh
+  pids="$(docker_pids | tr '\n' ' ')"
+  if [ -z "$pids" ]; then
+    log "docker-nuke: no Docker processes found"
+    return 0
+  fi
+
+  log "docker-nuke: asking Docker Desktop to quit"
+  osascript -e 'quit app "'"$DOCKER_APP_NAME"'"' >/dev/null 2>&1 || true
+  # shellcheck disable=SC2086  # $pids must word-split into separate PID arguments here
+  wait_for_exit "$GRACEFUL_WAIT" $pids || true
+  fresh="$(docker_pids | tr '\n' ' ')"
+  if [ -z "$fresh" ]; then
+    log "docker-nuke: Docker exited cleanly"
+    return 0
+  fi
+
+  # Narrow to the subset still alive from the entry snapshot before
+  # signalling (Fix 8): a pid that already exited during the graceful-quit
+  # wait must never be re-signalled, at this stage or the next.
+  local snapshot_alive
+  # shellcheck disable=SC2086  # $pids must word-split into separate PID arguments here
+  snapshot_alive="$(pids_alive $pids)"
+
+  log "docker-nuke: sending SIGTERM"
+  # shellcheck disable=SC2086  # $snapshot_alive must word-split into separate PID arguments here
+  kill_pids TERM $snapshot_alive
+  # shellcheck disable=SC2086  # $snapshot_alive must word-split into separate PID arguments here
+  wait_for_exit "$TERM_WAIT" $snapshot_alive || true
+  fresh="$(docker_pids | tr '\n' ' ')"
+  if [ -z "$fresh" ]; then
+    log "docker-nuke: Docker exited after SIGTERM"
+    return 0
+  fi
+
+  log "docker-nuke: sending SIGKILL"
+  local remaining
+  # shellcheck disable=SC2086  # $snapshot_alive must word-split into separate PID arguments here
+  remaining="$(pids_alive $snapshot_alive)"
+  # shellcheck disable=SC2086  # $remaining must word-split into separate PID arguments here
+  kill_pids KILL $remaining
+  sleep 1
+
+  if [ "${OPT_DEEP:-0}" -eq 1 ]; then
+    stop_privileged_helpers
+  fi
+
+  # Bounded respawn retry (Fix 1): if a fresh scan still finds live Docker
+  # processes, SIGKILL exactly that fresh set, let it settle, and scan again.
+  # Capped at KILL_RETRY_ROUNDS -- never an unbounded loop -- so a Docker
+  # that keeps respawning helpers cannot hang this tool forever.
+  local round=0
+  fresh="$(docker_pids | tr '\n' ' ')"
+  while [ -n "$fresh" ]; do
+    round=$((round + 1))
+    if [ "$round" -gt "$KILL_RETRY_ROUNDS" ]; then
+      break
+    fi
+    warn "docker-nuke: Docker processes still present after SIGKILL, retrying (round $round of $KILL_RETRY_ROUNDS): $fresh"
+    # shellcheck disable=SC2086  # $fresh must word-split into separate PID arguments here
+    kill_pids KILL $fresh
+    sleep 1
+    fresh="$(docker_pids | tr '\n' ' ')"
+  done
+
+  if [ -n "$fresh" ]; then
+    warn "docker-nuke: processes survived SIGKILL: $fresh"
+    return 1
+  fi
+  log "docker-nuke: all Docker processes terminated"
+  return 0
+}
+
 log()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 
@@ -341,7 +503,7 @@ parse_args() {
   OPT_DRY_RUN=0
   OPT_DEEP=0
   while [ "$#" -gt 0 ]; do
-    # shellcheck disable=SC2034  # OPT_* are read by main once it is wired up
+    # shellcheck disable=SC2034  # OPT_FORCE, OPT_NO_RESTART, OPT_DRY_RUN are read by main once it is wired up. OPT_DEEP is already read by nuke_docker but stays under this same directive since it covers the whole case statement.
     case "$1" in
       -f|--force)      OPT_FORCE=1 ;;
       -n|--no-restart) OPT_NO_RESTART=1 ;;

@@ -403,6 +403,388 @@ test_dump() {
 }
 test_dump
 
+printf '\n=== kill escalation ===\n'
+
+test_kill() {
+  local a b c d rc alive
+
+  sleep 60 & a=$!
+  sleep 60 & b=$!
+  sleep 1
+
+  alive="$(pids_alive "$a" "$b")"
+  assert_contains "pids_alive reports first live pid" " $alive " " $a "
+  assert_contains "pids_alive reports second live pid" " $alive " " $b "
+
+  kill_pids TERM "$a"
+  sleep 1
+  alive="$(pids_alive "$a" "$b")"
+  assert_not_contains "SIGTERM kills the target" " $alive " " $a "
+  assert_contains "SIGTERM leaves others alone" " $alive " " $b "
+
+  rc=0; wait_for_exit 3 "$a" || rc=$?
+  assert_eq "wait_for_exit returns 0 for a dead pid" "0" "$rc"
+
+  rc=0; wait_for_exit 2 "$b" || rc=$?
+  assert_eq "wait_for_exit returns 1 while pid lives" "1" "$rc"
+
+  # A third pid, still alive at this point, pairs with the emptiness check
+  # below (Fix 5): a pids_alive that always prints nothing would make the
+  # emptiness assertion pass for the wrong reason, but this positive
+  # assertion over the same call would then fail, since c is genuinely
+  # alive right now.
+  sleep 60 & c=$!
+
+  kill_pids KILL "$b"
+  sleep 1
+  assert_eq "SIGKILL clears the last pid" "" "$(pids_alive "$a" "$b")"
+  assert_contains "pids_alive still detects a live pid alongside dead ones" \
+    " $(pids_alive "$a" "$b" "$c") " " $c "
+
+  # Fix 4: invoking kill_pids inside a `||` list (as this assertion previously
+  # did) suppresses set -e throughout the whole function body, so it can
+  # never prove the `|| true` guard on the real kill call inside kill_pids
+  # does anything at all. A bare invocation under genuinely active set -e is
+  # required. Pairing it with a real target in the same call (Fix 5) proves
+  # kill_pids is not simply a no-op that trivially "succeeds": if it were, d
+  # would still be alive afterward.
+  sleep 60 & d=$!
+  rc=0
+  ( set -e; kill_pids TERM 999999 "$d" ); rc=$?
+  assert_eq "killing a nonexistent pid alongside a real one is not an error" "0" "$rc"
+  sleep 1
+  assert_not_contains "kill_pids still kills the real target in the same call" \
+    " $(pids_alive "$d") " " $d "
+
+  wait "$a" 2>/dev/null || true
+  wait "$b" 2>/dev/null || true
+  kill -9 "$c" 2>/dev/null || true
+  wait "$c" 2>/dev/null || true
+  kill -9 "$d" 2>/dev/null || true
+  wait "$d" 2>/dev/null || true
+}
+test_kill
+
+printf '\n=== pids_alive zombie handling (Fix 7) ===\n'
+
+test_pids_alive_zombie() {
+  # A real zombie is too transient to depend on in a portable test harness
+  # (it is reaped almost immediately once bash notices SIGCHLD), so this
+  # exercises the same branch deterministically by shadowing `kill` and `ps`
+  # inside a subshell rather than relying on a real defunct process. `kill`
+  # is an ordinary builtin here (not a special one), so a same-named shell
+  # function shadows it for calls made from inside this subshell only.
+  local alive
+
+  alive="$(
+    # shellcheck disable=SC2329  # invoked indirectly by pids_alive name lookup
+    kill() {
+      if [ "$1" = "-0" ]; then
+        return 0
+      fi
+      command kill "$@"
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by pids_alive name lookup
+    ps() { printf 'Z+\n'; }
+    pids_alive 424242
+  )"
+  assert_eq "pids_alive treats a zombie as dead" "" "$alive"
+
+  # Pairs with the assertion above (Fix 5): a pids_alive that always prints
+  # nothing would make the zombie assertion pass for the wrong reason, but
+  # this positive assertion over the same shadowed setup, differing only in
+  # the reported process state, would then fail.
+  alive="$(
+    # shellcheck disable=SC2329  # invoked indirectly by pids_alive name lookup
+    kill() {
+      if [ "$1" = "-0" ]; then
+        return 0
+      fi
+      command kill "$@"
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by pids_alive name lookup
+    ps() { printf 'R\n'; }
+    pids_alive 424242
+  )"
+  assert_contains "pids_alive still reports a genuinely running process" " $alive " " 424242 "
+}
+test_pids_alive_zombie
+
+printf '\n=== OPT_DEEP unbound safety (Fix 2) ===\n'
+
+test_opt_deep_unbound() {
+  # [ "$OPT_DEEP" -eq 1 ] aborts under set -u the moment OPT_DEEP is unset --
+  # which nuke_docker reaches only AFTER SIGKILL has already been sent. Under
+  # the old code this scenario would kill the throwaway process below, then
+  # blow up on the OPT_DEEP read before ever logging completion. Prove the
+  # fixed read (${OPT_DEEP:-0}) lets nuke_docker run to its normal finish
+  # with OPT_DEEP genuinely unset, not merely zero.
+  local out rc
+
+  out="$(
+    set -u
+    unset OPT_DEEP
+    GRACEFUL_WAIT=1
+    TERM_WAIT=1
+    p1=""
+    bash -c 'trap "" TERM; sleep 60' & p1=$!
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() {
+      if kill -0 "$p1" 2>/dev/null; then printf '%s\n' "$p1"; fi
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    osascript() { return 0; }
+    nuke_docker
+    rc_inner=$?
+    kill -9 "$p1" 2>/dev/null || true
+    wait "$p1" 2>/dev/null || true
+    exit "$rc_inner"
+  )"
+  rc=$?
+  assert_eq "nuke_docker survives OPT_DEEP unset under set -u" "0" "$rc"
+  assert_contains "nuke_docker still logs completion with OPT_DEEP unset" "$out" "all Docker processes terminated"
+}
+test_opt_deep_unbound
+
+printf '\n=== sudo non-interactive guard (Fix 3) ===\n'
+
+test_sudo_noninteractive() {
+  # Simulating an actual hung, non-cached sudo prompt is not something this
+  # harness can safely or deterministically drive. This is a static
+  # regression guard instead: stop_privileged_helpers must call `sudo -n`
+  # (never a plain `sudo`), so a missing credential fails fast into the
+  # existing `|| true`-style guard rather than blocking forever on a hidden
+  # /dev/tty prompt after Docker has already been SIGKILLed.
+  local src
+  src="$(cat "$SCRIPT_DIR/docker-nuke")"
+  assert_contains "stop_privileged_helpers uses sudo -n for vmnetd" "$src" "sudo -n launchctl stop com.docker.vmnetd"
+  assert_contains "stop_privileged_helpers uses sudo -n for socket" "$src" "sudo -n launchctl stop com.docker.socket"
+  assert_not_contains "stop_privileged_helpers never calls a plain sudo" "$src" $'\nsudo launchctl'
+}
+test_sudo_noninteractive
+
+printf '\n=== nuke_docker escalation orchestration (Fix 6) ===\n'
+
+test_nuke_docker() {
+  local out rc
+
+  # 1. No processes found -> returns 0, logs accordingly. Nothing spawned,
+  # nothing to reap.
+  out="$(
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() { :; }
+    nuke_docker
+  )"
+  rc=$?
+  assert_eq "no processes: returns 0" "0" "$rc"
+  assert_contains "no processes: logs the no-processes message" "$out" "no Docker processes found"
+
+  # 2. All processes exit at the polite-quit stage -> returns 0. The
+  # shadowed osascript stands in for Docker actually honoring the quit
+  # request; docker_pids re-checks real liveness on every call, just like
+  # the real pgrep-backed implementation.
+  out="$(
+    GRACEFUL_WAIT=2
+    p1=""; p2=""
+    sleep 60 & p1=$!
+    sleep 60 & p2=$!
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() {
+      local pid
+      for pid in "$p1" "$p2"; do
+        if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; fi
+      done
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    osascript() {
+      kill -TERM "$p1" "$p2" 2>/dev/null || true
+      return 0
+    }
+    nuke_docker
+    rc_inner=$?
+    wait "$p1" 2>/dev/null || true
+    wait "$p2" 2>/dev/null || true
+    exit "$rc_inner"
+  )"
+  rc=$?
+  assert_eq "polite quit: returns 0" "0" "$rc"
+  assert_contains "polite quit: logs clean exit" "$out" "Docker exited cleanly"
+
+  # 3. Survivors reach SIGTERM -> returns 0. osascript no-ops (Docker ignores
+  # the polite quit); the throwaway sleeps have no TERM trap, so nuke_docker's
+  # own SIGTERM kills them for real.
+  out="$(
+    GRACEFUL_WAIT=1
+    TERM_WAIT=2
+    p1=""; p2=""
+    sleep 60 & p1=$!
+    sleep 60 & p2=$!
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() {
+      local pid
+      for pid in "$p1" "$p2"; do
+        if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; fi
+      done
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    osascript() { return 0; }
+    nuke_docker
+    rc_inner=$?
+    wait "$p1" 2>/dev/null || true
+    wait "$p2" 2>/dev/null || true
+    exit "$rc_inner"
+  )"
+  rc=$?
+  assert_eq "SIGTERM stage: returns 0" "0" "$rc"
+  assert_contains "SIGTERM stage: logs post-SIGTERM exit" "$out" "Docker exited after SIGTERM"
+
+  # 4. Survivors reach SIGKILL -> returns 0, and stop_privileged_helpers is
+  # NOT called when OPT_DEEP=0 (Fix 6's last bullet). Each throwaway process
+  # traps and ignores SIGTERM so only SIGKILL can end it.
+  out="$(
+    OPT_DEEP=0
+    GRACEFUL_WAIT=1
+    TERM_WAIT=1
+    p1=""; p2=""
+    bash -c 'trap "" TERM; sleep 60' & p1=$!
+    bash -c 'trap "" TERM; sleep 60' & p2=$!
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() {
+      local pid
+      for pid in "$p1" "$p2"; do
+        if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; fi
+      done
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    osascript() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    stop_privileged_helpers() { printf 'STOP_PRIVILEGED_CALLED\n'; }
+    nuke_docker
+    rc_inner=$?
+    kill -9 "$p1" "$p2" 2>/dev/null || true
+    wait "$p1" 2>/dev/null || true
+    wait "$p2" 2>/dev/null || true
+    exit "$rc_inner"
+  )"
+  rc=$?
+  assert_eq "SIGKILL stage: returns 0" "0" "$rc"
+  assert_contains "SIGKILL stage: logs full termination" "$out" "all Docker processes terminated"
+  assert_not_contains "SIGKILL stage: stop_privileged_helpers not called when OPT_DEEP=0" "$out" "STOP_PRIVILEGED_CALLED"
+
+  # 4b. Same shape, but OPT_DEEP=1 -- pairs with 4's negative assertion (Fix
+  # 5): a stop_privileged_helpers call that is unconditionally skipped (or
+  # unconditionally run) would fail one of these two, never both.
+  out="$(
+    OPT_DEEP=1
+    GRACEFUL_WAIT=1
+    TERM_WAIT=1
+    p1=""; p2=""
+    bash -c 'trap "" TERM; sleep 60' & p1=$!
+    bash -c 'trap "" TERM; sleep 60' & p2=$!
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() {
+      local pid
+      for pid in "$p1" "$p2"; do
+        if kill -0 "$pid" 2>/dev/null; then printf '%s\n' "$pid"; fi
+      done
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    osascript() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    stop_privileged_helpers() { printf 'STOP_PRIVILEGED_CALLED\n'; }
+    nuke_docker
+    rc_inner=$?
+    kill -9 "$p1" "$p2" 2>/dev/null || true
+    wait "$p1" 2>/dev/null || true
+    wait "$p2" 2>/dev/null || true
+    exit "$rc_inner"
+  )"
+  rc=$?
+  assert_eq "SIGKILL stage with --deep: returns 0" "0" "$rc"
+  assert_contains "SIGKILL stage with --deep: stop_privileged_helpers is called" "$out" "STOP_PRIVILEGED_CALLED"
+
+  # 5. Something survives everything -> returns 1, and does NOT log success.
+  # docker_pids is stubbed to unconditionally keep reporting a fixed,
+  # nonexistent pid as live, modeling a process nothing here can actually
+  # kill, so the bounded retry loop is guaranteed to exhaust its rounds.
+  out="$(
+    OPT_DEEP=0
+    GRACEFUL_WAIT=1
+    TERM_WAIT=1
+    KILL_RETRY_ROUNDS=2
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() { printf '%s\n' 555555; }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    osascript() { return 0; }
+    nuke_docker 2>&1
+  )"
+  rc=$?
+  assert_eq "unkillable survivor: returns 1" "1" "$rc"
+  assert_not_contains "unkillable survivor: never logs Docker exited cleanly" "$out" "Docker exited cleanly"
+  assert_not_contains "unkillable survivor: never logs post-SIGTERM exit" "$out" "Docker exited after SIGTERM"
+  assert_not_contains "unkillable survivor: never logs full termination" "$out" "all Docker processes terminated"
+  assert_contains "unkillable survivor: warns that processes survived" "$out" "processes survived SIGKILL"
+
+  # 6. Fix 1's respawn scenario. docker_pids returns the real entry-snapshot
+  # pids on its FIRST call only; every call after that returns a different,
+  # fixed, nonexistent pid, modeling a helper that respawned under a brand
+  # new pid after the snapshot pids died. The snapshot pids are killed
+  # BEFORE nuke_docker even runs, so wait_for_exit sees them as gone
+  # immediately at the very first stage -- exactly the shape that fooled the
+  # old stale-snapshot success check. Assert nuke_docker does not report
+  # success at any stage.
+  out="$(
+    OPT_DEEP=0
+    # shellcheck disable=SC2034  # read by wait_for_exit (sourced from docker-nuke); the source=/dev/null directive above hides that cross-file read from this analysis
+    GRACEFUL_WAIT=1
+    # shellcheck disable=SC2034  # read by wait_for_exit (sourced from docker-nuke); the source=/dev/null directive above hides that cross-file read from this analysis
+    TERM_WAIT=1
+    # shellcheck disable=SC2034  # read by the nuke_docker retry loop (sourced from docker-nuke); the source=/dev/null directive above hides that cross-file read from this analysis
+    KILL_RETRY_ROUNDS=2
+    p1=""; p2=""
+    sleep 60 & p1=$!
+    sleep 60 & p2=$!
+    kill -9 "$p1" "$p2" 2>/dev/null || true
+    wait "$p1" 2>/dev/null || true
+    wait "$p2" 2>/dev/null || true
+    # docker_pids is always invoked as the first stage of a pipeline inside
+    # nuke_docker (`docker_pids | tr ...`), and bash runs every non-last
+    # pipeline stage in a forked subshell. A plain shell-variable call
+    # counter would therefore reset to its parent value on every single
+    # call and never actually advance, silently defeating this stub. A
+    # counter file survives across those forks since it lives on disk, not
+    # in process memory.
+    dp_call_marker="$TMPROOT/respawn-dp-calls"
+    printf '0' >"$dp_call_marker"
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    docker_pids() {
+      local n
+      n="$(cat "$dp_call_marker" 2>/dev/null)"
+      n=$((n + 1))
+      printf '%s' "$n" >"$dp_call_marker"
+      if [ "$n" -eq 1 ]; then
+        printf '%s\n%s\n' "$p1" "$p2"
+      else
+        printf '%s\n' 666666
+      fi
+    }
+    # shellcheck disable=SC2329  # invoked indirectly by nuke_docker name lookup
+    osascript() { return 0; }
+    nuke_docker 2>&1
+  )"
+  rc=$?
+  assert_eq "respawn scenario: returns 1, not success" "1" "$rc"
+  assert_not_contains "respawn scenario: never logs Docker exited cleanly" "$out" "Docker exited cleanly"
+  assert_not_contains "respawn scenario: never logs post-SIGTERM exit" "$out" "Docker exited after SIGTERM"
+  assert_not_contains "respawn scenario: never logs full termination" "$out" "all Docker processes terminated"
+  # Positive counterpart (Fix 5): proves the stub genuinely produced a
+  # DIFFERENT pid after the snapshot died, rather than this test vacuously
+  # passing because the entry-snapshot pids simply stayed non-empty text for
+  # an unrelated reason.
+  assert_contains "respawn scenario: nuke_docker discovers the NEW respawned pid" "$out" "666666"
+}
+test_nuke_docker
+
 printf '\n=== summary ===\n'
 teardown_tmp
 printf 'ran %d, failed %d\n' "$TESTS_RUN" "$TESTS_FAILED"
