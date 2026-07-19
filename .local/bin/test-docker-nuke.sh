@@ -344,6 +344,65 @@ test_docker_healthy() {
 }
 test_docker_healthy
 
+printf '\n=== dump ===\n'
+
+test_dump() {
+  local d rc
+
+  d="$(new_dump_dir)"
+  assert_eq "dump dir is created" "yes" "$([ -d "$d" ] && printf 'yes' || printf 'no')"
+  assert_contains "dump dir lives under DUMP_ROOT" "$d" "$DUMP_ROOT"
+
+  # shellcheck disable=SC2034  # DUMP_DIR is read by capture() (sourced from docker-nuke); the source=/dev/null directive above hides that cross-file read from this analysis
+  DUMP_DIR="$d"
+  CAPTURE_FAILURES=""
+
+  capture "ok.txt" 5 printf 'captured'
+  assert_eq "successful capture writes its file" "captured" "$(cat "$d/ok.txt")"
+  assert_eq "successful capture records no failure" "" "$CAPTURE_FAILURES"
+
+  rc=0
+  capture "slow.txt" 1 sleep 5 || rc=$?
+  assert_eq "timed-out capture still returns 0" "0" "$rc"
+  assert_contains "timed-out capture is recorded" "$CAPTURE_FAILURES" "slow.txt"
+  assert_contains "timed-out capture notes failure in file" "$(cat "$d/slow.txt")" "failed or timed out"
+
+  rc=0
+  capture "missing.txt" 5 this-command-does-not-exist || rc=$?
+  assert_eq "failed capture still returns 0" "0" "$rc"
+  assert_contains "failed capture is recorded" "$CAPTURE_FAILURES" "missing.txt"
+
+  # Regression coverage for the headline run_timeout fix: an external
+  # timeout/gtimeout binary can never exec a shell function directly (execvp
+  # fails with rc=127), so run_timeout must route shell functions to its
+  # pure-bash poller instead. Every capture test above passes an external
+  # command (printf, sleep, this-command-does-not-exist), so without this
+  # assertion that routing has zero coverage and could regress silently.
+  # shellcheck disable=SC2329  # invoked indirectly by capture -> run_timeout name lookup
+  that_function() { printf 'shell-function-output\n'; }
+  capture "fn.txt" 5 that_function
+  assert_contains "capture of a shell function produces its real output" \
+    "$(cat "$d/fn.txt")" "shell-function-output"
+  assert_not_contains "capture of a shell function is not a failure banner" \
+    "$(cat "$d/fn.txt")" "failed or timed out"
+
+  # Retention: 12 dumps in, 10 newest survive.
+  rm -rf "${DUMP_ROOT:?}"
+  mkdir -p "$DUMP_ROOT"
+  local i
+  for i in 01 02 03 04 05 06 07 08 09 10 11 12; do
+    mkdir -p "$DUMP_ROOT/202601${i}T000000Z"
+  done
+  prune_dumps 10
+  # shellcheck disable=SC2012  # dump dir names are our own generated timestamps, never contain newlines; a plain count needs plain lines, not find -print0
+  assert_eq "keeps exactly 10 dumps" "10" "$(ls -1 "$DUMP_ROOT" | wc -l | tr -d ' ')"
+  assert_eq "prunes the oldest" "no" \
+    "$([ -d "$DUMP_ROOT/20260101T000000Z" ] && printf 'yes' || printf 'no')"
+  assert_eq "keeps the newest" "yes" \
+    "$([ -d "$DUMP_ROOT/20260112T000000Z" ] && printf 'yes' || printf 'no')"
+}
+test_dump
+
 printf '\n=== summary ===\n'
 teardown_tmp
 printf 'ran %d, failed %d\n' "$TESTS_RUN" "$TESTS_FAILED"

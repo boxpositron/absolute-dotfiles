@@ -23,25 +23,19 @@ TERM_WAIT=5             # seconds to wait after SIGTERM before SIGKILL
 RESTART_TIMEOUT=90      # seconds to wait for the daemon to come back
 # shellcheck disable=SC2034
 POLL_INTERVAL=2         # seconds between daemon health polls
-# shellcheck disable=SC2034
 SAMPLE_DURATION=2       # seconds of stack sampling per process
-# shellcheck disable=SC2034
 SAMPLE_TIMEOUT=10       # hard cap on a single `sample` invocation
-# shellcheck disable=SC2034
 DUMP_RETENTION=10       # how many dump directories to keep
-# shellcheck disable=SC2034
 LOG_TAIL_LINES=2000     # lines of Docker log to copy (keeps dumps small)
+LOG_CAPTURE_TIMEOUT=20  # hard cap on the whole capture_logs step
+CRASH_CAPTURE_TIMEOUT=10 # hard cap on the whole capture_crashes step
 
 DOCKER_APP="/Applications/Docker.app"
-# shellcheck disable=SC2034
 DOCKER_LOG_DIR="$HOME/Library/Containers/com.docker.docker/Data/log"
-# shellcheck disable=SC2034
 DOCKER_RAW="$HOME/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw"
-# shellcheck disable=SC2034
 CRASH_DIR="$HOME/Library/Logs/DiagnosticReports"
 
 # Overridable so tests never touch real state.
-# shellcheck disable=SC2034
 DUMP_ROOT="${DOCKER_NUKE_DUMP_ROOT:-$HOME/.local/state/docker-nuke}"
 
 OPT_FORCE=0
@@ -58,11 +52,15 @@ bin_exists() { command -v "$1" >/dev/null 2>&1; }
 run_timeout() {
   local secs="$1"
   shift
-  if bin_exists timeout; then
+  # A shell function (e.g. disk_report) has no PATH-resolvable executable, so
+  # an external timeout/gtimeout binary can never exec it directly (execvp
+  # fails with rc=127). Route those straight to the pure-bash poller below,
+  # which runs the command in this same shell instead of a child process.
+  if bin_exists timeout && ! declare -F "$1" >/dev/null 2>&1; then
     timeout "$secs" "$@"
     return $?
   fi
-  if bin_exists gtimeout; then
+  if bin_exists gtimeout && ! declare -F "$1" >/dev/null 2>&1; then
     gtimeout "$secs" "$@"
     return $?
   fi
@@ -138,6 +136,176 @@ docker_healthy() {
   local rc=0
   run_timeout "$HEALTH_TIMEOUT" docker info >/dev/null 2>&1 || rc=$?
   return "$rc"
+}
+
+DUMP_DIR=""
+CAPTURE_FAILURES=""
+
+# new_dump_dir — create and print a fresh timestamped directory under
+# DUMP_ROOT. This is the one place in the dump path that fails loudly: if the
+# directory cannot be created there is nowhere left to record a failure, so
+# the caller must find out immediately rather than have every later capture
+# silently write into a path that never existed.
+new_dump_dir() {
+  local stamp dir
+  stamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+  dir="$DUMP_ROOT/$stamp"
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    warn "docker-nuke: could not create dump directory $dir (dump root unwritable or full)"
+    return 1
+  fi
+  printf '%s\n' "$dir"
+}
+
+# capture NAME SECONDS CMD... — write CMD output to $DUMP_DIR/NAME.
+# Never fails: a timeout or error is recorded and execution continues, so a
+# broken capture can never block recovery.
+capture() {
+  local name="$1" secs="$2"
+  shift 2
+  local out="$DUMP_DIR/$name"
+  local rc=0
+  run_timeout "$secs" "$@" >"$out" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # The banner append itself must never be able to trip set -e: on an
+    # unwritable or full dump root this redirection fails too, and without
+    # the guard that failure -- not the original capture failure -- would be
+    # what aborts the entire dump at the very first capture.
+    printf '\n[docker-nuke] capture "%s" failed or timed out (rc=%s)\n' "$name" "$rc" >>"$out" 2>/dev/null || true
+    CAPTURE_FAILURES="$CAPTURE_FAILURES $name"
+  fi
+  return 0
+}
+
+# Sample user-space stacks of the daemon-side processes. This is the one
+# signal that cannot be reconstructed after the processes are killed.
+capture_samples() {
+  if ! bin_exists sample; then
+    printf 'sample(1) not available\n' >"$DUMP_DIR/samples-skipped.txt"
+    return 0
+  fi
+  local name pid
+  for name in com.docker.backend com.docker.krun; do
+    for pid in $(pgrep -x "$name" 2>/dev/null || true); do
+      capture "sample-$name-$pid.txt" "$SAMPLE_TIMEOUT" \
+        sample "$pid" "$SAMPLE_DURATION" -mayDie
+    done
+  done
+}
+
+capture_logs() {
+  mkdir -p "$DUMP_DIR/logs"
+  local f base
+  for f in "$DOCKER_LOG_DIR"/host/*.log "$DOCKER_LOG_DIR"/vm/*.log; do
+    if [ -f "$f" ]; then
+      base="$(basename "$f")"
+      tail -n "$LOG_TAIL_LINES" "$f" >"$DUMP_DIR/logs/$base" 2>/dev/null || true
+    fi
+  done
+}
+
+capture_crashes() {
+  mkdir -p "$DUMP_DIR/crashes"
+  if [ ! -d "$CRASH_DIR" ]; then
+    return 0
+  fi
+  local f
+  # grep exits 1 when no crash report matches (the common case: this dump
+  # feature is expected to run against a healthy history most of the time).
+  # Under `set -o pipefail` that would fail the whole pipeline and abort
+  # run_dump via `set -e`. Group it with `|| true` so a clean "no matches"
+  # never propagates as a pipeline failure.
+  #
+  # Grouping only the grep is not enough on its own: `head -5` closes its
+  # read end once it has 5 lines, so with more than 5 matches upstream
+  # `ls -1t` is later killed by SIGPIPE (rc=141) instead of exiting 0; an
+  # unreadable CRASH_DIR gives `ls` rc=2 the same way. Either propagates as
+  # this pipeline's exit status under pipefail and would abort the dump via
+  # `set -e`, so the trailing `|| true` guards the pipeline as a whole, not
+  # just the grep.
+  # shellcheck disable=SC2012  # crash report names are macOS-generated, never contain newlines; ls -t gives the mtime order find cannot without extra plumbing
+  ls -1t "$CRASH_DIR" 2>/dev/null | { grep -i docker || true; } | head -5 | while IFS= read -r f; do
+    cp "$CRASH_DIR/$f" "$DUMP_DIR/crashes/" 2>/dev/null || true
+  done || true
+}
+
+disk_report() {
+  df -h
+  printf '\n--- Docker.raw ---\n'
+  ls -lh "$DOCKER_RAW" 2>/dev/null || printf 'Docker.raw not found\n'
+  du -h -d0 "$DOCKER_RAW" 2>/dev/null || true
+}
+
+socket_report() {
+  local sock="$HOME/.docker/run/docker.sock"
+  printf 'socket: %s\n' "$sock"
+  ls -l "$sock" 2>/dev/null || printf 'socket does not exist\n'
+  printf '\n--- listeners ---\n'
+  lsof "$sock" 2>/dev/null || printf 'no processes hold the socket\n'
+}
+
+run_dump() {
+  local rc
+  # DUMP_DIR is reset to empty first so a failed new_dump_dir never leaves it
+  # pointing at a directory that does not exist (Fix 1). new_dump_dir is the
+  # one place in this path that is allowed to fail loudly: on an unwritable
+  # or full dump root it has already logged why via `warn` and returned
+  # non-zero, and there is nowhere left to record a capture failure, so
+  # run_dump stops here -- before any capture runs -- rather than limping
+  # into the first capture and dying mid-dump.
+  DUMP_DIR=""
+  DUMP_DIR="$(new_dump_dir)" || return 1
+  CAPTURE_FAILURES=""
+  log "docker-nuke: capturing diagnostics to $DUMP_DIR"
+
+  capture "ps.txt" 10 ps -eo pid,ppid,stat,%cpu,%mem,etime,command
+  capture "docker-info.txt" "$HEALTH_TIMEOUT" docker info
+  capture "docker-version.txt" "$HEALTH_TIMEOUT" docker version
+  capture "disk.txt" 15 disk_report
+  capture "memory.txt" 10 vm_stat
+  capture "socket.txt" 10 socket_report
+
+  # capture_logs and capture_crashes write files directly rather than
+  # emitting stdout, so they are not routed through capture() (which would
+  # redirect stdout to a single named artifact). They still must be
+  # time-bounded like every other step, and run_timeout's `declare -F` guard
+  # (see run_timeout above) routes them to the pure-bash poller since neither
+  # is a PATH-resolvable executable. A timeout or error is recorded into
+  # CAPTURE_FAILURES the same way capture() records one, so a wedged
+  # filesystem here cannot hang the dump either.
+  rc=0
+  run_timeout "$LOG_CAPTURE_TIMEOUT" capture_logs || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    CAPTURE_FAILURES="$CAPTURE_FAILURES logs"
+  fi
+
+  rc=0
+  run_timeout "$CRASH_CAPTURE_TIMEOUT" capture_crashes || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    CAPTURE_FAILURES="$CAPTURE_FAILURES crashes"
+  fi
+
+  capture_samples
+}
+
+prune_dumps() {
+  local keep="${1:-$DUMP_RETENTION}"
+  if [ ! -d "$DUMP_ROOT" ]; then
+    return 0
+  fi
+  local d
+  # An unreadable DUMP_ROOT gives `ls` a non-zero exit, which -- since this
+  # pipeline is prune_dumps' last statement and therefore its return value --
+  # would otherwise abort a `set -e` caller. The trailing `|| true` matches
+  # the guard used in capture_crashes for the same class of problem; the
+  # normal-path behavior (prune the oldest, keep $keep newest) is unchanged.
+  # shellcheck disable=SC2012  # dump dir names are our own generated timestamps, never contain newlines; sort -r needs plain lines, not find -print0
+  ls -1 "$DUMP_ROOT" 2>/dev/null | sort -r | tail -n "+$((keep + 1))" | while IFS= read -r d; do
+    if [ -n "$d" ]; then
+      rm -rf "${DUMP_ROOT:?}/$d"
+    fi
+  done || true
+  return 0
 }
 
 log()  { printf '%s\n' "$*"; }
