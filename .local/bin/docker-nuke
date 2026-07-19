@@ -33,7 +33,6 @@ DUMP_RETENTION=10       # how many dump directories to keep
 # shellcheck disable=SC2034
 LOG_TAIL_LINES=2000     # lines of Docker log to copy (keeps dumps small)
 
-# shellcheck disable=SC2034
 DOCKER_APP="/Applications/Docker.app"
 # shellcheck disable=SC2034
 DOCKER_LOG_DIR="$HOME/Library/Containers/com.docker.docker/Data/log"
@@ -85,6 +84,53 @@ run_timeout() {
   local rc=0
   wait "$pid" || rc=$?
   return "$rc"
+}
+
+# Exact process names to target, in addition to anything under Docker.app.
+# NOTE: never use `pgrep -f docker` here — it matches this script's own
+# command line and the tool would kill itself.
+DOCKER_PROC_NAMES="com.docker.backend com.docker.build com.docker.krun \
+com.docker.vpnkit com.docker.virtualization vpnkit docker"
+
+docker_pids() {
+  local self="$$"
+  local parent="${PPID:-0}"
+  local name pid comm
+  {
+    # `pgrep -f "$DOCKER_APP"` matches any process whose *command line*
+    # mentions the bundle path — e.g. `tail -f /Applications/Docker.app/...`
+    # matches even though that process is plainly not Docker. Post-filter
+    # each candidate by its actual executable so only processes truly
+    # launched from the bundle survive. Wrapped in `|| true`: under
+    # `set -o pipefail`, an empty `pgrep -f` match (exit 1) would otherwise
+    # make this whole statement fail and abort the function under `set -e`.
+    pgrep -f "$DOCKER_APP" 2>/dev/null | while read -r pid; do
+      if [ -z "$pid" ]; then continue; fi
+      # A dead PID (process exited between pgrep and ps) or a `ps` failure
+      # must yield an empty comm, which matches no case branch below —
+      # never a crash, never a false positive.
+      # NOTE: `ps -o comm=` reports the executable path as invoked, not
+      # canonicalized — a Docker helper ever exec'd by relative path or bare
+      # name would report a non-bundle comm here and be silently dropped.
+      comm="$(ps -o comm= -p "$pid" 2>/dev/null)" || true
+      case "$comm" in
+        "$DOCKER_APP"/*) printf '%s\n' "$pid" ;;
+      esac
+    done || true
+
+    # Exact-name matches are already precise — do NOT apply the comm
+    # filter here. One job of this branch is catching a hung
+    # /usr/local/bin/docker CLI, which legitimately lives outside the
+    # bundle; filtering by $DOCKER_APP prefix would break that.
+    for name in $DOCKER_PROC_NAMES; do
+      pgrep -x "$name" 2>/dev/null || true
+    done
+  } | sort -un | while read -r pid; do
+    if [ -z "$pid" ]; then continue; fi
+    if [ "$pid" = "$self" ]; then continue; fi
+    if [ "$pid" = "$parent" ]; then continue; fi
+    printf '%s\n' "$pid"
+  done
 }
 
 log()  { printf '%s\n' "$*"; }

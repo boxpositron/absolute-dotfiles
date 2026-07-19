@@ -115,7 +115,7 @@ test_run_timeout() {
   # The override is scoped to a subshell so later tests still see the real one.
   rc=0
   (
-    # shellcheck disable=SC2329  # invoked indirectly by run_timeout's name lookup
+    # shellcheck disable=SC2329  # invoked indirectly by run_timeout name lookup
     bin_exists() { return 1; }
     run_timeout 1 sleep 5
   ) || rc=$?
@@ -123,13 +123,168 @@ test_run_timeout() {
 
   rc=0
   out="$(
-    # shellcheck disable=SC2329  # invoked indirectly by run_timeout's name lookup
+    # shellcheck disable=SC2329  # invoked indirectly by run_timeout name lookup
     bin_exists() { return 1; }
     run_timeout 5 printf 'fallback-ok'
   )" || rc=$?
   assert_eq "fallback path returns stdout" "fallback-ok" "$out"
 }
 test_run_timeout
+
+printf '\n=== docker_pids ===\n'
+
+test_docker_pids() {
+  # Keep both forms: newline for counting, space-padded for substring checks.
+  # A space-padded haystack is required — searching newline-separated output
+  # for " <pid> " can never match, which would make these assertions vacuous.
+  local pids_nl pids_sp
+  pids_nl="$(docker_pids)"
+  pids_sp=" $(printf '%s' "$pids_nl" | tr '\n' ' ') "
+
+  # $$ and $PPID are never real candidates in live output (the harness's own
+  # command line does not contain $DOCKER_APP, and its comm is "bash", which
+  # matches no exact name), so asserting they are absent from live output
+  # proves nothing — it would pass even if the self/parent exclusion were
+  # deleted entirely. Kept below only as an additional sanity check; the
+  # real safety test stubs discovery so $$ and $PPID genuinely ARE
+  # candidates, which exercises the exclusion filter itself.
+  assert_not_contains "sanity: live output has no own PID" "$pids_sp" " $$ "
+  assert_not_contains "sanity: live output has no parent PID" "$pids_sp" " $PPID "
+
+  local filtered
+  filtered="$(
+    # shellcheck disable=SC2329  # invoked indirectly by docker_pids name lookup
+    pgrep() { printf '%s\n%s\n%s\n' "$$" "$PPID" 99999; }
+    # shellcheck disable=SC2329  # invoked indirectly by docker_pids name lookup
+    ps() { printf '%s\n' "$DOCKER_APP/Contents/MacOS/com.docker.backend"; }
+    docker_pids | tr '\n' ' '
+  )"
+  assert_eq "excludes own and parent PID, keeps others" "99999 " "$filtered"
+
+  # Guard against a vacuous suite: if Docker is running there must be matches.
+  local count
+  count="$(printf '%s\n' "$pids_nl" | grep -c . || true)"
+  if pgrep -x com.docker.backend >/dev/null 2>&1; then
+    if [ "$count" -gt 0 ]; then
+      pass "finds Docker processes while Docker is running"
+    else
+      fail "finds Docker processes while Docker is running" "got 0 pids"
+    fi
+  fi
+
+  # Every returned PID must be a live process.
+  local pid bad=""
+  for pid in $pids_nl; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      bad="$bad $pid"
+    fi
+  done
+  assert_eq "all returned PIDs are live" "" "$bad"
+
+  # Output must be numeric and deduped.
+  local nonnum=""
+  for pid in $pids_nl; do
+    case "$pid" in
+      ''|*[!0-9]*) nonnum="$nonnum [$pid]" ;;
+    esac
+  done
+  assert_eq "all output is numeric" "" "$nonnum"
+
+  local uniq
+  uniq="$(printf '%s\n' "$pids_nl" | sort -u | grep -c . || true)"
+  assert_eq "output is deduped" "$count" "$uniq"
+
+  # A decoy process whose name contains "docker" but is not Docker Desktop
+  # must not be matched.
+  local decoy="$TMPROOT/docker-nuke-decoy"
+  cat >"$decoy" <<'STUB'
+#!/usr/bin/env bash
+sleep 30
+STUB
+  chmod +x "$decoy"
+  # The decoy's command line must mention $DOCKER_APP so pgrep -f "$DOCKER_APP"
+  # actually matches it (the script ignores its args and just sleeps); its
+  # comm stays "bash", which the comm filter must then reject. Without this,
+  # pgrep -f never matches the decoy at all and the comm filter is untested.
+  "$decoy" "$DOCKER_APP/Contents/MacOS/not-really-docker" &
+  local decoy_pid=$!
+  sleep 1
+  pids_sp=" $(docker_pids | tr '\n' ' ') "
+  assert_not_contains "ignores decoy named docker-nuke-*" "$pids_sp" " $decoy_pid "
+
+  # Guard against a vacuous pass: with Docker stopped, docker_pids returns
+  # empty output and the assertion above passes for the wrong reason.
+  # Reuses the anti-vacuous guard pattern used above.
+  if pgrep -x com.docker.backend >/dev/null 2>&1; then
+    if [ -n "$(printf '%s' "$pids_sp" | tr -d '[:space:]')" ]; then
+      pass "decoy check ran against non-empty output while Docker is running"
+    else
+      fail "decoy check ran against non-empty output while Docker is running" "got empty pids"
+    fi
+  fi
+
+  kill -9 "$decoy_pid" 2>/dev/null || true
+  wait "$decoy_pid" 2>/dev/null || true
+}
+test_docker_pids
+
+printf '\n=== docker_pids errexit contract ===\n'
+
+test_docker_pids_errexit() {
+  # Every call site in docker-nuke invokes docker_pids inside $( ), where bash
+  # never applies errexit to the failing command that triggered it — so a
+  # regression that lets docker_pids abort under `set -e` would go completely
+  # undetected by every other test in this file. Prove the contract with a
+  # real script, invoked directly (not inside $( )), that calls docker_pids
+  # as a plain statement under `set -euo pipefail`.
+  #
+  # The specific failure mode is `pgrep -f "$DOCKER_APP"` matching zero
+  # processes (pipefail + no trailing `|| true` -> the pipeline itself exits
+  # non-zero -> set -e aborts before the exact-name branch ever runs). On a
+  # machine where Docker Desktop happens to be live, the real $DOCKER_APP
+  # always has matches, so calling docker_pids unmodified would never
+  # exercise that zero-match branch and the mutation would go undetected
+  # regardless of host state. Override DOCKER_APP after sourcing to a path
+  # guaranteed to match nothing, so the zero-match code path is exercised
+  # deterministically no matter whether Docker is running on this host.
+  local probe="$TMPROOT/errexit-probe.sh"
+  cat >"$probe" <<PROBE
+#!/usr/bin/env bash
+set -euo pipefail
+source "$SCRIPT_DIR/docker-nuke"
+DOCKER_APP="/nonexistent/docker-nuke-test-probe-guard"
+docker_pids >/dev/null
+printf 'survived\n'
+PROBE
+  chmod +x "$probe"
+  local probe_out probe_rc=0
+  probe_out="$("$probe" 2>&1)" || probe_rc=$?
+  assert_eq "docker_pids does not abort a set -euo pipefail caller" "0" "$probe_rc"
+  assert_contains "set -e probe ran to completion" "$probe_out" "survived"
+}
+test_docker_pids_errexit
+
+printf '\n=== bash 3.2 syntax compatibility ===\n'
+
+test_bash32_syntax() {
+  # bash 3.2 (stock macOS /bin/bash) has a $( ) scanner that does not skip
+  # comments, so an apostrophe inside a comment inside a command substitution
+  # opens an unterminated quote and the whole file fails to parse. Guard
+  # against that regressing silently by parse-checking both files with the
+  # real system bash on every run.
+  local out rc
+
+  rc=0
+  out="$(/bin/bash -n "$SCRIPT_DIR/docker-nuke" 2>&1)" || rc=$?
+  assert_eq "docker-nuke parses under /bin/bash -n" "0" "$rc"
+  assert_eq "docker-nuke -n produces no output" "" "$out"
+
+  rc=0
+  out="$(/bin/bash -n "$SCRIPT_DIR/test-docker-nuke.sh" 2>&1)" || rc=$?
+  assert_eq "test-docker-nuke.sh parses under /bin/bash -n" "0" "$rc"
+  assert_eq "test-docker-nuke.sh -n produces no output" "" "$out"
+}
+test_bash32_syntax
 
 printf '\n=== summary ===\n'
 teardown_tmp
