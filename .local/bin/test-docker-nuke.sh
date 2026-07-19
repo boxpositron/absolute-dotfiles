@@ -21,6 +21,39 @@ teardown_tmp() {
   TMPROOT=""
 }
 
+# Shared test infrastructure: creates a stub `docker` executable in DIR so
+# tests never depend on the real daemon's state. MODE: healthy | broken | hang.
+# Reused by this task's docker_healthy tests and by task 7's recovery-polling
+# tests, so it lives here with the other harness helpers rather than nested
+# inside a single test function.
+make_docker_stub() {
+  local dir="$1" mode="$2"
+  mkdir -p "$dir"
+  case "$mode" in
+    healthy)
+      cat >"$dir/docker" <<'STUB'
+#!/usr/bin/env bash
+printf 'Server Version: 99.0.0\n'
+exit 0
+STUB
+      ;;
+    broken)
+      cat >"$dir/docker" <<'STUB'
+#!/usr/bin/env bash
+printf 'Cannot connect to the Docker daemon\n' >&2
+exit 1
+STUB
+      ;;
+    hang)
+      cat >"$dir/docker" <<'STUB'
+#!/usr/bin/env bash
+sleep 300
+STUB
+      ;;
+  esac
+  chmod +x "$dir/docker"
+}
+
 pass() {
   TESTS_RUN=$((TESTS_RUN + 1))
   printf '  ok   %s\n' "$1"
@@ -285,6 +318,31 @@ test_bash32_syntax() {
   assert_eq "test-docker-nuke.sh -n produces no output" "" "$out"
 }
 test_bash32_syntax
+
+printf '\n=== docker_healthy ===\n'
+
+test_docker_healthy() {
+  local stub="$TMPROOT/stub" oldpath="$PATH" rc
+
+  make_docker_stub "$stub" healthy
+  PATH="$stub:$oldpath"
+  rc=0; docker_healthy || rc=$?
+  assert_eq "healthy daemon returns 0" "0" "$rc"
+
+  make_docker_stub "$stub" broken
+  rc=0; docker_healthy || rc=$?
+  assert_eq "broken daemon returns non-zero" "1" "$rc"
+
+  make_docker_stub "$stub" hang
+  HEALTH_TIMEOUT=1
+  rc=0; docker_healthy || rc=$?
+  assert_eq "hanging daemon returns 124" "124" "$rc"
+  # shellcheck disable=SC2034  # restores the value docker_healthy (sourced from docker-nuke) reads; the source=/dev/null directive above hides that cross-file read from this analysis
+  HEALTH_TIMEOUT=6
+
+  PATH="$oldpath"
+}
+test_docker_healthy
 
 printf '\n=== summary ===\n'
 teardown_tmp

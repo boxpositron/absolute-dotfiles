@@ -14,7 +14,6 @@ set -euo pipefail
 # hiding a genuinely dead variable added later. By the final task none of these
 # directives should remain.
 
-# shellcheck disable=SC2034
 HEALTH_TIMEOUT=6        # seconds to wait on `docker info` before calling it wedged
 # shellcheck disable=SC2034
 GRACEFUL_WAIT=8         # seconds to let Docker quit politely
@@ -131,6 +130,14 @@ docker_pids() {
     if [ "$pid" = "$parent" ]; then continue; fi
     printf '%s\n' "$pid"
   done
+}
+
+# Returns 0 if the daemon answers within HEALTH_TIMEOUT, else non-zero
+# (124 specifically means it hung rather than errored).
+docker_healthy() {
+  local rc=0
+  run_timeout "$HEALTH_TIMEOUT" docker info >/dev/null 2>&1 || rc=$?
+  return "$rc"
 }
 
 log()  { printf '%s\n' "$*"; }
