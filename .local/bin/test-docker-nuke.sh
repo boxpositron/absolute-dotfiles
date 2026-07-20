@@ -931,6 +931,33 @@ test_write_summary_survives() {
 }
 test_write_summary_survives
 
+printf '\n=== dry run ===\n'
+
+test_dry_run() {
+  local out rc before
+
+  # shellcheck disable=SC2012  # dump dir names are our own generated timestamps, never contain newlines; a plain count needs plain lines, not find -print0
+  before="$(ls -1 "$DUMP_ROOT" 2>/dev/null | wc -l | tr -d ' ')"
+  rc=0
+  out="$("$SCRIPT_DIR/docker-nuke" --dry-run 2>&1)" || rc=$?
+  assert_eq "dry run exits 0" "0" "$rc"
+  assert_contains "dry run says it changed nothing" "$out" "no changes made"
+  assert_contains "dry run lists processes it would kill" "$out" "would kill"
+  # shellcheck disable=SC2012  # dump dir names are our own generated timestamps, never contain newlines; a plain count needs plain lines, not find -print0
+  assert_eq "dry run writes no dump" "$before" \
+    "$(ls -1 "$DUMP_ROOT" 2>/dev/null | wc -l | tr -d ' ')"
+
+  rc=0
+  out="$("$SCRIPT_DIR/docker-nuke" --help 2>&1)" || rc=$?
+  assert_eq "--help exits 0" "0" "$rc"
+  assert_contains "--help prints usage" "$out" "Usage:"
+
+  rc=0
+  "$SCRIPT_DIR/docker-nuke" --nonsense >/dev/null 2>&1 || rc=$?
+  assert_eq "unknown flag exits 2" "2" "$rc"
+}
+test_dry_run
+
 printf '\n=== summary ===\n'
 teardown_tmp
 printf 'ran %d, failed %d\n' "$TESTS_RUN" "$TESTS_FAILED"

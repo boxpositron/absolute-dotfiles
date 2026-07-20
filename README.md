@@ -183,6 +183,7 @@ Custom scripts and binaries are stored in `.local/bin/`:
 - `cl`: Claude CLI wrapper
 - `claude-tmux`: Claude integration with tmux
 - `cldir`: Change directory with Claude context
+- `docker-nuke`: Force-restart a wedged Docker Desktop, capturing diagnostics to `~/.local/state/docker-nuke/` first (`--dry-run` to preview, `--no-restart` to leave it down, `--deep` for root helpers)
 
 Ensure this directory is in your PATH:
 

@@ -23,7 +23,6 @@ TERM_WAIT=5             # seconds to wait after SIGTERM before SIGKILL
 # entry snapshot never knew about, so this must be a real cap, never an
 # unbounded loop, or a respawning Docker could hang this tool forever.
 KILL_RETRY_ROUNDS=3
-# shellcheck disable=SC2034  # consumed by Task 8's main() when it calls wait_for_daemon "$RESTART_TIMEOUT"; not yet referenced by this task's code
 RESTART_TIMEOUT=90      # seconds to wait for the daemon to come back
 POLL_INTERVAL=2         # seconds between daemon health polls
 SAMPLE_DURATION=2       # seconds of stack sampling per process
@@ -577,7 +576,6 @@ parse_args() {
   OPT_DRY_RUN=0
   OPT_DEEP=0
   while [ "$#" -gt 0 ]; do
-    # shellcheck disable=SC2034  # OPT_FORCE, OPT_NO_RESTART, OPT_DRY_RUN are read by main once it is wired up. OPT_DEEP is already read by nuke_docker but stays under this same directive since it covers the whole case statement.
     case "$1" in
       -f|--force)      OPT_FORCE=1 ;;
       -n|--no-restart) OPT_NO_RESTART=1 ;;
@@ -597,13 +595,94 @@ parse_args() {
 
 # --- entrypoint -------------------------------------------------------------
 
+confirm_healthy_nuke() {
+  local info
+  info="$(run_timeout "$HEALTH_TIMEOUT" docker info \
+    --format '{{.ServerVersion}} ({{.ContainersRunning}} running)' 2>/dev/null || true)"
+  log "docker-nuke: Docker looks healthy: ${info:-unknown}"
+  log "Nuking will stop running containers."
+  printf 'Proceed anyway? [y/N] '
+  local reply=""
+  read -r reply || true
+  case "$reply" in
+    y|Y|yes|YES) return 0 ;;
+    *) log "docker-nuke: aborted"; return 2 ;;
+  esac
+}
+
+dry_run_report() {
+  local pids
+  pids="$(docker_pids | tr '\n' ' ')"
+  log "docker-nuke: DRY RUN — no changes made"
+  if [ -z "$pids" ]; then
+    log "  would kill: (no Docker processes found)"
+  else
+    log "  would kill: $pids"
+    # shellcheck disable=SC2086
+    ps -o pid,stat,%cpu,%mem,etime,comm -p $pids 2>/dev/null || true
+  fi
+  log "  would dump to: $DUMP_ROOT/<timestamp>"
+  if [ "$OPT_NO_RESTART" -eq 1 ]; then
+    log "  would not restart Docker (--no-restart)"
+  else
+    log "  would restart Docker and wait up to ${RESTART_TIMEOUT}s"
+  fi
+}
+
 main() {
   local rc=0
   parse_args "$@" || rc=$?
   if [ "$rc" -eq 3 ]; then return 0; fi
   if [ "$rc" -ne 0 ]; then return "$rc"; fi
-  log "docker-nuke: not yet implemented"
-  return 0
+
+  if [ "$OPT_DRY_RUN" -eq 1 ]; then
+    dry_run_report
+    return 0
+  fi
+
+  if docker_healthy && [ "$OPT_FORCE" -eq 0 ]; then
+    confirm_healthy_nuke || return 2
+  fi
+
+  local started elapsed verdict
+  started="$(date +%s)"
+
+  run_dump
+  nuke_docker || true
+
+  if [ "$OPT_NO_RESTART" -eq 1 ]; then
+    verdict="killed, not restarted (--no-restart)"
+    elapsed=$(( $(date +%s) - started ))
+    write_summary "$verdict" "$elapsed"
+    prune_dumps
+    log "docker-nuke: $verdict"
+    log "docker-nuke: diagnostics in $DUMP_DIR"
+    return 0
+  fi
+
+  start_docker
+  if wait_for_daemon "$RESTART_TIMEOUT"; then
+    verdict="recovered"
+    elapsed=$(( $(date +%s) - started ))
+    write_summary "$verdict" "$elapsed"
+    prune_dumps
+    local info
+    info="$(run_timeout "$HEALTH_TIMEOUT" docker info \
+      --format '{{.ServerVersion}} ({{.ContainersRunning}} running)' 2>/dev/null || true)"
+    log "docker-nuke: Docker is back after ${elapsed}s — ${info:-ok}"
+    log "docker-nuke: diagnostics in $DUMP_DIR"
+    return 0
+  fi
+
+  verdict="daemon did not return within ${RESTART_TIMEOUT}s"
+  elapsed=$(( $(date +%s) - started ))
+  write_summary "$verdict" "$elapsed"
+  prune_dumps
+  warn "docker-nuke: $verdict"
+  warn "docker-nuke: still running: $(docker_pids | tr '\n' ' ')"
+  warn "docker-nuke: diagnostics in $DUMP_DIR"
+  warn "docker-nuke: try 'docker-nuke --deep', or check disk space in $DUMP_DIR/disk.txt"
+  return 1
 }
 
 # Only run when executed, not when sourced by the test harness.
