@@ -413,8 +413,8 @@ nuke_docker() {
   fi
 
   # Narrow to the subset still alive from the entry snapshot before
-  # signalling (Fix 8): a pid that already exited during the graceful-quit
-  # wait must never be re-signalled, at this stage or the next.
+  # signalling SIGTERM (Fix 8): a pid that already exited during the
+  # graceful-quit wait must never be re-signalled.
   local snapshot_alive
   # shellcheck disable=SC2086  # $pids must word-split into separate PID arguments here
   snapshot_alive="$(pids_alive $pids)"
@@ -430,12 +430,18 @@ nuke_docker() {
     return 0
   fi
 
+  # SIGKILL targets the fresh scan just taken above, not a set re-derived
+  # from the stale SIGTERM-stage snapshot (final review fix): a process that
+  # first appeared after snapshot_alive was captured -- e.g. a helper
+  # respawned by com.docker.backend during the SIGTERM wait -- is present in
+  # $fresh but was never a member of snapshot_alive, so filtering through
+  # snapshot_alive here silently skipped it for this entire round. It would
+  # only be caught a round later via the bounded respawn retry below,
+  # emitting a spurious "still present after SIGKILL, retrying" warning for a
+  # process that this round never actually SIGKILLed in the first place.
   log "docker-nuke: sending SIGKILL"
-  local remaining
-  # shellcheck disable=SC2086  # $snapshot_alive must word-split into separate PID arguments here
-  remaining="$(pids_alive $snapshot_alive)"
-  # shellcheck disable=SC2086  # $remaining must word-split into separate PID arguments here
-  kill_pids KILL $remaining
+  # shellcheck disable=SC2086  # $fresh must word-split into separate PID arguments here
+  kill_pids KILL $fresh
   sleep 1
 
   if [ "${OPT_DEEP:-0}" -eq 1 ]; then
@@ -535,6 +541,7 @@ write_summary() {
       printf '* disk.txt    a full or near-full data volume is a common cause of a wedged daemon -- check free space on the volume backing Docker.raw (df -h) and clear it, or raise the disk image limit in Docker Desktop Settings, before relaunching\n'
       printf '* sample-*    user-space stacks showing where the daemon was stuck\n'
       printf '* logs/       Docker host and vm logs from just before the kill\n'
+      printf '* restart     docker-nuke restarts Docker Desktop itself, not your containers -- only containers started with a restart policy (e.g. unless-stopped) come back automatically; run docker ps -a to check the rest\n'
     } >"$DUMP_DIR/summary.txt"
   } 2>/dev/null || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -547,7 +554,7 @@ log()  { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 docker-nuke: force-restart a wedged Docker Desktop, capturing diagnostics first
 
 Usage:
@@ -557,15 +564,18 @@ Options:
   -f, --force        Skip the confirmation shown when Docker looks healthy
   -n, --no-restart   Kill Docker but do not relaunch it
       --dry-run      Report what would be killed and dumped; change nothing
-      --deep         Also stop root launchd helpers (com.docker.vmnetd); needs sudo
+      --deep         Also stop root launchd helpers (com.docker.vmnetd);
+                      requires a cached sudo credential -- run "sudo -v" first
   -h, --help         Show this help
 
-Diagnostics are written to ~/.local/state/docker-nuke/<timestamp>/ before
-anything is killed. The most recent 10 dumps are kept.
+Diagnostics are written to $DUMP_ROOT/<timestamp>/ before anything is
+killed (override the root with DOCKER_NUKE_DUMP_ROOT). The most recent
+$DUMP_RETENTION dumps are kept.
 
 Exit codes:
   0  Docker killed and confirmed responsive again
-  1  Daemon did not come back within the restart timeout
+  1  Daemon did not come back within the restart timeout, or the kill itself
+     did not complete
   2  Usage error, or aborted at the healthy-daemon prompt
 EOF
 }
@@ -595,10 +605,20 @@ parse_args() {
 
 # --- entrypoint -------------------------------------------------------------
 
+
+# docker_version_summary — one-line "<version> (<N> running)" snapshot, or
+# empty if `docker info` fails or hangs. Shared by confirm_healthy_nuke's
+# healthy-daemon prompt and main's post-recovery report (final review fix:
+# previously the same `docker info --format ...` call was duplicated verbatim
+# in both places).
+docker_version_summary() {
+  run_timeout "$HEALTH_TIMEOUT" docker info \
+    --format '{{.ServerVersion}} ({{.ContainersRunning}} running)' 2>/dev/null || true
+}
+
 confirm_healthy_nuke() {
   local info
-  info="$(run_timeout "$HEALTH_TIMEOUT" docker info \
-    --format '{{.ServerVersion}} ({{.ContainersRunning}} running)' 2>/dev/null || true)"
+  info="$(docker_version_summary)"
   log "docker-nuke: Docker looks healthy: ${info:-unknown}"
   log "Nuking will stop running containers."
   printf 'Proceed anyway? [y/N] '
@@ -606,7 +626,18 @@ confirm_healthy_nuke() {
   read -r reply || true
   case "$reply" in
     y|Y|yes|YES) return 0 ;;
-    *) log "docker-nuke: aborted"; return 2 ;;
+    *)
+      # A non-TTY stdin (piped, redirected from /dev/null, closed) can never
+      # answer this prompt interactively even on a re-run, so the default
+      # deny should point at the actual way past it (final review fix): a
+      # bare "aborted" here previously gave no hint that --force exists.
+      if [ -t 0 ]; then
+        log "docker-nuke: aborted"
+      else
+        log "docker-nuke: aborted (no interactive input on stdin; use --force to skip this prompt)"
+      fi
+      return 2
+      ;;
   esac
 }
 
@@ -621,12 +652,54 @@ dry_run_report() {
     # shellcheck disable=SC2086
     ps -o pid,stat,%cpu,%mem,etime,comm -p $pids 2>/dev/null || true
   fi
+  if [ "$OPT_DEEP" -eq 1 ]; then
+    log "  would also stop privileged helpers (--deep): com.docker.vmnetd, com.docker.socket"
+  fi
   log "  would dump to: $DUMP_ROOT/<timestamp>"
   if [ "$OPT_NO_RESTART" -eq 1 ]; then
     log "  would not restart Docker (--no-restart)"
   else
     log "  would restart Docker and wait up to ${RESTART_TIMEOUT}s"
   fi
+  if [ "$OPT_FORCE" -eq 0 ] && docker_healthy; then
+    log "  NOTE: Docker currently looks healthy; a real run would prompt for confirmation unless --force is given"
+  fi
+}
+
+# finish VERDICT RC ELAPSED [EXTRA_LINE ...] — shared tail for every terminal
+# path in main() (final review fix). Writes the summary, prunes old dumps,
+# then logs the verdict, any path-specific EXTRA_LINEs, and finally the dump
+# location -- guarding the case where run_dump itself failed and DUMP_DIR is
+# empty (Fix C1), so the tool can never print "diagnostics in " with nothing
+# after it. Success (RC 0) logs via log(); any other RC logs every line via
+# warn() instead, so a failed kill (Fix C2) can never look identical to a
+# clean run in the terminal output. Collapsing the three near-identical
+# terminal blocks that used to live in main() into this one helper makes it
+# structurally impossible for a future fourth path to forget to thread the
+# kill status into the verdict/exit code, or to forget the empty-DUMP_DIR
+# guard.
+finish() {
+  local verdict="$1" rc="$2" elapsed="$3"
+  shift 3
+
+  write_summary "$verdict" "$elapsed"
+  prune_dumps
+
+  local logfn=log
+  if [ "$rc" -ne 0 ]; then logfn=warn; fi
+
+  "$logfn" "docker-nuke: $verdict"
+  local line
+  for line in "$@"; do
+    "$logfn" "$line"
+  done
+  if [ -n "${DUMP_DIR:-}" ]; then
+    "$logfn" "docker-nuke: diagnostics in $DUMP_DIR"
+  else
+    "$logfn" "docker-nuke: diagnostics were not captured this run"
+  fi
+
+  return "$rc"
 }
 
 main() {
@@ -640,48 +713,87 @@ main() {
     return 0
   fi
 
-  if docker_healthy && [ "$OPT_FORCE" -eq 0 ]; then
+  # Fix I2: checked up front, before anything is killed, so the user can fix
+  # a missing cached credential while Docker is still alive. Never fatal --
+  # stop_privileged_helpers already degrades gracefully (Fix 3) if this was
+  # ignored; this just surfaces the problem while it is still actionable
+  # instead of two silent `sudo -n` failures after the kill.
+  if [ "$OPT_DEEP" -eq 1 ] && ! sudo -n true 2>/dev/null; then
+    warn "docker-nuke: --deep requires a cached sudo credential; run \"sudo -v\" first. Continuing without it -- privileged helpers will not be stopped."
+  fi
+
+  # OPT_FORCE checked first (final review fix): docker_healthy can cost up to
+  # HEALTH_TIMEOUT (6s) before answering, and --force is exactly the flag
+  # reached for when Docker is already known to be wedged -- paying that
+  # latency to compute an answer that is about to be skipped anyway serves no
+  # purpose.
+  if [ "$OPT_FORCE" -eq 0 ] && docker_healthy; then
     confirm_healthy_nuke || return 2
   fi
 
-  local started elapsed verdict
+  local started elapsed
   started="$(date +%s)"
 
-  run_dump
-  nuke_docker || true
+  # Fix C1: run_dump is never called bare. It returns 1 when new_dump_dir
+  # fails (e.g. dump root unwritable or full) -- precisely the condition it
+  # exists to detect -- and under set -e a bare call would abort the entire
+  # script right here: Docker is never killed, never restarted. The design
+  # requirement is explicit: the dump can never block recovery. A failure is
+  # recorded and recovery proceeds with no dump saved, exactly like every
+  # individual capture failure inside run_dump already does.
+  local dumped=1
+  run_dump || { dumped=0; warn "docker-nuke: diagnostics capture failed; continuing with recovery (no dump will be saved)"; }
+  local dump_note=""
+  if [ "$dumped" -eq 0 ]; then
+    dump_note=" (no dump captured)"
+  fi
+
+  # Fix C2: nuke_docker's return status -- 1 only after KILL_RETRY_ROUNDS is
+  # exhausted with Docker processes still alive -- was previously discarded
+  # with `|| true` and never consulted again. It is captured here and
+  # threaded into every terminal path's verdict (so it lands in summary.txt,
+  # the file actually read during triage) and exit code, so a failed kill can
+  # never be reported as success.
+  local killed=1 kill_note=""
+  nuke_docker || killed=0
+  if [ "$killed" -eq 0 ]; then
+    local survivors
+    survivors="$(docker_pids | tr '\n' ' ')"
+    kill_note=" -- WARNING: kill incomplete, processes survived: ${survivors:-unknown}"
+  fi
 
   if [ "$OPT_NO_RESTART" -eq 1 ]; then
-    verdict="killed, not restarted (--no-restart)"
+    local verdict="killed, not restarted (--no-restart)${dump_note}${kill_note}"
+    local finish_rc=0
+    if [ "$killed" -eq 0 ]; then finish_rc=1; fi
     elapsed=$(( $(date +%s) - started ))
-    write_summary "$verdict" "$elapsed"
-    prune_dumps
-    log "docker-nuke: $verdict"
-    log "docker-nuke: diagnostics in $DUMP_DIR"
-    return 0
+    finish "$verdict" "$finish_rc" "$elapsed"
+    return "$finish_rc"
   fi
 
   start_docker
   if wait_for_daemon "$RESTART_TIMEOUT"; then
-    verdict="recovered"
     elapsed=$(( $(date +%s) - started ))
-    write_summary "$verdict" "$elapsed"
-    prune_dumps
     local info
-    info="$(run_timeout "$HEALTH_TIMEOUT" docker info \
-      --format '{{.ServerVersion}} ({{.ContainersRunning}} running)' 2>/dev/null || true)"
-    log "docker-nuke: Docker is back after ${elapsed}s — ${info:-ok}"
-    log "docker-nuke: diagnostics in $DUMP_DIR"
-    return 0
+    info="$(docker_version_summary)"
+    local verdict="recovered after ${elapsed}s — ${info:-ok}${dump_note}${kill_note}"
+    local finish_rc=0
+    if [ "$killed" -eq 0 ]; then finish_rc=1; fi
+    finish "$verdict" "$finish_rc" "$elapsed"
+    return "$finish_rc"
   fi
 
-  verdict="daemon did not return within ${RESTART_TIMEOUT}s"
+  local verdict="daemon did not return within ${RESTART_TIMEOUT}s${dump_note}${kill_note}"
   elapsed=$(( $(date +%s) - started ))
-  write_summary "$verdict" "$elapsed"
-  prune_dumps
-  warn "docker-nuke: $verdict"
-  warn "docker-nuke: still running: $(docker_pids | tr '\n' ' ')"
-  warn "docker-nuke: diagnostics in $DUMP_DIR"
-  warn "docker-nuke: try 'docker-nuke --deep', or check disk space in $DUMP_DIR/disk.txt"
+  local still_running
+  still_running="docker-nuke: still running: $(docker_pids | tr '\n' ' ')"
+  local deep_hint
+  if [ -n "${DUMP_DIR:-}" ]; then
+    deep_hint="docker-nuke: try 'docker-nuke --deep', or check disk space in $DUMP_DIR/disk.txt"
+  else
+    deep_hint="docker-nuke: try 'docker-nuke --deep'; no dump was captured this run to check disk space in"
+  fi
+  finish "$verdict" 1 "$elapsed" "$still_running" "$deep_hint"
   return 1
 }
 

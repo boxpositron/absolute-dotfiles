@@ -348,6 +348,12 @@ printf '\n=== dump ===\n'
 
 test_dump() {
   local d rc
+  # DUMP_DIR and CAPTURE_FAILURES are mutated below with no restore below
+  # this point in the original code -- the identical leak Task 7 already
+  # fixed one block below in test_restart_and_summary (Fix I3, final
+  # review). The stale path then propagates through every later block in
+  # this file. Save/restore the same way test_restart_and_summary does.
+  local old_dump_dir="$DUMP_DIR" old_capture_failures="$CAPTURE_FAILURES"
 
   d="$(new_dump_dir)"
   assert_eq "dump dir is created" "yes" "$([ -d "$d" ] && printf 'yes' || printf 'no')"
@@ -400,6 +406,9 @@ test_dump() {
     "$([ -d "$DUMP_ROOT/20260101T000000Z" ] && printf 'yes' || printf 'no')"
   assert_eq "keeps the newest" "yes" \
     "$([ -d "$DUMP_ROOT/20260112T000000Z" ] && printf 'yes' || printf 'no')"
+
+  DUMP_DIR="$old_dump_dir"
+  CAPTURE_FAILURES="$old_capture_failures"
 }
 test_dump
 
@@ -562,6 +571,28 @@ test_sudo_noninteractive() {
   assert_not_contains "stop_privileged_helpers never calls a plain sudo" "$src" $'\nsudo launchctl'
 }
 test_sudo_noninteractive
+
+printf '\n=== --deep help text and upfront credential check (Fix I2) ===\n'
+
+test_deep_upfront_check() {
+  # Task 6 correctly moved stop_privileged_helpers to `sudo -n` so a missing
+  # credential fails fast instead of hanging on a hidden prompt after Docker
+  # is already dead (Fix 3, above). But until this fix, usage() still claimed
+  # "needs sudo" (never prompts) and main() never checked for a cached
+  # credential until AFTER the kill, when it is too late for the user to do
+  # anything about it. This is a static regression guard: usage() text must
+  # be corrected, and main() must check `sudo -n true` before anything is
+  # killed.
+  local help_text src
+  help_text="$(usage)"
+  assert_not_contains "usage no longer claims --deep just needs sudo" "$help_text" "needs sudo"
+  assert_contains "usage explains --deep requires a cached credential" "$help_text" "cached sudo credential"
+  assert_contains "usage tells the user how to cache it" "$help_text" "sudo -v"
+
+  src="$(cat "$SCRIPT_DIR/docker-nuke")"
+  assert_contains "main checks sudo -n true up front" "$src" "sudo -n true"
+}
+test_deep_upfront_check
 
 printf '\n=== nuke_docker escalation orchestration (Fix 6) ===\n'
 
@@ -957,6 +988,266 @@ test_dry_run() {
   assert_eq "unknown flag exits 2" "2" "$rc"
 }
 test_dry_run
+
+printf '\n=== main() integration (Fix I1) ===\n'
+
+# Before this block, the only entrypoint coverage was --dry-run / --help /
+# --bogus (test_dry_run above), all of which return before run_dump is ever
+# called -- so main()'s own composition of run_dump, nuke_docker,
+# start_docker, and wait_for_daemon had zero automated coverage. That is
+# exactly why the C1 (bare `run_dump` under set -e aborting recovery) and C2
+# (a failed nuke_docker silently reported as success) review findings were
+# never caught by any earlier per-task test.
+#
+# Every case below shadows run_dump/nuke_docker/start_docker/wait_for_daemon/
+# docker_healthy (never the real Docker) per the standing safety rule for
+# this file, plus docker_pids for deterministic survivor lists. Each
+# subshell explicitly re-enables `set -euo pipefail` to reproduce the real
+# script's own top-of-file directive -- the harness's `set +e` (line 5) would
+# otherwise mask the exact class of bug C1 fixes (a bare failing command
+# aborting the caller under set -e). stdin is always either piped or
+# redirected from /dev/null so a wrong turn in the code under test can never
+# block on a real terminal prompt.
+
+printf '\n--- healthy daemon, declines the prompt ---\n'
+
+test_main_healthy_decline() {
+  local out rc=0
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { printf 'RUN_DUMP_CALLED\n'; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { printf 'NUKE_DOCKER_CALLED\n'; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { printf 'START_DOCKER_CALLED\n'; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 0; }
+    printf 'n\n' | main 2>&1
+  )"
+  # Deliberately NOT `)" || rc=$?` (final review fix): per the bash manual,
+  # "If a compound command or shell function executes in a context where -e
+  # is being ignored, none of the commands executed within [it] will be
+  # affected by the -e setting, even if -e is set" -- and a command
+  # substitution used as the left operand of `||` is exactly such a context.
+  # Attaching `|| rc=$?` directly to this assignment would silently defeat
+  # the `set -euo pipefail` above for the ENTIRE subshell, no matter how
+  # explicitly it is set inside. Capturing $? on its own line next avoids
+  # that trap; see test_nuke_docker above for the same established pattern.
+  rc=$?
+  assert_eq "healthy+decline: rc 2" "2" "$rc"
+  assert_not_contains "healthy+decline: run_dump never called" "$out" "RUN_DUMP_CALLED"
+  assert_not_contains "healthy+decline: nuke_docker never called" "$out" "NUKE_DOCKER_CALLED"
+  assert_not_contains "healthy+decline: start_docker never called" "$out" "START_DOCKER_CALLED"
+}
+test_main_healthy_decline
+
+printf '\n--- healthy daemon with --force: proceeds without prompting ---\n'
+
+test_main_healthy_force() {
+  local out rc=0 dump_dir="$TMPROOT/main-force-dump"
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { DUMP_DIR="$dump_dir"; mkdir -p "$DUMP_DIR"; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { :; }
+    main --force </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
+  assert_eq "healthy+force: rc 0" "0" "$rc"
+  assert_not_contains "healthy+force: does not print the confirmation prompt" "$out" "Proceed anyway"
+}
+test_main_healthy_force
+
+printf '\n--- wedged daemon: proceeds with no prompt ---\n'
+
+test_main_wedged_no_prompt() {
+  local out rc=0 dump_dir="$TMPROOT/main-wedged-dump"
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { DUMP_DIR="$dump_dir"; mkdir -p "$DUMP_DIR"; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { :; }
+    main </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
+  assert_eq "wedged: rc 0" "0" "$rc"
+  assert_not_contains "wedged: does not print the confirmation prompt" "$out" "Proceed anyway"
+}
+test_main_wedged_no_prompt
+
+printf '\n--- C1: run_dump failure never aborts recovery ---\n'
+
+test_main_c1_dump_failure_does_not_abort() {
+  # THE headline regression test for Fix C1. Under the pre-fix code, `run_dump`
+  # was called bare on its own line under set -euo pipefail; run_dump returns
+  # 1 when new_dump_dir fails (dump root unwritable or full), and a bare
+  # failing command aborts the whole script right there via set -e -- Docker
+  # is never killed, never restarted. Proving this requires `set -e` to
+  # genuinely be active in this subshell (see the block-level comment above),
+  # not just the harness's relaxed `set +e`.
+  local out rc=0
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { printf 'NUKE_DOCKER_CALLED\n'; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { printf 'START_DOCKER_CALLED\n'; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { :; }
+    main </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above; this
+         # one matters most of all, since it is what proves C1
+  assert_eq "C1: main still completes (rc 0) after a dump failure" "0" "$rc"
+  assert_contains "C1: nuke_docker is still called after a dump failure" "$out" "NUKE_DOCKER_CALLED"
+  assert_contains "C1: start_docker is still called after a dump failure" "$out" "START_DOCKER_CALLED"
+  assert_contains "C1: warns that diagnostics capture failed" "$out" "diagnostics capture failed"
+}
+test_main_c1_dump_failure_does_not_abort
+
+printf '\n--- C2: a failed kill is never reported as success ---\n'
+
+test_main_c2_failed_kill_no_restart() {
+  # THE headline regression test for Fix C2, --no-restart path. nuke_docker
+  # returns 1 only after KILL_RETRY_ROUNDS is exhausted with Docker processes
+  # still alive. Under the pre-fix code this was discarded with `|| true` and
+  # never consulted again: --no-restart's verdict said "killed, not
+  # restarted" and returned 0 even though nothing was actually killed.
+  local out rc=0 dump_dir="$TMPROOT/main-c2-norestart-dump"
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { DUMP_DIR="$dump_dir"; mkdir -p "$DUMP_DIR"; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { printf 'START_DOCKER_CALLED\n'; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { printf '%s\n' 777777; }
+    main --no-restart </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
+  assert_eq "C2 --no-restart: exit code is non-zero when the kill fails" "1" "$rc"
+  assert_not_contains "C2 --no-restart: start_docker is never called" "$out" "START_DOCKER_CALLED"
+  assert_contains "C2 --no-restart: the survivor pid reaches the log" "$out" "777777"
+  assert_contains "C2 --no-restart: summary.txt records the failed kill" \
+    "$(cat "$dump_dir/summary.txt" 2>/dev/null)" "777777"
+}
+test_main_c2_failed_kill_no_restart
+
+test_main_c2_failed_kill_restart() {
+  # C2's restart-path counterpart: even when wait_for_daemon subsequently
+  # reports the daemon healthy again (a genuinely possible outcome -- a fresh
+  # instance can start responding while old zombies from the failed kill
+  # still linger), a kill that did not complete must still surface as a
+  # failure, not get overwritten by the later "recovered" success.
+  local out rc=0 dump_dir="$TMPROOT/main-c2-restart-dump"
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { DUMP_DIR="$dump_dir"; mkdir -p "$DUMP_DIR"; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { printf '%s\n' 888888; }
+    main </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
+  assert_eq "C2 restart path: exit code is non-zero despite the daemon coming back" "1" "$rc"
+  assert_contains "C2 restart path: the survivor pid reaches the log" "$out" "888888"
+  assert_contains "C2 restart path: summary.txt records the failed kill" \
+    "$(cat "$dump_dir/summary.txt" 2>/dev/null)" "888888"
+}
+test_main_c2_failed_kill_restart
+
+printf '\n--- --no-restart: start_docker never called (success path) ---\n'
+
+test_main_no_restart_success() {
+  local out rc=0 dump_dir="$TMPROOT/main-norestart-ok-dump"
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { DUMP_DIR="$dump_dir"; mkdir -p "$DUMP_DIR"; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { printf 'START_DOCKER_CALLED\n'; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { :; }
+    main --no-restart </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
+  assert_eq "no-restart success: rc 0" "0" "$rc"
+  assert_not_contains "no-restart success: start_docker never called" "$out" "START_DOCKER_CALLED"
+}
+test_main_no_restart_success
+
+printf '\n--- daemon never returns: rc 1 ---\n'
+
+test_main_daemon_never_returns() {
+  local out rc=0 dump_dir="$TMPROOT/main-timeout-dump"
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { DUMP_DIR="$dump_dir"; mkdir -p "$DUMP_DIR"; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { :; }
+    main </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
+  assert_eq "daemon never returns: rc 1" "1" "$rc"
+  assert_contains "daemon never returns: warns it did not return" "$out" "did not return"
+}
+test_main_daemon_never_returns
 
 printf '\n=== summary ===\n'
 teardown_tmp
