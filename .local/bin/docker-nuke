@@ -785,15 +785,32 @@ main() {
 
   local verdict="daemon did not return within ${RESTART_TIMEOUT}s${dump_note}${kill_note}"
   elapsed=$(( $(date +%s) - started ))
-  local still_running
-  still_running="docker-nuke: still running: $(docker_pids | tr '\n' ' ')"
-  local deep_hint
+
+  # The advice depends on WHY the daemon is absent, and the tell is whether any
+  # Docker process survived the relaunch. No survivors means Docker Desktop was
+  # started but did not stay up -- an app crashing on startup, which no
+  # programmatic relaunch can work around. Survivors mean it is up but the
+  # daemon is not answering yet: still starting, or wedged.
+  local survivors dump_hint
+  survivors="$(docker_pids | tr '\n' ' ')"
   if [ -n "${DUMP_DIR:-}" ]; then
-    deep_hint="docker-nuke: try 'docker-nuke --deep', or check disk space in $DUMP_DIR/disk.txt"
+    dump_hint="docker-nuke: see $DUMP_DIR/summary.txt for triage, and disk.txt for free space"
   else
-    deep_hint="docker-nuke: try 'docker-nuke --deep'; no dump was captured this run to check disk space in"
+    dump_hint="docker-nuke: no dump was captured this run"
   fi
-  finish "$verdict" 1 "$elapsed" "$still_running" "$deep_hint"
+
+  if [ -z "$survivors" ]; then
+    finish "$verdict" 1 "$elapsed" \
+      "docker-nuke: no Docker processes are running -- Docker Desktop was relaunched but did not stay up" \
+      "docker-nuke: launch Docker Desktop from the Dock or Spotlight; a programmatic relaunch cannot recover an app that crashes on startup" \
+      "docker-nuke: if it keeps crashing, check Console.app for com.docker.backend, then update or reinstall Docker Desktop" \
+      "$dump_hint"
+  else
+    finish "$verdict" 1 "$elapsed" \
+      "docker-nuke: still running: $survivors" \
+      "docker-nuke: Docker is up but the daemon is not answering -- it may still be starting; retry, or use 'docker-nuke --deep' to also stop root helpers" \
+      "$dump_hint"
+  fi
   return 1
 }
 

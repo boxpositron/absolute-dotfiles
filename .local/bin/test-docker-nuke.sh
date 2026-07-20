@@ -1246,8 +1246,43 @@ test_main_daemon_never_returns() {
   rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
   assert_eq "daemon never returns: rc 1" "1" "$rc"
   assert_contains "daemon never returns: warns it did not return" "$out" "did not return"
+
+  # No surviving Docker processes means the app was relaunched but did not stay
+  # up, so the advice must point at a manual Dock launch -- NOT at --deep or at
+  # disk space, which is what a real run got wrong in the field.
+  assert_contains "no survivors: says Docker did not stay up" "$out" "did not stay up"
+  assert_contains "no survivors: advises launching from the Dock" "$out" "Dock or Spotlight"
+  assert_not_contains "no survivors: does NOT suggest --deep" "$out" "--deep"
 }
 test_main_daemon_never_returns
+
+test_main_daemon_never_returns_with_survivors() {
+  local rc out dump_dir="$TMPROOT/main-survivors"
+
+  out="$(
+    set -euo pipefail
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_healthy name lookup
+    docker_healthy() { return 1; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via run_dump name lookup
+    run_dump() { DUMP_DIR="$dump_dir"; mkdir -p "$DUMP_DIR"; return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via nuke_docker name lookup
+    nuke_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via start_docker name lookup
+    start_docker() { return 0; }
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via wait_for_daemon name lookup
+    wait_for_daemon() { return 1; }
+    # Docker processes ARE alive: it is up but not answering, a different case.
+    # shellcheck disable=SC2329  # invoked indirectly by main (sourced from docker-nuke) via docker_pids name lookup
+    docker_pids() { printf '4242\n'; }
+    main </dev/null 2>&1
+  )"
+  rc=$?  # not `|| rc=$?` -- see the note on the first main() test above
+  assert_eq "survivors: rc 1" "1" "$rc"
+  assert_contains "survivors: reports the surviving pid" "$out" "4242"
+  assert_contains "survivors: suggests --deep for this case" "$out" "--deep"
+  assert_not_contains "survivors: does NOT advise a Dock launch" "$out" "Dock or Spotlight"
+}
+test_main_daemon_never_returns_with_survivors
 
 printf '\n=== summary ===\n'
 teardown_tmp
