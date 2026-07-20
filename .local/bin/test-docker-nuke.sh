@@ -785,6 +785,152 @@ test_nuke_docker() {
 }
 test_nuke_docker
 
+printf '\n=== restart and summary ===\n'
+
+test_restart_and_summary() {
+  local stub="$TMPROOT/stub2" oldpath="$PATH" rc
+  # DUMP_DIR and CAPTURE_FAILURES are mutated below like PATH is above.
+  # Restore all three on the way out (Fix 4, review round 1): this is the
+  # last test block in the file today, so nothing currently leaks, but
+  # Task 8 appends its own block immediately after this one and would
+  # silently inherit whatever non-empty DUMP_DIR/CAPTURE_FAILURES this test
+  # left behind if they were not restored, exactly like PATH and
+  # HEALTH_TIMEOUT already are elsewhere in this file.
+  local old_dump_dir="$DUMP_DIR" old_capture_failures="$CAPTURE_FAILURES"
+
+  make_docker_stub "$stub" healthy
+  PATH="$stub:$oldpath"
+  rc=0; wait_for_daemon 6 || rc=$?
+  assert_eq "wait_for_daemon returns 0 when healthy" "0" "$rc"
+
+  make_docker_stub "$stub" broken
+  rc=0; wait_for_daemon 4 || rc=$?
+  assert_eq "wait_for_daemon returns 1 when never healthy" "1" "$rc"
+  PATH="$oldpath"
+
+  DUMP_DIR="$(new_dump_dir)"
+  CAPTURE_FAILURES=" slow.txt"
+  write_summary "recovered" "42"
+  local s
+  s="$(cat "$DUMP_DIR/summary.txt")"
+  assert_contains "summary records the verdict" "$s" "recovered"
+  assert_contains "summary records elapsed time" "$s" "42"
+  assert_contains "summary records capture failures" "$s" "slow.txt"
+  assert_not_contains "capture failures line has no double space (Fix 5)" "$s" "failures:  "
+
+  DUMP_DIR="$old_dump_dir"
+  CAPTURE_FAILURES="$old_capture_failures"
+}
+test_restart_and_summary
+
+printf '\n=== wait_for_daemon wall-clock deadline (Fix 2) ===\n'
+
+test_wait_for_daemon_deadline() {
+  # Regression coverage for the headline wait_for_daemon fix: the old loop
+  # counted only sleeps, never docker_healthy's own cost, so against a
+  # daemon that never answers it silently overshoots the requested timeout
+  # by roughly (HEALTH_TIMEOUT / POLL_INTERVAL)x. HEALTH_TIMEOUT and
+  # POLL_INTERVAL are scaled down here (2s / 1s instead of the real 6s / 2s)
+  # purely so this test stays fast; the ratio between them -- the thing that
+  # actually exposes the bug -- is preserved.
+  local stub="$TMPROOT/stub3" oldpath="$PATH" rc start elapsed
+  local old_health="$HEALTH_TIMEOUT" old_poll="$POLL_INTERVAL"
+
+  make_docker_stub "$stub" hang
+  PATH="$stub:$oldpath"
+  HEALTH_TIMEOUT=2
+  POLL_INTERVAL=1
+
+  start="$(date +%s)"
+  rc=0; wait_for_daemon 4 || rc=$?
+  elapsed=$(( $(date +%s) - start ))
+
+  assert_eq "wait_for_daemon returns 1 against a hung daemon" "1" "$rc"
+  # Requested 4s. New deadline-based code bounds the overshoot to at most one
+  # in-flight docker_healthy call (~2s here), landing around 6s. The old
+  # counting-sleeps code discounted every docker_healthy call and would land
+  # around 12s for these constants (see the manual revert-and-measure proof
+  # run alongside this fix). 8s cleanly separates "new" from "old" while
+  # leaving headroom for process-spawn/date-granularity jitter.
+  if [ "$elapsed" -le 8 ]; then
+    pass "wait_for_daemon honors the wall-clock deadline against a hung daemon (elapsed=${elapsed}s, requested=4s)"
+  else
+    fail "wait_for_daemon honors the wall-clock deadline against a hung daemon" \
+      "elapsed=${elapsed}s, requested=4s, expected <=8s"
+  fi
+
+  HEALTH_TIMEOUT="$old_health"
+  POLL_INTERVAL="$old_poll"
+  PATH="$oldpath"
+}
+test_wait_for_daemon_deadline
+
+printf '\n=== write_summary survives an unwritable DUMP_DIR (Fix 1) ===\n'
+
+test_write_summary_survives() {
+  # write_summary was previously only ever called with a fresh, valid,
+  # writable DUMP_DIR (see test_restart_and_summary above), so the
+  # "unset/missing -> no-op" branch -- the entire reason the guard at the
+  # top of write_summary exists -- was never exercised, and the write
+  # itself (the actual Fix 1 bug: an existing-but-now-unwritable-or-full
+  # DUMP_DIR) had zero coverage at all. Each case below runs write_summary
+  # in a subshell so a mutated DUMP_DIR/CAPTURE_FAILURES never escapes into
+  # the rest of the suite.
+  local rc out
+
+  rc=0
+  out="$(
+    unset DUMP_DIR CAPTURE_FAILURES
+    set -u
+    write_summary "recovered" "1"
+    printf 'survived\n'
+  )" || rc=$?
+  assert_eq "write_summary no-ops when DUMP_DIR is unset (under set -u)" "0" "$rc"
+  assert_contains "caller survives write_summary with DUMP_DIR unset" "$out" "survived"
+
+  rc=0
+  out="$(
+    DUMP_DIR=""
+    write_summary "recovered" "1"
+    printf 'survived\n'
+  )" || rc=$?
+  assert_eq "write_summary no-ops when DUMP_DIR is empty" "0" "$rc"
+  assert_contains "caller survives write_summary with DUMP_DIR empty" "$out" "survived"
+
+  rc=0
+  out="$(
+    DUMP_DIR="$TMPROOT/write-summary-does-not-exist"
+    write_summary "recovered" "1"
+    printf 'survived\n'
+  )" || rc=$?
+  assert_eq "write_summary no-ops when DUMP_DIR does not exist" "0" "$rc"
+  assert_contains "caller survives write_summary with DUMP_DIR missing" "$out" "survived"
+
+  # The actual Fix 1 bug: DUMP_DIR is a real, valid, existing directory (the
+  # guard's "unset or not a directory" check passes it straight through) but
+  # is unwritable -- isomorphic to the disk filling between new_dump_dir
+  # succeeding and write_summary running. set -e is turned on explicitly
+  # inside the subshell so this reproduces the real script's own
+  # set -euo pipefail context, not just the harness's relaxed `set +e`.
+  local ro_dir="$TMPROOT/write-summary-ro"
+  mkdir -p "$ro_dir"
+  chmod 555 "$ro_dir"
+  rc=0
+  out="$(
+    set -e
+    DUMP_DIR="$ro_dir"
+    CAPTURE_FAILURES=""
+    write_summary "recovered" "1"
+    printf 'survived\n'
+  )" || rc=$?
+  chmod 755 "$ro_dir"
+  assert_eq "write_summary returns 0 on an unwritable DUMP_DIR" "0" "$rc"
+  assert_contains "caller survives write_summary on an unwritable DUMP_DIR (Fix 1)" "$out" "survived"
+  assert_eq "unwritable DUMP_DIR: no summary.txt was created" "no" \
+    "$([ -f "$ro_dir/summary.txt" ] && printf 'yes' || printf 'no')"
+}
+test_write_summary_survives
+
 printf '\n=== summary ===\n'
 teardown_tmp
 printf 'ran %d, failed %d\n' "$TESTS_RUN" "$TESTS_FAILED"

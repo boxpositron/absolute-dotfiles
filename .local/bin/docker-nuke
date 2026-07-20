@@ -23,9 +23,8 @@ TERM_WAIT=5             # seconds to wait after SIGTERM before SIGKILL
 # entry snapshot never knew about, so this must be a real cap, never an
 # unbounded loop, or a respawning Docker could hang this tool forever.
 KILL_RETRY_ROUNDS=3
-# shellcheck disable=SC2034
+# shellcheck disable=SC2034  # consumed by Task 8's main() when it calls wait_for_daemon "$RESTART_TIMEOUT"; not yet referenced by this task's code
 RESTART_TIMEOUT=90      # seconds to wait for the daemon to come back
-# shellcheck disable=SC2034
 POLL_INTERVAL=2         # seconds between daemon health polls
 SAMPLE_DURATION=2       # seconds of stack sampling per process
 SAMPLE_TIMEOUT=10       # hard cap on a single `sample` invocation
@@ -467,6 +466,81 @@ nuke_docker() {
     return 1
   fi
   log "docker-nuke: all Docker processes terminated"
+  return 0
+}
+
+start_docker() {
+  log "docker-nuke: relaunching Docker Desktop"
+  open -a Docker >/dev/null 2>&1 || open "$DOCKER_APP" >/dev/null 2>&1 || true
+}
+
+# Returns 0 once the daemon answers, 1 if SECONDS elapses first.
+#
+# The deadline is wall-clock, not a count of sleeps (Fix 2, review round 1).
+# docker_healthy can itself cost up to HEALTH_TIMEOUT per call (it runs
+# run_timeout "$HEALTH_TIMEOUT" docker info internally), but the old version
+# of this loop only ever accumulated POLL_INTERVAL in `waited`, silently
+# discounting docker_healthy's own cost every single iteration. Against a
+# genuinely wedged daemon that undercount compounds per iteration: with real
+# constants (HEALTH_TIMEOUT=6, POLL_INTERVAL=2) an 8s request measured 32s
+# wall clock (4x), and the RESTART_TIMEOUT=90 caller could overshoot to
+# roughly 6 minutes. Capturing a start time and checking `now - start`
+# before each docker_healthy call instead bounds the overshoot to at most
+# one in-flight docker_healthy call, never a per-iteration multiplier.
+wait_for_daemon() {
+  local secs="$1"
+  local start now
+  start="$(date +%s)"
+  while :; do
+    now="$(date +%s)"
+    if [ "$((now - start))" -ge "$secs" ]; then
+      return 1
+    fi
+    if docker_healthy; then
+      return 0
+    fi
+    sleep "$POLL_INTERVAL"
+  done
+}
+
+# write_summary VERDICT ELAPSED — record the triage payload the user reads
+# after recovery. Must never abort the caller, on ANY path (Fix 1, review
+# round 1): a no-op when DUMP_DIR is unset, empty, or not a directory (e.g.
+# after new_dump_dir failed on a full disk) -- and the write itself is
+# guarded too, since the disk can fill AFTER new_dump_dir already created a
+# valid DUMP_DIR but BEFORE this function runs; an unwritable or full
+# DUMP_DIR at write time is exactly the scenario this tool exists to
+# survive. The redirection is nested inside an outer group so the outer
+# group's own 2>/dev/null is already in effect before the inner redirection
+# is attempted -- a single-level `{ ... } >file 2>/dev/null` does NOT
+# suppress bash's own "cannot create" diagnostic, since bash reports that
+# failure before the trailing 2>/dev/null on the same command takes effect.
+# A write failure is logged via warn and swallowed, never propagated.
+write_summary() {
+  local verdict="$1" elapsed="$2" rc=0
+  local cf="${CAPTURE_FAILURES:-}"
+  if [ -z "$cf" ]; then cf=" none"; fi
+  if [ -z "${DUMP_DIR:-}" ] || [ ! -d "${DUMP_DIR:-}" ]; then
+    return 0
+  fi
+  {
+    {
+      printf 'docker-nuke summary\n'
+      printf '===================\n\n'
+      printf 'verdict:          %s\n' "$verdict"
+      printf 'elapsed seconds:  %s\n' "$elapsed"
+      printf 'dump directory:   %s\n' "$DUMP_DIR"
+      printf 'capture failures:%s\n' "$cf"
+      printf '\nTriage hints\n------------\n'
+      printf '* ps.txt      STAT column: U or D means stuck in the kernel, not user space\n'
+      printf '* disk.txt    a full or near-full data volume is a common cause of a wedged daemon -- check free space on the volume backing Docker.raw (df -h) and clear it, or raise the disk image limit in Docker Desktop Settings, before relaunching\n'
+      printf '* sample-*    user-space stacks showing where the daemon was stuck\n'
+      printf '* logs/       Docker host and vm logs from just before the kill\n'
+    } >"$DUMP_DIR/summary.txt"
+  } 2>/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    warn "docker-nuke: could not write summary to $DUMP_DIR/summary.txt (dump directory unwritable or full)"
+  fi
   return 0
 }
 
