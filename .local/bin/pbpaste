@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# pbpaste -- companion to pbcopy.
+#
+# Terminals almost universally refuse OSC 52 *reads* (it would let any remote
+# program siphon your clipboard), so this cannot see your local clipboard.
+# What it can do is echo back the tmux paste buffer, i.e. whatever pbcopy or
+# a tmux copy-mode yank last put there.
+
+set -euo pipefail
+
+if [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
+    exec xclip -selection clipboard -o
+fi
+if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-paste >/dev/null 2>&1; then
+    exec wl-paste
+fi
+if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+    exec tmux save-buffer -
+fi
+
+echo "pbpaste: no readable clipboard (not in tmux, no display)" >&2
+exit 1
