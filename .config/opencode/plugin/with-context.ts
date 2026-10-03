@@ -1,1 +1,0 @@
-/Users/davidibia/Projects/MCP/with-context-mcp/plugin/with-context.ts

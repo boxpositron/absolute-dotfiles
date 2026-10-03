@@ -1,0 +1,5 @@
+# Substantive UI work
+
+For interface implementation, redesign, or substantial styling, load `frontend-workflow` on demand before editing. Do not load its body or all design skills for unrelated work. With OMO, delegate implementation through `visual-engineering`, including the brief, design context/reference paths, acceptance criteria, run command, phase, and sole writer's file ownership. A direct GPT worker may perform the same sequential passes without another agent.
+
+The user's brief and established product design system override stylistic bans, mandatory decorative treatments, unnecessary research, and arbitrary perfect-score requirements in optional design skills. Fonts, gradients, cards, and motion must serve the product. Respect explicit time/phase limits; do not turn a small resolved brief into a planning ceremony. Never count a screenshot filename, DOM snapshot, or tool success as visual inspection: deliver and inspect image pixels with the GPT worker. Use a normally three-pass maximum and report what remains.

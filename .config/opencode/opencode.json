@@ -1,124 +1,457 @@
 {
-    "$schema": "https://opencode.ai/config.json",
-    "autoupdate": true,
-    "share": "disabled",
-    "disabled_providers": [
-        "openai"
-    ],
-    "plugin": [
-        "oh-my-opencode"
-    ],
-    "instructions": [
-        "docs/guidelines.md",
-        "docs/development-standards.md",
-        "test/testing-guidelines.md",
-        "packages/*/AGENTS.md"
-    ],
-    "agent": {
-        "build": {
-            "mode": "all"
-        },
-        "plan": {
-            "mode": "primary"
-        },
-        "setup": {
-            "mode": "subagent",
-            "description": "Generates project-specific documentation and guidelines through interactive discovery"
-        },
-        "review": {
-            "mode": "subagent",
-            "description": "Reviews code for best practices and potential issues"
-        },
-        "test": {
-            "mode": "subagent",
-            "description": "Runs tests and analyzes test results"
-        },
-        "docs": {
-            "mode": "subagent",
-            "description": "Generates and maintains documentation"
-        },
-        "refactor": {
-            "mode": "subagent",
-            "description": "Refactors code for better quality and maintainability"
-        },
-        "debug": {
-            "mode": "subagent",
-            "description": "Debugs issues and troubleshoots problems"
-        },
-        "security": {
-            "mode": "subagent",
-            "description": "Audits code for security vulnerabilities"
-        },
-        "webgen": {
-            "mode": "subagent",
-            "description": "Generates complete web pages from ideas using any framework"
-        }
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": true,
+  "share": "disabled",
+  "model": "openai/gpt-6-astra",
+  "small_model": "zai-coding-plan/glm-5.3-flash",
+  "instructions": [
+    "~/.config/opencode/DEVELOPMENT-WORKFLOW.md",
+    "~/.config/opencode/UI-WORKFLOW.md"
+  ],
+  "enabled_providers": [
+    "openai",
+    "google",
+    "zai-coding-plan"
+  ],
+  "plugin": [
+    "opencode-antigravity-auth@latest",
+    "envsitter-guard",
+    "oh-my-openagent@latest"
+  ],
+  "agent": {
+    "build": {
+      "mode": "all",
+      "model": "openai/gpt-6-astra"
     },
-    "mcp": {
-        "time": {
-            "type": "local",
-            "command": [
-                "/Users/davidibia/.local/bin/uvx",
-                "mcp-server-time",
-                "--local-timezone=Africa/Lagos"
-            ],
-            "enabled": true
-        },
-        "shadcn": {
-            "type": "local",
-            "command": [
-                "npx",
-                "shadcn@latest",
-                "mcp"
-            ],
-            "enabled": false
-        },
-        "astro": {
-            "type": "remote",
-            "url": "https://mcp.docs.astro.build/mcp",
-            "enabled": false
-        },
-        "context7": {
-            "type": "remote",
-            "url": "https://mcp.context7.com/mcp",
-            "headers": {
-                "CONTEXT7_API_KEY": "env:CONTEXT7_API_KEY"
-            },
-            "enabled": false
-        },
-        "ast-grep": {
-            "type": "local",
-            "command": [
-                "uv",
-                "--directory",
-                "/Users/davidibia/Projects/MCP/ast-grep-mcp",
-                "run",
-                "main.py"
-            ],
-            "enabled": true
-        },
-        "chrome-devtools": {
-            "type": "local",
-            "command": [
-                "npx",
-                "chrome-devtools-mcp@latest"
-            ],
-            "enabled": false
-        },
-        "with-context": {
-            "type": "local",
-            "command": [
-                "npx",
-                "-y",
-                "with-context-mcp"
-            ],
-            "environment": {
-                "OBSIDIAN_API_KEY": "env:OBSIDIAN_API_KEY",
-                "OBSIDIAN_API_URL": "env:OBSIDIAN_API_URL",
-                "OBSIDIAN_VAULT": "env:OBSIDIAN_VAULT",
-                "PROJECT_BASE_PATH": "env:PROJECT_BASE_PATH"
-            },
-            "enabled": false
-        }
+    "plan": {
+      "mode": "primary",
+      "model": "zai-coding-plan/glm-5.3"
+    },
+    "setup": {
+      "mode": "subagent",
+      "description": "Generates project-specific documentation and guidelines through interactive discovery"
+    },
+    "review": {
+      "mode": "subagent",
+      "description": "Reviews code for best practices and potential issues",
+      "model": "zai-coding-plan/glm-5.3"
+    },
+    "test": {
+      "mode": "subagent",
+      "description": "Runs tests and analyzes test results",
+      "model": "openai/gpt-6-astra"
+    },
+    "docs": {
+      "mode": "subagent",
+      "description": "Generates and maintains documentation"
+    },
+    "refactor": {
+      "mode": "subagent",
+      "description": "Refactors code for better quality and maintainability"
+    },
+    "debug": {
+      "mode": "subagent",
+      "description": "Debugs issues and troubleshoots problems"
+    },
+    "security": {
+      "mode": "subagent",
+      "description": "Audits code for security vulnerabilities",
+      "model": "zai-coding-plan/glm-5.3"
+    },
+    "webgen": {
+      "mode": "subagent",
+      "description": "Generates complete web pages from ideas using any framework"
     }
+  },
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@playwright/mcp@0.0.81",
+        "--isolated",
+        "--headless",
+        "--browser",
+        "chrome",
+        "--image-responses",
+        "allow"
+      ],
+      "enabled": true
+    },
+    "headroom": {
+      "type": "local",
+      "command": [
+        "{env:HOME}/.local/bin/headroom",
+        "mcp",
+        "serve"
+      ],
+      "enabled": true
+    },
+    "agcanvas": {
+      "type": "local",
+      "command": [
+        "{env:HOME}/.local/bin/agcanvas-mcp",
+        "--port",
+        "9876"
+      ],
+      "enabled": true
+    },
+    "time": {
+      "type": "local",
+      "command": [
+        "{env:HOME}/.local/bin/uvx",
+        "mcp-server-time",
+        "--local-timezone=Africa/Lagos"
+      ],
+      "enabled": true
+    },
+    "ast-grep": {
+      "type": "local",
+      "command": [
+        "uv",
+        "--directory",
+        "{env:HOME}/Software/Projects/MCP/ast-grep-mcp",
+        "run",
+        "main.py"
+      ],
+      "enabled": true
+    },
+    "chrome-devtools": {
+      "type": "local",
+      "command": [
+        "npx",
+        "chrome-devtools-mcp@latest"
+      ],
+      "enabled": true
+    },
+    "portfolio-prod": {
+      "type": "local",
+      "command": [
+        "node",
+        "{env:HOME}/.mcp-servers/portfolio-mcp/dist/index.js"
+      ],
+      "environment": {
+        "PORTFOLIO_API_URL": "https://boxpositron.dev",
+        "PORTFOLIO_API_KEY": "env:PORTFOLIO_API_KEY"
+      },
+      "enabled": true
+    },
+    "linear": {
+      "type": "remote",
+      "url": "https://mcp.linear.app/mcp",
+      "enabled": true
+    },
+    "reoclo": {
+      "type": "local",
+      "command": [
+        "reoclo",
+        "mcp"
+      ],
+      "enabled": true
+    }
+  },
+  "provider": {
+    "google": {
+      "name": "Google",
+      "models": {
+        "antigravity-gemini-3.1-pro": {
+          "name": "Gemini 3.1 Pro (Antigravity)",
+          "limit": {
+            "context": 1048576,
+            "output": 65535
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "low": {
+              "thinkingLevel": "low"
+            },
+            "high": {
+              "thinkingLevel": "high"
+            }
+          }
+        },
+        "antigravity-gemini-3-pro": {
+          "name": "Gemini 3 Pro (Antigravity)",
+          "limit": {
+            "context": 1048576,
+            "output": 65535
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "low": {
+              "thinkingLevel": "low"
+            },
+            "high": {
+              "thinkingLevel": "high"
+            }
+          }
+        },
+        "antigravity-gemini-3-flash": {
+          "name": "Gemini 3 Flash (Antigravity)",
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "minimal": {
+              "thinkingLevel": "minimal"
+            },
+            "low": {
+              "thinkingLevel": "low"
+            },
+            "medium": {
+              "thinkingLevel": "medium"
+            },
+            "high": {
+              "thinkingLevel": "high"
+            }
+          }
+        },
+        "antigravity-claude-sonnet-4-6": {
+          "name": "Claude Sonnet 4.6 (Antigravity)",
+          "limit": {
+            "context": 200000,
+            "output": 64000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "antigravity-claude-sonnet-4-6-thinking": {
+          "name": "Claude Sonnet 4.6 Thinking (Antigravity)",
+          "limit": {
+            "context": 200000,
+            "output": 64000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "low": {
+              "thinkingConfig": {
+                "thinkingBudget": 8192
+              }
+            },
+            "max": {
+              "thinkingConfig": {
+                "thinkingBudget": 32768
+              }
+            }
+          }
+        },
+        "antigravity-claude-opus-4-5-thinking": {
+          "name": "Claude Opus 4.5 Thinking (Antigravity)",
+          "limit": {
+            "context": 200000,
+            "output": 64000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "low": {
+              "thinkingConfig": {
+                "thinkingBudget": 8192
+              }
+            },
+            "max": {
+              "thinkingConfig": {
+                "thinkingBudget": 32768
+              }
+            }
+          }
+        }
+      }
+    },
+    "openai": {
+      "name": "OpenAI",
+      "blacklist": [
+        "gpt-5.2-codex",
+        "gpt-5.1-codex-max"
+      ],
+      "options": {
+        "reasoningEffort": "high",
+        "reasoningSummary": "auto",
+        "textVerbosity": "medium",
+        "include": [
+          "reasoning.encrypted_content"
+        ],
+        "store": false
+      },
+      "models": {
+        "gpt-5.2": {
+          "name": "GPT 5.2 (OAuth)",
+          "limit": {
+            "context": 272000,
+            "output": 128000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "none": {
+              "reasoningEffort": "none",
+              "reasoningSummary": "auto",
+              "textVerbosity": "medium"
+            },
+            "low": {
+              "reasoningEffort": "low",
+              "reasoningSummary": "auto",
+              "textVerbosity": "medium"
+            },
+            "medium": {
+              "reasoningEffort": "medium",
+              "reasoningSummary": "auto",
+              "textVerbosity": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            }
+          }
+        },
+        "gpt-5.2-codex": {
+          "name": "GPT 5.2 Codex (OAuth)",
+          "limit": {
+            "context": 272000,
+            "output": 128000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low",
+              "reasoningSummary": "auto",
+              "textVerbosity": "medium"
+            },
+            "medium": {
+              "reasoningEffort": "medium",
+              "reasoningSummary": "auto",
+              "textVerbosity": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            }
+          }
+        },
+        "gpt-5.1-codex-max": {
+          "name": "GPT 5.1 Codex Max (OAuth)",
+          "limit": {
+            "context": 272000,
+            "output": 128000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "variants": {
+            "low": {
+              "reasoningEffort": "low",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            },
+            "medium": {
+              "reasoningEffort": "medium",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh",
+              "reasoningSummary": "detailed",
+              "textVerbosity": "medium"
+            }
+          }
+        }
+      }
+    }
+  },
+  "disabled_providers": [
+    "nine-router"
+  ]
 }
