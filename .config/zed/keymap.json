@@ -1,0 +1,11 @@
+[{
+    "context": "Workspace",
+    "bindings": {
+        "cmd-shift-a": [
+            "task::Spawn",
+            {
+                "task_name": "agent"
+            }
+        ]
+    }
+}]
