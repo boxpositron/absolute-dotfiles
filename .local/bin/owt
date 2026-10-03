@@ -58,6 +58,9 @@ Usage (run from anywhere inside the repo):
                   session inside the workspace can finish first
         The omo slash command /owt-done syncs Linear and then runs this.
 
+Workspaces share the main checkout's omo memory: owt new and owt open link the
+workspace's memory id to the main store, and owt done and owt rm remove the link.
+
 Env:
   OWT_ROOT    Workspace root (default: ~/worktrees)
   OWT_AGENT   Agent command (default: omo; must accept omo's --name and
@@ -76,6 +79,40 @@ main_root() {
 }
 
 repo_name() { basename "$(main_root)"; }
+
+memory_agents_dir() { printf '%s/agents\n' "${OMO_MEMORY_HOME:-$HOME/.omo/memory}"; }
+
+# omo's default memory id for a folder: its name as a slug, plus the first
+# 8 hex chars of sha256 of its path.
+memory_id() {
+  local path="$1" slug
+  slug="$(basename "$path" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//')"
+  printf '%s-%s\n' "${slug:-agent}" "$(printf '%s' "$path" | shasum -a 256 | cut -c1-8)"
+}
+
+# Point the workspace's memory id at the main checkout's store, so omo sessions
+# in the workspace read and write the project's memory.
+link_memory() {
+  local agents main ws
+  agents="$(memory_agents_dir)"
+  main="$(memory_id "$(cd "$(main_root)" && pwd -P)")"
+  ws="$(memory_id "$(cd "$1" && pwd -P)")"
+  [[ -L "$agents/$ws" ]] && return 0
+  if [[ ! -d "$agents/$main" ]]; then
+    say "no omo memory for $(repo_name) yet (run omo once in the main checkout); memory not shared"
+  elif [[ -e "$agents/$ws" ]]; then
+    say "workspace already has its own memory store $agents/$ws; memory not shared"
+  else
+    ln -s "$main" "$agents/$ws"
+    say "sharing omo memory $main"
+  fi
+}
+
+unlink_memory() {
+  local link
+  link="$(memory_agents_dir)/$(memory_id "$(cd "$1" && pwd -P)")"
+  if [[ -L "$link" ]]; then rm "$link"; fi
+}
 
 # owner/repo from the origin URL (https or ssh form).
 repo_slug() {
@@ -214,6 +251,7 @@ cmd_new() {
   git -C "$root" worktree add --no-track -b "$branch" "$dir" "$base"
 
   copy_env_files "$root" "$dir"
+  link_memory "$dir"
   if [[ $install -eq 1 ]]; then install_deps "$dir"; fi
   say "workspace '$name' ready at $dir on $branch"
   if [[ $open -eq 1 ]]; then
@@ -230,6 +268,7 @@ cmd_open() {
   [[ -n "$name" ]] || die "usage: owt open <name>"
   dir="$(ws_dir "$name")"
   [[ -d "$dir" ]] || die "no workspace at $dir"
+  link_memory "$dir"
   launch "$name" "$dir"
 }
 
@@ -269,6 +308,7 @@ cmd_rm() {
   [[ -d "$dir" ]] || die "no workspace at $dir"
   branch="$(git -C "$dir" symbolic-ref --quiet --short HEAD || true)"
 
+  unlink_memory "$dir"
   if [[ $force -eq 1 ]]; then
     git -C "$root" worktree remove --force "$dir"
   else
@@ -373,6 +413,7 @@ cmd_done() {
     say "kept remote branch $branch because it is not merged"
   fi
 
+  unlink_memory "$dir"
   git -C "$root" worktree remove --force "$dir"
   say "removed $dir"
   if [[ -n "$branch" ]]; then
