@@ -25,7 +25,7 @@ This repository contains personal dotfiles for configuring a complete developmen
 - **Neovim Configuration**: Extensive Lua-based configuration with LSP support, debugging, and 50+ productivity plugins
 - **Terminal Emulators**: Configurations for Ghostty and WezTerm with custom themes and visual effects
 - **Shell Environment**: Optimized Zsh configuration with Starship prompt and useful aliases
-- **AI Integration**: OpenCode CLI with specialized agents for debugging, testing, refactoring, and more
+- **AI Integration**: OpenCode, OmO and Claude Code configuration, shared agent preferences, and `owt` workspaces that give each agent task its own git worktree
 - **Development Tools**: Pre-configured settings for Git, tmux, direnv, and various language servers
 - **Documentation Management**: with-context MCP integration for knowledge management
 
@@ -97,7 +97,16 @@ The script creates individual relative symlinks, skips existing correct links, a
 - `.config/claude/` supplies Claude's global instructions, settings, and OMC preferences. The machine-specific OMC `nodeBinary` cache is intentionally omitted; install Node.js and run OMC setup on each new machine to configure its runtime and HUD.
 - OpenCode's main configuration, TUI registration, and existing command/MCP isolation plugins are linked individually. Other portable Claude plugins and user skills remain enabled.
 
-Credentials, `settings.local.json`, plugin installations, unrelated user skills, histories, caches, and runtime state are not copied into this repository or managed by this script. The selected Impeccable, Vercel web-design-guidelines and frontend-workflow skills are managed individually; see [the GPT visual workflow](.config/opencode/README.md) for provenance, verification and rollback. Install other desired plugins and portable skills separately. Existing OpenCode configuration still contains machine-specific MCP paths; review them on a new machine.
+Credentials, `settings.local.json`, plugin installations, unrelated user skills, histories, caches, and runtime state are not copied into this repository or managed by this script. The selected Impeccable, Vercel web-design-guidelines and frontend-workflow skills are managed individually; see [the GPT visual workflow](.config/opencode/README.md) for provenance, verification and rollback. Install other desired plugins and portable skills separately. OpenCode's local MCP servers are referenced through `{env:HOME}`, so the paths are portable, but the servers themselves (headroom, agcanvas, uvx, ast-grep-mcp, portfolio-mcp) must be installed at those locations on a new machine.
+
+The OmO hooks, slash commands and workspace scripts are not linked by the script yet. Link them by hand:
+
+```bash
+ln -s ../../dotfiles/.config/omo/hooks.json ~/.omo/agent/hooks.json
+ln -s ../../dotfiles/.config/omo/prompts ~/.omo/agent/prompts
+ln -s ../../dotfiles/.local/bin/owt ~/.local/bin/owt
+ln -s ../../dotfiles/.local/bin/omo-notify ~/.local/bin/omo-notify
+```
 
 Restart OpenCode and Claude Code after applying changes. On first use, Claude may ask to approve the shared preferences import. Updates can rewrite generated configuration or replace symlinks: review the live files and repository diff before rerunning the link script, which backs up divergent live files rather than merging them. No plugin versions or model choices are changed by this restore step.
 
@@ -126,7 +135,8 @@ Key features:
 #### Ghostty (`.config/ghostty/`)
 - Custom shaders for visual effects (CRT, bloom, glow)
 - Optimized colorscheme
-- Performance-focused configuration
+- Native titlebar; SSH sessions forward the environment and terminfo
+- Does not auto-attach tmux; start or attach sessions yourself
 
 #### WezTerm (`.config/wezterm/`)
 - Lua-based configuration
@@ -141,10 +151,13 @@ Key features:
 - Environment variable management with `.env` and `.envrc`
 - Starship prompt with custom configuration
 - Auto-completion and syntax highlighting
+- 1Password as the SSH agent, an `sshm` wrapper with completion, and `fs [session]` to reach the remote dev box over mosh into a named tmux session
+- Resets mouse-reporting modes at each prompt, so an unclean SSH or tmux disconnect cannot leave the terminal spewing escape codes
 
 ### Development Tools
 
-- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings
+- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings; sets the terminal title to the session name
+- **Zed** (`.config/zed/keymap.json`): Editor key bindings. Settings stay local because they reference machine-specific agent paths
 - **tmux server** (`.tmux-server.conf`): Lightweight tmux config for remote servers
 - **Git**: Global gitignore patterns (`.rgignore`, `.gitignore`)
 - **Starship** (`starship.toml`): Cross-shell prompt with Git integration
@@ -174,9 +187,34 @@ Custom commands:
 - Additional commands in `.config/opencode/command/`
 
 Plugins:
-- **terminal-bell**: Terminal notification system
-- **websearch**: Web search integration
-- **with-context**: Documentation management with Obsidian vault
+- **oh-my-openagent**, **opencode-antigravity-auth** and **envsitter-guard** from npm
+- **strip-claude-only-commands** and **strip-omc-mcp** (`.config/opencode/plugin/`): keep Claude-only commands and OMC's MCP servers out of OpenCode
+
+MCP servers: Playwright, Chrome DevTools, Linear, reoclo, time, ast-grep, headroom, agcanvas and portfolio.
+
+#### OmO (`.config/omo/`)
+
+- `omo.jsonc` (linked as `~/.omo/omo.jsonc`): agent and category model routing for OpenCode and the native harness.
+- `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` for a macOS notification when a session stops or needs attention.
+- `prompts/` (linked as `~/.omo/agent/prompts`): slash commands for `owt` workspaces.
+  - `/linear-sync [notes]` posts a progress comment on the workspace's Linear issues and sets them to In Progress, or In Review once a PR is open.
+  - `/owt-done [notes]` finishes a workspace after its PR merges: it comments on each issue and moves it to Done, then runs `owt done --detach`. It asks before discarding uncommitted or unmerged work.
+
+#### Agent workspaces (`owt`)
+
+`owt` gives each agent task its own git worktree, in the style of Conductor. Run it from anywhere inside a repository:
+
+```bash
+owt new                 # random city name, e.g. ~/worktrees/<repo>/lagos on branch feature/lagos
+owt new PRA-107 PRA-108 # same, and tell the agent which Linear issues to start on
+owt ls                  # workspaces and their current branches
+owt open lagos          # reopen the agent in a workspace
+owt done                # remove the workspace you are in once its work is merged
+```
+
+`owt new` starts from the latest `origin` default branch, copies local `.env` files, installs dependencies, and opens a tmux window running omo with the workspace conventions: rename the placeholder branch to `feature/<keys>-<slug>` before pushing, and keep the Linear issues' statuses in sync. Workspaces share the main checkout's omo memory through a link under `~/.omo/memory/agents/`.
+
+`owt done` refuses to discard work unless you pass `--force`. Work counts as merged when the branch is part of the default branch or its Gitea PR is merged (checked with `tea`). It then deletes the remote and local branch, removes the worktree and its memory link, and closes tmux windows open in it. `OWT_ROOT` (default `~/worktrees`) and `OWT_AGENT` (default `omo`) override the defaults; `owt --help` lists every option.
 
 #### Neovim AI Integration
 
@@ -203,6 +241,8 @@ Custom scripts and binaries are stored in `.local/bin/`:
 - `cl`: Claude CLI wrapper
 - `claude-tmux`: Claude integration with tmux
 - `cldir`: Change directory with Claude context
+- `owt`: Git worktree workspaces for coding agents (see [Agent workspaces](#agent-workspaces-owt))
+- `omo-notify`: macOS notification for OmO's Stop and Notification hooks
 - `docker-nuke`: Force-restart a wedged Docker Desktop, capturing diagnostics to `~/.local/state/docker-nuke/` first (`--dry-run` to preview, `--no-restart` to leave it down, `--deep` for root helpers)
 
 Ensure this directory is in your PATH:
@@ -363,4 +403,4 @@ For questions, issues, or suggestions, please open an issue on the GitHub reposi
 **Platform**: macOS (Darwin)  
 **Primary Editor**: Neovim  
 **Shell**: Zsh  
-**AI Tools**: OpenCode, Claude
+**AI Tools**: OpenCode, OmO, Claude Code
