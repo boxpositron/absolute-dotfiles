@@ -1,0 +1,264 @@
+// OMO routing for OpenCode and the native agent, using Claude, OpenAI and z.ai models.
+{
+  // Shared metadata.
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/omo.schema.json",
+  "_migrations": [
+    "2026-07-codex-config-jsonc",
+    "2026-08-reasoning-unification",
+    "2026-07-opencode-config-unification"
+  ],
+
+
+  // OpenCode agent and category routing.
+  "[opencode]": {
+    "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/omo.schema.json",
+    "claude_code": {
+      "plugins_override": {
+        "oh-my-claudecode@omc": false
+      }
+    },
+    "agents": {
+      "sisyphus": {
+        "model": "openai/gpt-6-astra"
+      },
+      "hephaestus": {
+        "model": "openai/gpt-5.6-sol",
+        "reasoning": "medium"
+      },
+      "oracle": {
+        "model": "zai-coding-plan/glm-5.3",
+        "reasoning": "high"
+      },
+      "librarian": {
+        "model": "zai-coding-plan/glm-5.3-flash",
+        "reasoning": "low"
+      },
+      "explore": {
+        "model": "zai-coding-plan/glm-5.3-flash",
+        "reasoning": "low"
+      },
+      "multimodal-looker": {
+        "model": "zai-coding-plan/glm-5.3-flash",
+        "reasoning": "low"
+      },
+      "prometheus": {
+        "model": "zai-coding-plan/glm-5.3",
+        "reasoning": "high"
+      },
+      "metis": {
+        "model": "zai-coding-plan/glm-5.3",
+        "reasoning": "high"
+      },
+      "momus": {
+        "model": "zai-coding-plan/glm-5.3",
+        "reasoning": "high"
+      },
+      "atlas": {
+        "model": "openai/gpt-6-astra"
+      },
+      "sisyphus-junior": {
+        "model": "openai/gpt-6-astra",
+        "reasoning": "high"
+      },
+      "document-writer": {
+        "model": "zai-coding-plan/glm-5.3-flash",
+        "reasoning": "low"
+      }
+    },
+    "categories": {
+      "visual-engineering": {
+        "model": "openai/gpt-6-astra",
+        "reasoning": "high",
+        "prompt_append": "For substantive UI work, load frontend-workflow on demand before editing. Use the existing GPT model for design, browser screenshot inspection, and a separate critique pass. Obtain the project design context, supplied references, primary user action, acceptance criteria, run command, assigned files and phase from the delegator. Own one sequential write lane; review-only passes do not edit. Load impeccable for direction and web-design-guidelines for accessibility/interaction review as needed. Preserve established conventions unless redesign is requested; the user brief overrides aesthetic bans. Read screenshot image content directly with the current GPT model, not only paths/DOM and not look_at as a substitute. Render desktop/mobile and intermediate width when warranted, rank up to three material visible issues, fix them, recapture, and retest interactions/states. Normally at most three passes; stop when acceptance criteria pass and report residual issues. Do not delegate a plan for a small implementation whose brief already resolves the decisions."
+      },
+      "ultrabrain": {
+        "model": "openai/gpt-6-astra",
+        "reasoning": "max"
+      },
+      "deep-low": {
+        "model": "zai-coding-plan/glm-5.3",
+        "reasoning": "high"
+      },
+      "artistry": {
+        "model": "zai-coding-plan/glm-5.3",
+        "reasoning": "high"
+      },
+      "quick": {
+        "model": "zai-coding-plan/glm-5.3-flash",
+        "reasoning": "low"
+      },
+      "unspecified-low": {
+        "model": "zai-coding-plan/glm-5.3-flash",
+        "reasoning": "low"
+      },
+      "unspecified-high": {
+        "model": "zai-coding-plan/glm-5.3",
+        "reasoning": "high"
+      },
+      "writing": {
+        "model": "zai-coding-plan/glm-5.3-flash",
+        "reasoning": "low"
+      }
+    },
+    "sisyphus_agent": {
+      "planner_enabled": true,
+      "replace_plan": true
+    },
+    "telemetry": false,
+    "model_fallback": true,
+    "disabled_hooks": [
+      "auto-update-checker",
+      "startup-toast"
+    ]
+  },
+
+  // Native agent and category routing.
+  "[native]": {
+    // Claude leads implementation; GPT independently reviews technical work.
+    "model_profile": "hybrid",
+    "model_profiles": {
+      "hybrid": {
+        "display_name": "Claude implementation / GPT review",
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-opus-5-5",
+            "reasoning": "medium"
+          },
+          {
+            "model": "chatgpt-subscription/gpt-6.1-sol",
+            "reasoning": "medium"
+          }
+        ]
+      }
+    },
+    "categories": {
+      "architect": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-fable-5-1",
+            "reasoning": "xhigh"
+          },
+          {
+            "model": "chatgpt-subscription/gpt-6-astra",
+            "reasoning": "high"
+          }
+        ]
+      },
+      "artistry": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-opus-5-5",
+            "reasoning": "high"
+          },
+          {
+            "model": "zai/glm-5.3",
+            "reasoning": "high"
+          }
+        ]
+      },
+      "deep-low": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "reasoning": "medium"
+          },
+          {
+            "model": "chatgpt-subscription/gpt-6.1-sol",
+            "reasoning": "medium"
+          },
+          {
+            "model": "zai/glm-5.3",
+            "reasoning": "high"
+          }
+        ]
+      },
+      "deep-high": {
+        "model": "chatgpt-subscription/gpt-6-astra",
+        "reasoning": "high"
+      },
+      "quick": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "reasoning": "low"
+          },
+          {
+            "model": "zai/glm-5.3-flash",
+            "reasoning": "low"
+          }
+        ]
+      },
+      "ultrabrain": {
+        "model": "chatgpt-subscription/gpt-6-astra",
+        "reasoning": "max"
+      },
+      "unspecified-high": {
+        "model": "chatgpt-subscription/gpt-6-astra",
+        "reasoning": "high"
+      },
+      "unspecified-low": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "reasoning": "medium"
+          },
+          {
+            "model": "zai/glm-5.3",
+            "reasoning": "medium"
+          }
+        ]
+      },
+      "visual-engineering": {
+        "model": "chatgpt-subscription/gpt-6-astra",
+        "reasoning": "high",
+        "prompt_append": "Before substantive UI work, load frontend-workflow. Follow the product's design context, keep one writer per file set, inspect actual desktop and mobile screenshots, exercise the primary interaction, and report verification evidence. Stop when acceptance criteria pass."
+      },
+      "writing": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "reasoning": "medium"
+          },
+          {
+            "model": "zai/glm-5.3",
+            "reasoning": "medium"
+          }
+        ]
+      }
+    },
+    "agents": {
+      "explore": {
+        "model": "zai/glm-5.3-flash",
+        "reasoning": "low"
+      },
+      "librarian": {
+        "model": "zai/glm-5.3-flash",
+        "reasoning": "low"
+      },
+      "plan-consultant": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-fable-5-1",
+            "reasoning": "xhigh"
+          },
+          {
+            "model": "zai/glm-5.3",
+            "reasoning": "high"
+          }
+        ]
+      },
+      "plan-reviewer": {
+        "models": [
+          {
+            "model": "chatgpt-subscription/gpt-6-astra",
+            "reasoning": "high"
+          },
+          {
+            "model": "chatgpt-subscription/gpt-6.1-sol",
+            "reasoning": "high"
+          }
+        ]
+      }
+    }
+  }
+}
