@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# owt: Conductor-style workspaces for coding agents.
+# Each workspace is a git worktree with a random city name under
+# $OWT_ROOT/<repo>/<name>, on a placeholder branch feature/<name>, set up once,
+# with the agent launched inside it in its own tmux window. A workspace can
+# carry any number of Linear issues; the agent renames the branch to
+# feature/<keys>-<slug> once it knows them and keeps their status in sync.
+
+set -euo pipefail
+
+OWT_ROOT="${OWT_ROOT:-$HOME/worktrees}"
+OWT_AGENT="${OWT_AGENT:-omo}"
+ISSUE_RE='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
+CITIES=(
+  accra amman antwerp asmara athens austin baku bamako bergen bern bilbao bogota
+  bonn bremen brno cairo cali cork dakar dhaka dublin durban essen faro fes
+  geneva genoa ghent graz hanoi havana helsinki hobart izmir jaipur kabul kano
+  kiev kobe kyoto lagos lahore leeds leon lima linz lisbon lome luanda lusaka
+  lyon madrid malmo manila maputo marseille medan milan minsk mombasa monaco
+  montreal mumbai munich nagoya nairobi nantes naples nice odessa osaka oslo
+  ottawa oulu padua paris perth porto prague quito rabat riga rome rotterdam
+  salvador seoul seville sofia split surat sydney taipei tallinn tampere
+  tangier tbilisi tokyo toledo toronto tunis turin utrecht valencia vienna
+  vilnius warsaw yerevan zagreb zurich
+)
+
+die() { printf 'owt: %s\n' "$*" >&2; exit 1; }
+say() { printf 'owt: %s\n' "$*" >&2; }
+
+usage() {
+  cat <<'EOF'
+owt: Conductor-style git worktree workspaces for coding agents
+
+Usage (run from anywhere inside the repo):
+  owt new [ISSUE-1 ISSUE-2 ...] [--name <name>] [--base <ref>] [--no-install] [--no-launch]
+        Create a workspace with a random city name (or <name>) at
+        $OWT_ROOT/<repo>/<name> on placeholder branch feature/<name>, from the
+        latest origin default branch (or <ref>). Copies local .env files,
+        installs dependencies, and opens a tmux window running the agent.
+        Linear issue keys are optional; you can also name issues to the agent
+        later. Either way the agent renames the branch to
+        feature/<keys>-<slug> (e.g. feature/pra-107-108-imap-timeouts), moves
+        each issue to In Progress, and to In Review with the PR link.
+  owt open <name>      Open a tmux window running the agent in an existing workspace
+  owt ls               List this repo's workspaces and their branches
+  owt path <name>      Print a workspace path (cd "$(owt path lagos)")
+  owt rm <name> [--force]
+        Remove the workspace and delete its branch if merged.
+        --force also discards uncommitted changes and deletes an unmerged branch.
+  owt done [name] [--check] [--force] [--detach]
+        Finish a workspace (default: the one you are in). Refuses unless the
+        work is committed and merged (into the default branch, or via a merged
+        Gitea PR found with tea). Then deletes the remote branch, removes the
+        worktree and local branch, and closes tmux windows open in it.
+        --check   print the workspace state as key=value lines; exit 1 if unsafe
+        --force   finish anyway, discarding unmerged work (remote branch kept)
+        --detach  run the cleanup from tmux 5 seconds later, so an agent
+                  session inside the workspace can finish first
+        The omo slash command /owt-done syncs Linear and then runs this.
+
+Env:
+  OWT_ROOT    Workspace root (default: ~/worktrees)
+  OWT_AGENT   Agent command (default: omo; must accept omo's --name and
+              --append-system-prompt flags)
+EOF
+}
+
+upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
+
+# Main checkout root, also correct when run from inside a worktree.
+main_root() {
+  local common
+  common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+    || die "not inside a git repository"
+  dirname "$common"
+}
+
+repo_name() { basename "$(main_root)"; }
+
+# owner/repo from the origin URL (https or ssh form).
+repo_slug() {
+  local url
+  url="$(git -C "$(main_root)" remote get-url origin)"
+  url="${url%.git}"
+  url="${url//://}"
+  printf '%s/%s\n' "$(basename "$(dirname "$url")")" "$(basename "$url")"
+}
+
+# Workspace name of the current directory, if it is inside one.
+current_ws() {
+  local here prefix rel
+  here="$(pwd -P)"
+  prefix="$(cd "$OWT_ROOT/$(repo_name)" 2>/dev/null && pwd -P)" || return 1
+  [[ "$here" == "$prefix"/* ]] || return 1
+  rel="${here#"$prefix"/}"
+  printf '%s\n' "${rel%%/*}"
+}
+
+# "<state> <url>" of the newest Gitea PR whose head is <branch>, or nothing.
+# tea runs outside the checkout because its go-git rejects extensions.worktreeConfig.
+pr_info() {
+  command -v tea >/dev/null && command -v jq >/dev/null || return 0
+  (cd / && tea pulls list --repo "$1" --state all --output json --fields state,head,url --limit 100 2>/dev/null) \
+    | jq -r --arg b "$2" '[.[] | select(.head == $b)] | first | select(. != null) | "\(.state) \(.url)"' 2>/dev/null \
+    || true
+}
+ws_dir() { printf '%s/%s/%s\n' "$OWT_ROOT" "$(repo_name)" "$1"; }
+
+name_taken() {
+  [[ -e "$(ws_dir "$1")" ]] || git -C "$(main_root)" show-ref --verify --quiet "refs/heads/feature/$1"
+}
+
+random_name() {
+  local i name
+  for ((i = 0; i < 50; i++)); do
+    name="${CITIES[RANDOM % ${#CITIES[@]}]}"
+    name_taken "$name" || { printf '%s\n' "$name"; return; }
+  done
+  for ((i = 2; ; i++)); do
+    name_taken "$name-$i" || { printf '%s\n' "$name-$i"; return; }
+  done
+}
+
+default_base() {
+  local head
+  head="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  printf '%s\n' "${head:-origin/main}"
+}
+
+copy_env_files() {
+  local src="$1" dst="$2" rel
+  while IFS= read -r rel; do
+    [[ -e "$dst/$rel" ]] && continue
+    mkdir -p "$(dirname "$dst/$rel")"
+    cp -p "$src/$rel" "$dst/$rel"
+    say "copied $rel"
+  done < <(cd "$src" && find . -maxdepth 3 -type f -name '.env*' \
+             ! -name '*.example' ! -name '*.sample' ! -name '*.template' \
+             ! -path '*/node_modules/*' ! -path './.git/*' | sed 's|^\./||')
+}
+
+install_deps() {
+  local dir="$1"
+  if [[ -f "$dir/pnpm-lock.yaml" ]]; then
+    (cd "$dir" && pnpm install --frozen-lockfile --prefer-offline)
+  elif [[ -f "$dir/bun.lock" || -f "$dir/bun.lockb" ]]; then
+    (cd "$dir" && bun install --frozen-lockfile)
+  elif [[ -f "$dir/package-lock.json" ]]; then
+    (cd "$dir" && npm ci --prefer-offline)
+  elif [[ -f "$dir/yarn.lock" ]]; then
+    (cd "$dir" && yarn install --frozen-lockfile)
+  fi
+}
+
+# Standing workspace conventions, appended to the agent's system prompt on every launch.
+workspace_prompt() {
+  local name="$1" dir="$2" branch
+  branch="$(git -C "$dir" symbolic-ref --quiet --short HEAD || printf 'a detached HEAD')"
+  printf 'You are in owt workspace "%s" (%s), a git worktree of %s on branch %s. ' \
+    "$name" "$dir" "$(repo_name)" "$branch"
+  printf 'The workspace may cover one or several Linear issues. When issues are named for this workspace, read each with the Linear tools including comments, and move each to In Progress. '
+  if [[ "$branch" == "feature/$name" ]]; then
+    # The backticks are literal markdown for the agent, not a command substitution.
+    # shellcheck disable=SC2016
+    printf '%s is a placeholder: once you know the issues, and before the branch is pushed, rename it with `git branch -m feature/<keys>-<slug>`, where <keys> are the lowercased issue keys joined by hyphens with the team prefix written once (PRA-107 and PRA-108 give pra-107-108) and <slug> is a 2 to 5 word kebab-case summary. ' "$branch"
+  fi
+  printf 'When a pull request is open, comment on each issue with a short summary and the PR link, and move each to In Review.'
+}
+
+# launch <name> <dir> [initial message]
+launch() {
+  local name="$1" dir="$2" args
+  shift 2
+  args=(--name "$name" --append-system-prompt "$(workspace_prompt "$name" "$dir")" "$@")
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux new-window -n "$name" -c "$dir" -- "$OWT_AGENT" "${args[@]}"
+    say "opened tmux window '$name' running $OWT_AGENT"
+  else
+    say "not in tmux; start with: cd $(printf '%q' "$dir") && $OWT_AGENT$(printf ' %q' "${args[@]}")"
+  fi
+}
+
+cmd_new() {
+  local issues=() name="" base="" install=1 open=1
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) name="${2:-}"; [[ -n "$name" ]] || die "--name needs a value"; shift 2 ;;
+      --base) base="${2:-}"; [[ -n "$base" ]] || die "--base needs a ref"; shift 2 ;;
+      --no-install) install=0; shift ;;
+      --no-launch) open=0; shift ;;
+      -*) die "unknown option $1" ;;
+      *) [[ "$1" =~ $ISSUE_RE ]] || die "'$1' is not an issue key (e.g. PRA-123); use --name for a workspace name"
+         issues+=("$(upper "$1")"); shift ;;
+    esac
+  done
+
+  local root dir branch
+  root="$(main_root)"
+  if [[ -n "$name" ]]; then
+    [[ "$name" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || die "workspace names are lowercase letters, digits, '.', '_' and '-'"
+    name_taken "$name" && die "workspace or branch for '$name' already exists"
+  else
+    name="$(random_name)"
+  fi
+  dir="$(ws_dir "$name")"
+  branch="feature/$name"
+
+  base="${base:-$(default_base)}"
+  if [[ "$base" == origin/* ]]; then
+    say "fetching $base"
+    git -C "$root" fetch --quiet origin "${base#origin/}"
+  fi
+  mkdir -p "$(dirname "$dir")"
+  git -C "$root" worktree add --no-track -b "$branch" "$dir" "$base"
+
+  copy_env_files "$root" "$dir"
+  if [[ $install -eq 1 ]]; then install_deps "$dir"; fi
+  say "workspace '$name' ready at $dir on $branch"
+  if [[ $open -eq 1 ]]; then
+    if [[ ${#issues[@]} -gt 0 ]]; then
+      launch "$name" "$dir" "Work on Linear issue(s) ${issues[*]}."
+    else
+      launch "$name" "$dir"
+    fi
+  fi
+}
+
+cmd_open() {
+  local name="${1:-}" dir
+  [[ -n "$name" ]] || die "usage: owt open <name>"
+  dir="$(ws_dir "$name")"
+  [[ -d "$dir" ]] || die "no workspace at $dir"
+  launch "$name" "$dir"
+}
+
+cmd_ls() {
+  local prefix
+  prefix="$OWT_ROOT/$(repo_name)/"
+  git worktree list --porcelain | awk -v p="$prefix" '
+    /^worktree / { path = substr($0, 10) }
+    /^branch /   { br = substr($0, 8); sub("^refs/heads/", "", br) }
+    /^detached/  { br = "(detached)" }
+    /^$/         { if (index(path, p) == 1) printf "%-20s %s\n", substr(path, length(p) + 1), br; path = ""; br = "" }
+    END          { if (path != "" && index(path, p) == 1) printf "%-20s %s\n", substr(path, length(p) + 1), br }'
+}
+
+cmd_path() {
+  local name="${1:-}" dir
+  [[ -n "$name" ]] || die "usage: owt path <name>"
+  dir="$(ws_dir "$name")"
+  [[ -d "$dir" ]] || die "no workspace at $dir"
+  printf '%s\n' "$dir"
+}
+
+cmd_rm() {
+  local name="" force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      -*) die "unknown option $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || die "usage: owt rm <name> [--force]"
+
+  local root dir branch
+  root="$(main_root)"
+  dir="$(ws_dir "$name")"
+  [[ -d "$dir" ]] || die "no workspace at $dir"
+  branch="$(git -C "$dir" symbolic-ref --quiet --short HEAD || true)"
+
+  if [[ $force -eq 1 ]]; then
+    git -C "$root" worktree remove --force "$dir"
+  else
+    git -C "$root" worktree remove "$dir" \
+      || die "workspace has uncommitted changes; commit them or use --force"
+  fi
+  say "removed $dir"
+
+  [[ -n "$branch" ]] || return 0
+  if [[ $force -eq 1 ]]; then
+    git -C "$root" branch -D "$branch" >/dev/null
+    say "deleted branch $branch"
+  elif git -C "$root" branch -d "$branch" >/dev/null 2>&1; then
+    say "deleted merged branch $branch"
+  else
+    say "kept branch $branch (not merged locally; squash merges look unmerged). Delete with: git branch -D $branch"
+  fi
+}
+
+cmd_done() {
+  local name="" check=0 force=0 detach=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --check) check=1; shift ;;
+      --force) force=1; shift ;;
+      --detach) detach=1; shift ;;
+      -*) die "unknown option $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || name="$(current_ws)" || die "not inside an owt workspace; pass a name (see 'owt ls')"
+
+  local root dir branch base
+  root="$(main_root)"
+  dir="$(ws_dir "$name")"
+  [[ -d "$dir" ]] || die "no workspace at $dir"
+  branch="$(git -C "$dir" symbolic-ref --quiet --short HEAD || true)"
+  base="$(default_base)"
+  git -C "$root" fetch --quiet --prune origin || say "fetch failed; using last known remote state"
+
+  local uncommitted=no merged=no pr_state=none pr_url=none remote_branch=no info
+  [[ -z "$(git -C "$dir" status --porcelain)" ]] || uncommitted=yes
+  if [[ -n "$branch" ]]; then
+    info="$(pr_info "$(repo_slug)" "$branch")"
+    if [[ -n "$info" ]]; then pr_state="${info%% *}"; pr_url="${info#* }"; fi
+    if git -C "$root" merge-base --is-ancestor "$branch" "$base" || [[ "$pr_state" == merged ]]; then
+      merged=yes
+    fi
+    if git -C "$root" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then remote_branch=yes; fi
+  fi
+
+  local problems=()
+  [[ $uncommitted == no ]] || problems+=("uncommitted changes in $dir")
+  if [[ -z "$branch" ]]; then
+    problems+=("detached HEAD, so merge state is unknown")
+  elif [[ $merged == no ]]; then
+    problems+=("$branch is not merged into $base (PR: $pr_state)")
+  fi
+
+  if [[ $check -eq 1 ]]; then
+    printf 'workspace=%s\npath=%s\nbranch=%s\nbase=%s\nuncommitted=%s\nmerged=%s\npr_state=%s\npr_url=%s\nremote_branch=%s\n' \
+      "$name" "$dir" "${branch:-none}" "$base" "$uncommitted" "$merged" "$pr_state" "$pr_url" "$remote_branch"
+    [[ ${#problems[@]} -eq 0 ]]
+    return
+  fi
+  if [[ ${#problems[@]} -gt 0 && $force -eq 0 ]]; then
+    printf 'owt: not finishing %s:\n' "$name" >&2
+    printf '  - %s\n' "${problems[@]}" >&2
+    die "rerun with --force to discard this work"
+  fi
+
+  if [[ $detach -eq 1 ]]; then
+    local self log cmd
+    self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    log="$OWT_ROOT/.owt-done.log"
+    mkdir -p "$OWT_ROOT"
+    cmd="sleep 5; cd $(printf '%q' "$root") && OWT_ROOT=$(printf '%q' "$OWT_ROOT") $(printf '%q' "$self") done $(printf '%q' "$name")"
+    [[ $force -eq 0 ]] || cmd+=" --force"
+    cmd+=" >>$(printf '%q' "$log") 2>&1"
+    if [[ -n "${TMUX:-}" ]]; then
+      tmux run-shell -b "$cmd"
+    else
+      nohup bash -c "$cmd" >/dev/null 2>&1 &
+    fi
+    say "cleanup of '$name' starts in 5 seconds; log: $log"
+    return
+  fi
+
+  # Windows with a pane open in the workspace, collected before the directory goes away.
+  # tmux reports resolved paths, so compare against the resolved workspace path.
+  local windows=() real_dir
+  real_dir="$(cd "$dir" && pwd -P)"
+  if command -v tmux >/dev/null && tmux list-panes -a >/dev/null 2>&1; then
+    while read -r win path; do
+      [[ "$path" == "$real_dir" || "$path" == "$real_dir"/* ]] && windows+=("$win")
+    done < <(tmux list-panes -a -F '#{window_id} #{pane_current_path}' | sort -u)
+  fi
+
+  if [[ $merged == yes && $remote_branch == yes ]]; then
+    git -C "$root" push --quiet origin --delete "$branch" && say "deleted remote branch $branch"
+  elif [[ $remote_branch == yes ]]; then
+    say "kept remote branch $branch because it is not merged"
+  fi
+
+  git -C "$root" worktree remove --force "$dir"
+  say "removed $dir"
+  if [[ -n "$branch" ]]; then
+    git -C "$root" branch -D "$branch" >/dev/null
+    say "deleted local branch $branch"
+  fi
+
+  local win
+  for win in $(printf '%s\n' "${windows[@]+"${windows[@]}"}" | sort -u); do
+    tmux kill-window -t "$win" 2>/dev/null || true
+  done
+}
+
+case "${1:-}" in
+  new)  shift; cmd_new "$@" ;;
+  done) shift; cmd_done "$@" ;;
+  open) shift; cmd_open "$@" ;;
+  ls)   shift; cmd_ls ;;
+  path) shift; cmd_path "$@" ;;
+  rm)   shift; cmd_rm "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
