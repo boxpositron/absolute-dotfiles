@@ -71,7 +71,7 @@ COMPLETION_WAITING_DOTS="true"
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(git asdf tmux)
+plugins=(git asdf)
 
 source $ZSH/oh-my-zsh.sh
 
@@ -88,6 +88,13 @@ if [[ -n $SSH_CONNECTION ]]; then
 else
   export EDITOR='nvim'
 fi
+
+# Clear mouse-reporting modes left on by an unclean SSH/tmux disconnect
+# (they otherwise spam escape codes on every mouse move). Runs at each prompt.
+# Bracketed-paste (?2004) is intentionally omitted: zsh re-asserts it per prompt.
+_reset_mouse_modes() { print -n '\e[?1000l\e[?1002l\e[?1003l\e[?1006l' }
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _reset_mouse_modes
 
 # Compilation flags
 # export ARCHFLAGS="-arch x86_64"
@@ -336,10 +343,28 @@ export PATH=$HOME/.opencode/bin:$PATH
 
 eval "$(zoxide init zsh)"
 
-# LM Studio CLI
+# Added by LM Studio CLI (lms)
 export PATH="$PATH:$HOME/.cache/lm-studio/bin"
+# End of LM Studio CLI section
 
-# Docker CLI completions
+# The following lines have been added by Docker Desktop to enable Docker CLI completions.
 fpath=($HOME/.docker/completions $fpath)
 autoload -Uz compinit
 compinit
+# End of Docker CLI completions
+
+sshm() { TERM=xterm-256color command sshm "$@"; }
+
+source <(sshm completion zsh)
+
+export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
+
+# Connect to flowstate-remote over mosh instead of ssh. Mosh is UDP with no TCP
+# flow to reset, so it rides through Starlink/hotspot IP changes, laptop sleep
+# and unlimited idle. tmux keeps the work alive server-side regardless.
+# Pass a session name to target a specific one, e.g. `fs 0`.
+function fs() {
+    local session="${1:-main}"
+    mosh flowstate-remote -- tmux new-session -A -s "$session"
+}
+export PATH=$PATH:$HOME/.maestro/bin
