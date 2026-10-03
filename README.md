@@ -81,6 +81,26 @@ ln -s ~/dotfiles/.config/wezterm ~/.config/wezterm
 ln -s ~/dotfiles/.zshrc ~/.zshrc
 ```
 
+### AI configuration restore
+
+After installing Node.js, OpenCode, Claude Code, and OMC, restore the selected AI configuration files separately from the package installer:
+
+```bash
+bash ~/dotfiles/link-ai-configs.sh --dry-run
+bash ~/dotfiles/link-ai-configs.sh
+```
+
+The script creates individual relative symlinks, skips existing correct links, and backs up replaced files or links under `~/.local/state/dotfiles-ai/backups/`. It does not replace whole configuration directories. To undo a replacement, remove that individual symlink and move its corresponding backup back to the original path.
+
+- `.config/omo/omo.jsonc` supplies `~/.omo/omo.jsonc`. Model routing is preserved; the OpenCode overlay excludes only the OMC Claude plugin through `claude_code.plugins_override`.
+- `.config/ai/AGENTS.md` holds shared personal preferences. OpenCode loads it through `~/.config/opencode/AGENTS.md` instead of falling back to Claude's global orchestration instructions. Claude imports it from its own `CLAUDE.md`.
+- `.config/claude/` supplies Claude's global instructions, settings, and OMC preferences. The machine-specific OMC `nodeBinary` cache is intentionally omitted; install Node.js and run OMC setup on each new machine to configure its runtime and HUD.
+- OpenCode's main configuration, TUI registration, and existing command/MCP isolation plugins are linked individually. Other portable Claude plugins and user skills remain enabled.
+
+Credentials, `settings.local.json`, plugin installations, unrelated user skills, histories, caches, and runtime state are not copied into this repository or managed by this script. The selected Impeccable, Vercel web-design-guidelines and frontend-workflow skills are managed individually; see [the GPT visual workflow](.config/opencode/README.md) for provenance, verification and rollback. Install other desired plugins and portable skills separately. Existing OpenCode configuration still contains machine-specific MCP paths; review them on a new machine.
+
+Restart OpenCode and Claude Code after applying changes. On first use, Claude may ask to approve the shared preferences import. Updates can rewrite generated configuration or replace symlinks: review the live files and repository diff before rerunning the link script, which backs up divergent live files rather than merging them. No plugin versions or model choices are changed by this restore step.
+
 ## Components
 
 ### Neovim Configuration (`.config/nvim/`)
