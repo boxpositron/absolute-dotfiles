@@ -7,5 +7,10 @@
 .envrc
 .withcontextignore
 AGENTS.md
+!.config/ai/AGENTS.md
 .config/opencode/plugin/node_modules
 .config/opencode/plugin/package-lock.json
+/.omc/*
+!/.omc/skills/
+.DS_Store
+.config/zed/prompts/
