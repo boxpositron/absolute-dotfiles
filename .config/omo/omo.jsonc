@@ -1,4 +1,4 @@
-// OMO routing for OpenCode and the native agent, using Claude, OpenAI and z.ai models.
+// OMO routing for the native agent, using Claude, OpenAI and z.ai models.
 {
   // Shared metadata.
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/omo.schema.json",
@@ -7,110 +7,6 @@
     "2026-08-reasoning-unification",
     "2026-07-opencode-config-unification"
   ],
-
-
-  // OpenCode agent and category routing.
-  "[opencode]": {
-    "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/dev/assets/omo.schema.json",
-    "claude_code": {
-      "plugins_override": {
-        "oh-my-claudecode@omc": false
-      }
-    },
-    "agents": {
-      "sisyphus": {
-        "model": "openai/gpt-6-astra"
-      },
-      "hephaestus": {
-        "model": "openai/gpt-5.6-sol",
-        "reasoning": "medium"
-      },
-      "oracle": {
-        "model": "zai-coding-plan/glm-5.3",
-        "reasoning": "high"
-      },
-      "librarian": {
-        "model": "zai-coding-plan/glm-5.3-flash",
-        "reasoning": "low"
-      },
-      "explore": {
-        "model": "zai-coding-plan/glm-5.3-flash",
-        "reasoning": "low"
-      },
-      "multimodal-looker": {
-        "model": "zai-coding-plan/glm-5.3-flash",
-        "reasoning": "low"
-      },
-      "prometheus": {
-        "model": "zai-coding-plan/glm-5.3",
-        "reasoning": "high"
-      },
-      "metis": {
-        "model": "zai-coding-plan/glm-5.3",
-        "reasoning": "high"
-      },
-      "momus": {
-        "model": "zai-coding-plan/glm-5.3",
-        "reasoning": "high"
-      },
-      "atlas": {
-        "model": "openai/gpt-6-astra"
-      },
-      "sisyphus-junior": {
-        "model": "openai/gpt-6-astra",
-        "reasoning": "high"
-      },
-      "document-writer": {
-        "model": "zai-coding-plan/glm-5.3-flash",
-        "reasoning": "low"
-      }
-    },
-    "categories": {
-      "visual-engineering": {
-        "model": "openai/gpt-6-astra",
-        "reasoning": "high",
-        "prompt_append": "For substantive UI work, load frontend-workflow on demand before editing. Use the existing GPT model for design, browser screenshot inspection, and a separate critique pass. Obtain the project design context, supplied references, primary user action, acceptance criteria, run command, assigned files and phase from the delegator. Own one sequential write lane; review-only passes do not edit. Load impeccable for direction and web-design-guidelines for accessibility/interaction review as needed. Preserve established conventions unless redesign is requested; the user brief overrides aesthetic bans. Read screenshot image content directly with the current GPT model, not only paths/DOM and not look_at as a substitute. Render desktop/mobile and intermediate width when warranted, rank up to three material visible issues, fix them, recapture, and retest interactions/states. Normally at most three passes; stop when acceptance criteria pass and report residual issues. Do not delegate a plan for a small implementation whose brief already resolves the decisions."
-      },
-      "ultrabrain": {
-        "model": "openai/gpt-6-astra",
-        "reasoning": "max"
-      },
-      "deep-low": {
-        "model": "zai-coding-plan/glm-5.3",
-        "reasoning": "high"
-      },
-      "artistry": {
-        "model": "zai-coding-plan/glm-5.3",
-        "reasoning": "high"
-      },
-      "quick": {
-        "model": "zai-coding-plan/glm-5.3-flash",
-        "reasoning": "low"
-      },
-      "unspecified-low": {
-        "model": "zai-coding-plan/glm-5.3-flash",
-        "reasoning": "low"
-      },
-      "unspecified-high": {
-        "model": "zai-coding-plan/glm-5.3",
-        "reasoning": "high"
-      },
-      "writing": {
-        "model": "zai-coding-plan/glm-5.3-flash",
-        "reasoning": "low"
-      }
-    },
-    "sisyphus_agent": {
-      "planner_enabled": true,
-      "replace_plan": true
-    },
-    "telemetry": false,
-    "model_fallback": true,
-    "disabled_hooks": [
-      "auto-update-checker",
-      "startup-toast"
-    ]
-  },
 
   // Native agent and category routing.
   "[native]": {
@@ -122,11 +18,11 @@
         "models": [
           {
             "model": "anthropic-subscription/claude-opus-5-5",
-            "reasoning": "medium"
+            "reasoning": "xhigh"
           },
           {
             "model": "chatgpt-subscription/gpt-6.1-sol",
-            "reasoning": "medium"
+            "reasoning": "high"
           }
         ]
       }
@@ -160,11 +56,11 @@
         "models": [
           {
             "model": "anthropic-subscription/claude-sonnet-5-5",
-            "reasoning": "medium"
+            "reasoning": "high"
           },
           {
             "model": "chatgpt-subscription/gpt-6.1-sol",
-            "reasoning": "medium"
+            "reasoning": "high"
           },
           {
             "model": "zai/glm-5.3",
@@ -179,11 +75,11 @@
       "quick": {
         "models": [
           {
-            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "model": "zai/glm-5.3-flash",
             "reasoning": "low"
           },
           {
-            "model": "zai/glm-5.3-flash",
+            "model": "anthropic-subscription/claude-sonnet-5-5",
             "reasoning": "low"
           }
         ]
@@ -204,7 +100,7 @@
           },
           {
             "model": "zai/glm-5.3",
-            "reasoning": "medium"
+            "reasoning": "high"
           }
         ]
       },
@@ -221,19 +117,35 @@
           },
           {
             "model": "zai/glm-5.3",
-            "reasoning": "medium"
+            "reasoning": "high"
           }
         ]
       }
     },
     "agents": {
       "explore": {
-        "model": "zai/glm-5.3-flash",
-        "reasoning": "low"
+        "models": [
+          {
+            "model": "zai/glm-5.3-flash",
+            "reasoning": "low"
+          },
+          {
+            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "reasoning": "low"
+          }
+        ]
       },
       "librarian": {
-        "model": "zai/glm-5.3-flash",
-        "reasoning": "low"
+        "models": [
+          {
+            "model": "zai/glm-5.3-flash",
+            "reasoning": "low"
+          },
+          {
+            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "reasoning": "low"
+          }
+        ]
       },
       "plan-consultant": {
         "models": [
