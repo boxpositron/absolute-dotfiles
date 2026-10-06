@@ -322,7 +322,7 @@ if [ -d "$HOME/neovim/bin" ]; then
     export PATH="$HOME/neovim/bin:$PATH"
 fi
 
-. "$HOME/.deno/env"
+[ -f "$HOME/.deno/env" ] && . "$HOME/.deno/env"
 
 export NVM_DIR="$HOME/.config/nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm

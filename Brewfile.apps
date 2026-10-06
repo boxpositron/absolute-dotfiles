@@ -1,0 +1,119 @@
+# GUI apps and App Store apps. Installed by `./setup-mac.sh apps`.
+# Sign in to the App Store first, or the mas entries fail.
+# Apps already in /Applications that Homebrew did not install are skipped by
+# setup-mac.sh, so this is safe to run on a Mac that already has them.
+# Install by hand (no usable cask): Bartender 6 (the cask is Bartender 7),
+# FileZilla, VMware Fusion and YubiKey Manager.
+
+tap "glinford/tap"
+tap "johannesnagl/tap"
+
+# Development
+cask "docker-desktop"
+cask "zed"
+cask "android-studio"
+cask "bruno"
+cask "beekeeper-studio"
+cask "mongodb-compass"
+cask "redis-insight"
+cask "charles"
+cask "cyberduck"
+cask "chromium"
+cask "johannesnagl/tap/showmd", trusted: true
+
+# AI and agents
+cask "conductor"
+cask "claude"
+cask "opencode-desktop"
+cask "lm-studio"
+cask "ollama-app"
+cask "emdash"
+cask "open-design"
+cask "block-buzz"
+cask "typewhisper"
+
+# Browsers
+cask "brave-browser"
+cask "google-chrome"
+cask "firefox"
+cask "librewolf"
+cask "zen"
+
+# Productivity
+cask "1password"
+cask "raycast"
+cask "linear"
+cask "obsidian"
+cask "ticktick"
+cask "granola"
+cask "mailspring"
+cask "libreoffice"
+cask "affinity"
+cask "numi"
+cask "mmex"
+
+# Communication
+cask "discord"
+cask "element"
+cask "telegram-desktop"
+cask "whatsapp"
+cask "microsoft-teams"
+
+# Menu bar and system utilities
+cask "hiddenbar"
+cask "meetingbar"
+cask "stats"
+cask "monitorcontrol"
+cask "rectangle-pro"
+cask "appcleaner"
+cask "latest"
+cask "glinford/tap/dns-easy-switcher", trusted: true
+cask "localsend"
+cask "logi-options+"
+cask "radio-silence"
+cask "reikey"
+cask "yubico-authenticator"
+cask "protonvpn"
+cask "teamviewer"
+cask "balenaetcher"
+
+# Media and games
+cask "spotify"
+cask "vlc"
+cask "obs"
+cask "jellyfin-media-player"
+cask "transmission"
+cask "steam"
+cask "minecraft"
+
+# App Store
+mas "1Password for Safari", id: 1569813296
+mas "AdBlock", id: 1402042596
+mas "Amphetamine", id: 937984704
+mas "Bitwarden", id: 1352778147
+mas "Boop", id: 1518425043
+mas "Color Picker", id: 1545870783
+mas "DeArrow", id: 6451469297
+mas "Disk Drill Media Recovery", id: 431224317
+mas "DuckDuckGo Privacy for Safari", id: 1482920575
+mas "Fresco", id: 1251572132
+mas "GarageBand", id: 682658836
+mas "Gestimer", id: 990588172
+mas "Keka", id: 470158793
+mas "Keynote", id: 409183694
+mas "Keynote Creator Studio", id: 361285480
+mas "Maccy", id: 1527619437
+mas "Microsoft Excel", id: 462058435
+mas "Microsoft PowerPoint", id: 462062816
+mas "Microsoft Word", id: 462054704
+mas "Numbers", id: 409203825
+mas "Numbers Creator Studio", id: 361304891
+mas "Pages", id: 409201541
+mas "Pages Creator Studio", id: 361309726
+mas "Pixelmator Pro", id: 1289583905
+mas "Slack", id: 803453959
+mas "SponsorBlock", id: 1573461917
+mas "Tailscale", id: 1475387142
+mas "Termius 2", id: 1176074088
+mas "TextSniper", id: 1528890965
+mas "Xcode", id: 497799835

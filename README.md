@@ -33,13 +33,10 @@ This repository contains personal dotfiles for configuring a complete developmen
 
 Before installing these dotfiles, ensure you have the following:
 
-- **Operating System**: macOS (Darwin platform)
-- **Package Manager**: [Homebrew](https://brew.sh/) installed
-- **Shell**: Zsh (default on modern macOS)
-- **Git**: Version control system
-- **Node.js**: Required for many Neovim plugins and LSP servers
-- **Python**: Required for certain development tools and Neovim plugins
-- **Rust**: (Optional) Required for some tools like ripgrep, fd, etc.
+- **Operating System**: macOS (Apple Silicon or Intel)
+- **Git**: To clone this repository. macOS offers to install it with the Command Line Tools the first time you run `git`
+
+`setup-mac.sh` installs everything else: the Command Line Tools, Homebrew, Node.js, Python, Rust and the rest.
 
 ## Installation
 
@@ -53,17 +50,28 @@ Before installing these dotfiles, ensure you have the following:
    cd ~/dotfiles
    ```
 
-2. **Run the setup script**:
+2. **Preview, then run the setup script**:
    ```bash
+   ./setup-mac.sh --dry-run
    ./setup-mac.sh
    ```
 
-3. **Create symbolic links** (if not handled by setup script):
-   ```bash
-   ln -s ~/dotfiles/.config ~/.config
-   ln -s ~/dotfiles/.zshrc ~/.zshrc
-   ln -s ~/dotfiles/.tmux.conf ~/.tmux.conf
-   ```
+The script is safe to rerun: each step checks what is already in place and only does the missing work. A failed step is reported at the end while the other steps still run. Name steps to run only those, for example `./setup-mac.sh links` after adding a config.
+
+| Step | What it does |
+|------|--------------|
+| `xcode` | Installs the Xcode Command Line Tools |
+| `homebrew` | Installs Homebrew and loads it from `~/.zprofile` |
+| `brew` | Installs the CLI tools, fonts and terminals in `Brewfile` |
+| `links` | Fetches the Neovim submodule on a fresh clone and symlinks the configs and `.local/bin` scripts into `$HOME`, backing up anything it replaces to `~/.local/state/dotfiles/backups/` |
+| `shell` | Installs oh-my-zsh and the tmux plugins |
+| `runtimes` | Node with nvm and the global npm packages, Rust, Python with pyenv, poetry, and Flutter with fvm |
+| `ai` | Installs omo, Claude Code, OpenCode and Codex, then runs `link-ai-configs.sh` |
+| `apps` | Installs the GUI and App Store apps in `Brewfile.apps` |
+
+`brew` and `apps` never upgrade packages that are already installed. `apps` skips apps already in `/Applications` that Homebrew did not install, and its App Store entries need you signed in to the App Store first. To list what is installed but missing from `Brewfile`, run `brew bundle dump --file=- | diff Brewfile -`.
+
+A few things still need you afterwards, such as signing in to the App Store and the AI tools, and turning on the 1Password SSH agent. The script lists them when it finishes.
 
 ### Manual Installation
 
@@ -83,7 +91,7 @@ ln -s ~/dotfiles/.zshrc ~/.zshrc
 
 ### AI configuration restore
 
-After installing Node.js, OpenCode, Claude Code, and OMC, restore the selected AI configuration files separately from the package installer:
+The `ai` step of `setup-mac.sh` runs this script. To run it on its own after installing Node.js, OpenCode, Claude Code, and OMC:
 
 ```bash
 bash ~/dotfiles/link-ai-configs.sh --dry-run
@@ -99,14 +107,7 @@ The script creates individual relative symlinks, skips existing correct links, a
 
 Credentials, `settings.local.json`, plugin installations, unrelated user skills, histories, caches, and runtime state are not copied into this repository or managed by this script. The selected Impeccable, Vercel web-design-guidelines and frontend-workflow skills are managed individually; see [the GPT visual workflow](.config/opencode/README.md) for provenance, verification and rollback. Install other desired plugins and portable skills separately. OpenCode's local MCP servers are referenced through `{env:HOME}`, so the paths are portable, but the servers themselves (headroom, agcanvas, uvx, ast-grep-mcp, portfolio-mcp) must be installed at those locations on a new machine.
 
-The OmO hooks, slash commands and workspace scripts are not linked by the script yet. Link them by hand:
-
-```bash
-ln -s ../../dotfiles/.config/omo/hooks.json ~/.omo/agent/hooks.json
-ln -s ../../dotfiles/.config/omo/prompts ~/.omo/agent/prompts
-ln -s ../../dotfiles/.local/bin/owt ~/.local/bin/owt
-ln -s ../../dotfiles/.local/bin/omo-notify ~/.local/bin/omo-notify
-```
+The OmO hooks and slash commands (`~/.omo/agent/hooks.json` and `~/.omo/agent/prompts`) and the workspace scripts in `~/.local/bin` are linked by the `links` step of `setup-mac.sh` instead.
 
 Restart OpenCode and Claude Code after applying changes. On first use, Claude may ask to approve the shared preferences import. Updates can rewrite generated configuration or replace symlinks: review the live files and repository diff before rerunning the link script, which backs up divergent live files rather than merging them. No plugin versions or model choices are changed by this restore step.
 
@@ -249,11 +250,7 @@ Custom scripts and binaries are stored in `.local/bin/`:
 - `omo-notify`: macOS notification for OmO's Stop and Notification hooks
 - `docker-nuke`: Force-restart a wedged Docker Desktop, capturing diagnostics to `~/.local/state/docker-nuke/` first (`--dry-run` to preview, `--no-restart` to leave it down, `--deep` for root helpers)
 
-Ensure this directory is in your PATH:
-
-```bash
-export PATH="$HOME/dotfiles/.local/bin:$PATH"
-```
+The `links` step of `setup-mac.sh` links each script into `~/.local/bin`, which `.zshrc` puts on your PATH. `pbcopy` and `pbpaste` are OSC 52 clipboard shims for headless servers, so they are not linked on macOS.
 
 ### Local Servers
 
