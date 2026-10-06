@@ -357,6 +357,17 @@ sshm() { TERM=xterm-256color command sshm "$@"; }
 
 source <(sshm completion zsh)
 
+# `owt cd` jumps into an owt workspace. A script cannot change this shell's
+# directory, so owt prints the path and this wrapper does the cd.
+owt() {
+    if [[ "$1" == cd ]]; then
+        local dir
+        dir="$(command owt "$@")" && cd "$dir"
+    else
+        command owt "$@"
+    fi
+}
+
 export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
 
 # Connect to flowstate-remote over mosh instead of ssh. Mosh is UDP with no TCP

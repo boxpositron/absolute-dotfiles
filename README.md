@@ -208,11 +208,15 @@ MCP servers: Playwright, Chrome DevTools, Linear, reoclo, time, ast-grep, headro
 owt new                 # random city name, e.g. ~/worktrees/<repo>/lagos on branch feature/lagos
 owt new PRA-107 PRA-108 # same, and tell the agent which Linear issues to start on
 owt ls                  # workspaces and their current branches
+owt all                 # workspaces of every repo, with branches and source checkouts (from anywhere)
+owt cd                  # jump into a workspace with fzf; owt cd lagos goes straight there
 owt open lagos          # reopen the agent in a workspace
 owt done                # remove the workspace you are in once its work is merged
 ```
 
 `owt new` starts from the latest `origin` default branch, copies local `.env` files, installs dependencies, and opens a tmux window running omo with the workspace conventions: rename the placeholder branch to `feature/<keys>-<slug>` before pushing, and keep the Linear issues' statuses in sync. Workspaces share the main checkout's omo memory through a link under `~/.omo/memory/agents/`.
+
+`owt cd` works from any directory. Inside a repository the picker starts filtered to that repo's workspaces and jumps straight in when only one matches. The `owt` function in `.zshrc` performs the `cd`; without it, `owt cd` only prints the path.
 
 `owt done` refuses to discard work unless you pass `--force`. Work counts as merged when the branch is part of the default branch or its Gitea PR is merged (checked with `tea`). It then deletes the remote and local branch, removes the worktree and its memory link, and closes tmux windows open in it. `OWT_ROOT` (default `~/worktrees`) and `OWT_AGENT` (default `omo`) override the defaults; `owt --help` lists every option.
 

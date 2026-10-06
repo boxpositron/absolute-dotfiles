@@ -43,6 +43,12 @@ Usage (run from anywhere inside the repo):
         each issue to In Progress, and to In Review with the PR link.
   owt open <name>      Open a tmux window running the agent in an existing workspace
   owt ls               List this repo's workspaces and their branches
+  owt all              List the workspaces of every repo with their branches and
+                       source checkouts (works from any directory)
+  owt cd [name]        Jump into a workspace of any repo: <name> or <repo>/<name>,
+                       otherwise pick with fzf (filtered to this repo's workspaces
+                       when run inside one; jumps straight in if only one matches).
+                       Needs the owt shell function in .zshrc; without it, prints the path.
   owt path <name>      Print a workspace path (cd "$(owt path lagos)")
   owt rm <name> [--force]
         Remove the workspace and delete its branch if merged.
@@ -291,6 +297,73 @@ cmd_path() {
   printf '%s\n' "$dir"
 }
 
+# One "<repo>/<name>\t<branch>\t<source checkout>" line per workspace under
+# $OWT_ROOT, across every repo. Works outside a repository.
+all_workspaces() {
+  local dir common branch src
+  for dir in "$OWT_ROOT"/*/*/; do
+    dir="${dir%/}"
+    [[ -f "$dir/.git" ]] || continue
+    if common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+      branch="$(git -C "$dir" symbolic-ref --quiet --short HEAD || printf '(detached)')"
+      src="$(dirname "$common")"
+      if [[ "$src" == "$HOME"/* ]]; then src='~'/"${src#"$HOME"/}"; fi
+    else
+      branch="?"
+      src="(source checkout missing)"
+    fi
+    printf '%s\t%s\t%s\n' "${dir#"$OWT_ROOT"/}" "$branch" "$src"
+  done
+}
+
+cmd_all() {
+  local rows
+  rows="$(all_workspaces)"
+  if [[ -z "$rows" ]]; then
+    say "no workspaces under $OWT_ROOT"
+    return 0
+  fi
+  { printf 'WORKSPACE\tBRANCH\tSOURCE\n'; printf '%s\n' "$rows"; } | column -t -s $'\t'
+}
+
+# Print a workspace path for the owt shell function in .zshrc to cd into.
+cmd_cd() {
+  [[ $# -le 1 ]] || die "usage: owt cd [name]"
+  local query="${1:-}" rows repo="" common picked=""
+  rows="$(all_workspaces)"
+  [[ -n "$rows" ]] || die "no workspaces under $OWT_ROOT"
+  if common="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"; then
+    repo="$(basename "$(dirname "$common")")"
+  fi
+
+  # Exact <repo>/<name>, then <name> in this repo, then <name> in exactly one repo.
+  if [[ -n "$query" ]]; then
+    picked="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$query" -v r="$repo" '
+      { ws = $1; name = substr(ws, index(ws, "/") + 1) }
+      ws == q || ws == r "/" q { print ws; found = 1; exit }
+      name == q { hits[++n] = ws }
+      END { if (!found && n == 1) print hits[1] }')"
+  fi
+
+  if [[ -z "$picked" ]]; then
+    command -v fzf >/dev/null || die "no workspace named '$query'; install fzf to pick one, or see 'owt all'"
+    if [[ -z "$query" && -n "$repo" && $'\n'"$rows" == *$'\n'"$repo/"* ]]; then query="$repo/"; fi
+    picked="$(paste <(cut -f1 <<<"$rows") <(column -t -s $'\t' <<<"$rows") \
+      | fzf --delimiter=$'\t' --with-nth=2.. --query="$query" --select-1 --exit-0 \
+            --height=40% --reverse --prompt='owt cd> ' \
+      | cut -f1)" || true
+    if [[ -z "$picked" ]]; then
+      [[ -z "$query" ]] || die "no workspace matches '$query'"
+      die "no workspace selected"
+    fi
+  fi
+
+  if [[ -t 1 ]]; then
+    say "printing the path only; the owt shell function in .zshrc does the cd"
+  fi
+  printf '%s/%s\n' "$OWT_ROOT" "$picked"
+}
+
 cmd_rm() {
   local name="" force=0
   while [[ $# -gt 0 ]]; do
@@ -432,6 +505,8 @@ case "${1:-}" in
   done) shift; cmd_done "$@" ;;
   open) shift; cmd_open "$@" ;;
   ls)   shift; cmd_ls ;;
+  all)  shift; cmd_all ;;
+  cd)   shift; cmd_cd "$@" ;;
   path) shift; cmd_path "$@" ;;
   rm)   shift; cmd_rm "$@" ;;
   ""|-h|--help|help) usage ;;
