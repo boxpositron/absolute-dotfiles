@@ -1,5 +1,12 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.local/bin/omo-notify", "timeout": 10 }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

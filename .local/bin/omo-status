@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Coloured attention markers on Ghostty tabs for omo sessions. tmux puts the
+# session's @omo_status in front of the tab title (set-titles-string in
+# ~/.tmux.conf), so each tab shows what its agents need:
+#   🔴 stopped with an error   🟡 waiting for your answer
+#   🟢 finished                🔵 working
+# Each pane running omo keeps its own state in the pane option @omo_state, and
+# the tab shows the most urgent one. Focusing the tab clears red, amber and green,
+# and selects the pane whose banner you were sent (@omo_jump, set by omo-notify).
+#
+# Usage: omo-status set <pane> <working|input|done|error|clear>
+#        omo-status focus <client>     (run by the tmux client-focus-in hook)
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+icon() {
+  case $1 in
+    error) echo "🔴" ;;
+    input) echo "🟡" ;;
+    done) echo "🟢" ;;
+    working) echo "🔵" ;;
+  esac
+}
+
+rank() {
+  case $1 in
+    error) echo 4 ;;
+    input) echo 3 ;;
+    done) echo 2 ;;
+    working) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+
+show_most_urgent() {
+  local session=$1 state best=""
+  while read -r state; do
+    if (($(rank "$state") > $(rank "$best"))); then best=$state; fi
+  done < <(tmux list-panes -s -t "$session" -F '#{@omo_state}')
+  if [[ -n $best ]]; then
+    tmux set-option -t "$session" @omo_status "$(icon "$best")"
+  else
+    tmux set-option -u -t "$session" @omo_status
+  fi
+}
+
+# You are looking at a pane when its tab has focus and its window is showing.
+looking_at() {
+  local pane=$1 session=$2
+  [[ $(tmux display-message -p -t "$pane" '#{window_active}') == 1 ]] &&
+    tmux list-clients -t "$session" -F '#{client_flags}' | grep -q focused
+}
+
+case ${1:-} in
+  set)
+    pane=${2:?pane id required} state=${3:?state required}
+    session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 0
+    if [[ $state != working && $state != clear ]] && looking_at "$pane" "$session"; then
+      state=clear
+    fi
+    if [[ $state == clear ]]; then
+      tmux set-option -p -u -t "$pane" @omo_state
+    else
+      tmux set-option -p -t "$pane" @omo_state "$state"
+    fi
+    show_most_urgent "$session"
+    ;;
+  focus)
+    client=${2:?client required}
+    session=$(tmux list-clients -F '#{client_name} #{session_id}' | awk -v c="$client" '$1 == c { print $2 }')
+    [[ -n $session ]] || exit 0
+    jump=$(tmux show-option -qv -t "$session" @omo_jump)
+    if [[ -n $jump ]]; then
+      tmux set-option -u -t "$session" @omo_jump
+      tmux select-window -t "$jump" \; select-pane -t "$jump" 2>/dev/null
+    fi
+    while read -r pane state; do
+      case $state in
+        input | done | error) tmux set-option -p -u -t "$pane" @omo_state ;;
+      esac
+    done < <(tmux list-panes -s -t "$session" -F '#{pane_id} #{@omo_state}')
+    show_most_urgent "$session"
+    ;;
+  *)
+    sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+    exit 2
+    ;;
+esac

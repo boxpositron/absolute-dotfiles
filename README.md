@@ -157,7 +157,7 @@ Key features:
 
 ### Development Tools
 
-- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings; sets the terminal title to the session name
+- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings; sets the terminal title to the session name, after the omo status marker when there is one
 - **Zed** (`.config/zed/keymap.json`): Editor key bindings. Settings stay local because they reference machine-specific agent paths
 - **tmux server** (`.tmux-server.conf`): Lightweight tmux config for remote servers
 - **Git**: Global gitignore patterns (`.rgignore`, `.gitignore`)
@@ -196,7 +196,7 @@ MCP servers: Playwright, Chrome DevTools, Linear, reoclo, time, ast-grep, headro
 #### OmO (`.config/omo/`)
 
 - `omo.jsonc` (linked as `~/.omo/omo.jsonc`): agent and category model routing for OpenCode and the native harness.
-- `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` for a macOS notification when a session stops or needs attention.
+- `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` when you send a prompt, when a session stops and when it asks you something, for the sound, the notification and the coloured tab marker.
 - `prompts/` (linked as `~/.omo/agent/prompts`): slash commands for `owt` workspaces.
   - `/linear-sync [notes]` posts a progress comment on the workspace's Linear issues and sets them to In Progress, or In Review once a PR is open.
   - `/owt-done [notes]` finishes a workspace after its PR merges: it comments on each issue and moves it to Done, then runs `owt done --detach`. It asks before discarding uncommitted or unmerged work.
@@ -247,7 +247,8 @@ Custom scripts and binaries are stored in `.local/bin/`:
 - `claude-tmux`: Claude integration with tmux
 - `cldir`: Change directory with Claude context
 - `owt`: Git worktree workspaces for coding agents (see [Agent workspaces](#agent-workspaces-owt))
-- `omo-notify`: macOS notification for OmO's Stop and Notification hooks
+- `omo-notify`: Sound, tab marker and notification for OmO's hooks. Ghostty posts the notification, so clicking it opens the session's tab and pane
+- `omo-status`: Coloured marker in front of the Ghostty tab title for each tmux session running omo: 🔴 stopped with an error, 🟡 waiting for your answer, 🟢 finished, 🔵 working. A tab with several agents shows the most urgent one; focusing the tab clears red, amber and green
 - `docker-nuke`: Force-restart a wedged Docker Desktop, capturing diagnostics to `~/.local/state/docker-nuke/` first (`--dry-run` to preview, `--no-restart` to leave it down, `--deep` for root helpers)
 
 The `links` step of `setup-mac.sh` links each script into `~/.local/bin`, which `.zshrc` puts on your PATH. `pbcopy` and `pbpaste` are OSC 52 clipboard shims for headless servers, so they are not linked on macOS.
