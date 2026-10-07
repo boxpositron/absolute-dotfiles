@@ -13,7 +13,8 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 payload=$(cat)
 field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null; }
 
-event=$(field '.hook_event_name')
+# omo's UserPromptSubmit payload names the event only in "event".
+event=$(field '.hook_event_name // .event')
 project=$(basename "$(field '.cwd')")
 
 # Only top-level sessions live under .omo/agent/sessions/. Subagents, team members
