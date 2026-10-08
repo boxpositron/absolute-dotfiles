@@ -61,6 +61,16 @@ targets=(
     .config/opencode/skills/web-design-guidelines
 )
 
+# Marketing and copy skills vendored from coreyhaines31/marketingskills (see
+# .config/opencode/README.md), linked for OpenCode, Claude Code and OMO.
+marketing_skills=(product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social)
+for skill in "${marketing_skills[@]}"; do
+    for target_dir in .config/opencode/skills .claude/skills .omo/agent/skills; do
+        sources+=(".config/opencode/skills/$skill")
+        targets+=("$target_dir/$skill")
+    done
+done
+
 # Preflight the entire manifest before changing any live file.
 for i in "${!sources[@]}"; do
     source="$repo_root/${sources[$i]}"
