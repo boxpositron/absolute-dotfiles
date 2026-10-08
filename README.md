@@ -248,7 +248,7 @@ Custom scripts and binaries are stored in `.local/bin/`:
 - `cldir`: Change directory with Claude context
 - `owt`: Git worktree workspaces for coding agents (see [Agent workspaces](#agent-workspaces-owt))
 - `omo-notify`: Sound, tab marker and notification for OmO's hooks. Ghostty posts the notification, so clicking it opens the session's tab and pane
-- `omo-status`: Coloured marker in front of the Ghostty tab title for each tmux session running omo: 🔴 stopped with an error, 🟡 waiting for your answer, 🟢 finished, 🔵 working. A tab with several agents shows the most urgent one; focusing the tab clears red, amber and green
+- `omo-status`: Coloured marker in front of the Ghostty tab title for each tmux session running omo: 🔴 stopped with an error, 🟡 waiting for your answer, 🟢 finished, 🔵 working. A tab with several agents shows the most urgent one; focusing the tab clears red, amber and green, and undoes any title you gave the tab by hand so it always shows its session name
 - `docker-nuke`: Force-restart a wedged Docker Desktop, capturing diagnostics to `~/.local/state/docker-nuke/` first (`--dry-run` to preview, `--no-restart` to leave it down, `--deep` for root helpers)
 
 The `links` step of `setup-mac.sh` links each script into `~/.local/bin`, which `.zshrc` puts on your PATH. `pbcopy` and `pbpaste` are OSC 52 clipboard shims for headless servers, so they are not linked on macOS.

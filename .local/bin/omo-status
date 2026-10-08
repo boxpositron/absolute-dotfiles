@@ -7,6 +7,8 @@
 # Each pane running omo keeps its own state in the pane option @omo_state, and
 # the tab shows the most urgent one. Focusing the tab clears red, amber and green,
 # and selects the pane whose banner you were sent (@omo_jump, set by omo-notify).
+# It also clears any title you gave the Ghostty tab by hand, so tabs always show
+# their tmux session's name.
 #
 # Usage: omo-status set <pane> <working|input|done|error|clear>
 #        omo-status focus <client>     (run by the tmux client-focus-in hook)
@@ -51,6 +53,22 @@ looking_at() {
     tmux list-clients -t "$session" -F '#{client_flags}' | grep -q focused
 }
 
+# A tab renamed in Ghostty ignores tmux's title until the override is cleared.
+# Finds the tab by its terminal title, which tmux keeps as "[marker ]<session>".
+reset_tab_title() {
+  osascript - "$1" <<'APPLESCRIPT' >/dev/null 2>&1
+on run argv
+  set sessionName to item 1 of argv
+  if application "Ghostty" is not running then return
+  tell application "Ghostty"
+    repeat with term in (every terminal whose name is sessionName or name ends with (" " & sessionName))
+      perform action "set_tab_title:" on term
+    end repeat
+  end tell
+end run
+APPLESCRIPT
+}
+
 case ${1:-} in
   set)
     pane=${2:?pane id required} state=${3:?state required}
@@ -80,6 +98,7 @@ case ${1:-} in
       esac
     done < <(tmux list-panes -s -t "$session" -F '#{pane_id} #{@omo_state}')
     show_most_urgent "$session"
+    reset_tab_title "$(tmux display-message -p -t "$session" '#{session_name}')"
     ;;
   *)
     sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
