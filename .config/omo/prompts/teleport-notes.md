@@ -1,7 +1,5 @@
 ---
 description: Teleport documentation files from Obsidian vault to local project
-agent: general
-subtask: true
 ---
 
 # Teleport Notes

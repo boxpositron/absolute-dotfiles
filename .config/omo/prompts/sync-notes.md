@@ -1,7 +1,5 @@
 ---
 description: Bidirectionally sync documentation files between local project and Obsidian vault
-agent: general
-subtask: true
 ---
 
 # Sync Notes

@@ -1,7 +1,5 @@
 ---
 description: Validate .withcontextconfig.jsonc for errors and warnings
-agent: general
-subtask: true
 ---
 
 # Validate Notes Configuration

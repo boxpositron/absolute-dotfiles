@@ -1,7 +1,5 @@
 ---
 description: Intelligently analyze and setup documentation architecture for the project
-agent: general
-subtask: true
 ---
 
 # Intelligent Documentation Setup

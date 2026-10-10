@@ -1,7 +1,5 @@
 ---
 description: Analyze vault structure and organization
-agent: general
-subtask: true
 ---
 
 # Analyze Vault Structure

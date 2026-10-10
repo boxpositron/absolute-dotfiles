@@ -1,7 +1,5 @@
 ---
 description: Preview which documentation files will be delegated to vault vs local
-agent: general
-subtask: true
 ---
 
 # Preview Notes Delegation

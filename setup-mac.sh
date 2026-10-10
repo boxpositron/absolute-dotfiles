@@ -46,8 +46,6 @@ local_servers
 .config/zellij/config.kdl
 .config/zed/keymap.json
 .config/zed/settings.json
-.config/opencode/agent
-.config/opencode/command
 .config/omo/hooks.json:.omo/agent/hooks.json
 .config/omo/prompts:.omo/agent/prompts
 "
@@ -319,11 +317,6 @@ step_ai() {
     else
         run_remote https://claude.ai/install.sh
     fi
-    if have opencode; then
-        info "OpenCode already installed"
-    else
-        run_remote https://opencode.ai/install --no-modify-path
-    fi
     if have codex; then info "Codex already installed"; else run brew install --cask codex; fi
     # link-ai-configs.sh needs Node from the runtimes step.
     local args=""
@@ -423,7 +416,7 @@ main() {
     if [[ -z $selected ]]; then selected=$STEPS; fi
 
     # Tools from non-Homebrew installers live here; the steps look for them.
-    export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.opencode/bin:$HOME/.cargo/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$PATH"
     load_brew_env || true
     if $DRY_RUN; then say "Dry run: nothing will be changed"; fi
 
@@ -449,7 +442,7 @@ main() {
         info "Steps that need you:"
         info "- Sign in to the App Store, then rerun ./setup-mac.sh apps for the App Store apps"
         info "- 1Password: turn on the SSH agent (Settings > Developer); .zshrc uses it for SSH"
-        info "- Sign in: gh auth login, then Claude Code, Codex and OpenCode"
+        info "- Sign in: gh auth login, then omo, Claude Code and Codex"
         info "- Open a new terminal to load the new shell setup"
     fi
     [[ -z $failed ]]

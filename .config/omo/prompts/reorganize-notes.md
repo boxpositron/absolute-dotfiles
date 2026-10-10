@@ -1,7 +1,5 @@
 ---
 description: Reorganize vault with AI-assisted suggestions
-agent: general
-subtask: true
 ---
 
 # Reorganize Notes

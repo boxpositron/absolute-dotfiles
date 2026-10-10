@@ -26,9 +26,11 @@
       "/LICENSE",
       "/AGENTS.md",
       
-      // OpenCode configuration and documentation (must stay local per AGENTS.md)
+      // Agent configuration and documentation (must stay local per AGENTS.md)
+      ".config/omo/**",
+      ".config/claude/**",
+      ".config/ai/**",
       ".config/opencode/**",
-      "opencode.json",
       
       // Component READMEs (stay with their configurations)
       ".config/*/README.md",

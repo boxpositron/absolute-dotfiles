@@ -30,7 +30,7 @@ Delegation handoff must include: purpose/action; context and reference paths; ap
 
 Run the affected build/type/tests. Start the app on loopback using its documented command. Inspect at desktop and mobile widths, with an intermediate width when breakpoints or layout complexity warrant it. Use product targets, or proposed defaults 1280×900, 390×844, and 768×900. Record URL, viewport, state, and screenshot path.
 
-After capture, check whether the tool response contains an actual image. If it returns only a path, use the native image-capable `read` tool to open the PNG, or attach it to the GPT session (`opencode run --model <existing-GPT-model> --file <screenshot> -- <inspection-prompt>`). Keep existing model identifiers; do not invent one. Describe concrete visible details to demonstrate receipt. DOM checks are complementary, not substitutes. If the model cannot see pixels, report the exact failing delivery step and do not claim visual QA.
+After capture, check whether the tool response contains an actual image. If it returns only a path, use the native image-capable `read` tool to open the PNG, or hand the screenshot path to a GPT worker through `task(category: "visual-engineering")` and have it open the PNG with its own image-capable `read` tool. Keep existing model identifiers; do not invent one. Describe concrete visible details to demonstrate receipt. DOM checks are complementary, not substitutes. If the model cannot see pixels, report the exact failing delivery step and do not claim visual QA.
 
 ## 5. Bounded critique and correction
 

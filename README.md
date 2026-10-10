@@ -25,7 +25,7 @@ This repository contains personal dotfiles for configuring a complete developmen
 - **Neovim Configuration**: Extensive Lua-based configuration with LSP support, debugging, and 50+ productivity plugins
 - **Terminal Emulators**: Configurations for Ghostty and WezTerm with custom themes and visual effects
 - **Shell Environment**: Optimized Zsh configuration with Starship prompt and useful aliases
-- **AI Integration**: OpenCode, OmO and Claude Code configuration, shared agent preferences, and `owt` workspaces that give each agent task its own git worktree
+- **AI Integration**: OmO and Claude Code configuration, shared agent preferences, and `owt` workspaces that give each agent task its own git worktree
 - **Development Tools**: Pre-configured settings for Git, tmux, direnv, and various language servers
 - **Documentation Management**: with-context MCP integration for knowledge management
 
@@ -66,7 +66,7 @@ The script is safe to rerun: each step checks what is already in place and only 
 | `links` | Fetches the Neovim submodule on a fresh clone and symlinks the configs and `.local/bin` scripts into `$HOME`, backing up anything it replaces to `~/.local/state/dotfiles/backups/` |
 | `shell` | Installs oh-my-zsh and the tmux plugins |
 | `runtimes` | Node with nvm and the global npm packages, Rust, Python with pyenv, poetry, and Flutter with fvm |
-| `ai` | Installs omo, Claude Code, OpenCode and Codex, then runs `link-ai-configs.sh` |
+| `ai` | Installs omo, Claude Code and Codex, then runs `link-ai-configs.sh` |
 | `apps` | Installs the GUI and App Store apps in `Brewfile.apps` |
 
 `brew` and `apps` never upgrade packages that are already installed. `apps` skips apps already in `/Applications` that Homebrew did not install, and its App Store entries need you signed in to the App Store first. To list what is installed but missing from `Brewfile`, run `brew bundle dump --file=- | diff Brewfile -`.
@@ -91,7 +91,7 @@ ln -s ~/dotfiles/.zshrc ~/.zshrc
 
 ### AI configuration restore
 
-The `ai` step of `setup-mac.sh` runs this script. To run it on its own after installing Node.js, OpenCode, Claude Code, and OMC:
+The `ai` step of `setup-mac.sh` runs this script. To run it on its own after installing Node.js, omo, Claude Code, and OMC:
 
 ```bash
 bash ~/dotfiles/link-ai-configs.sh --dry-run
@@ -100,16 +100,16 @@ bash ~/dotfiles/link-ai-configs.sh
 
 The script creates individual relative symlinks, skips existing correct links, and backs up replaced files or links under `~/.local/state/dotfiles-ai/backups/`. It does not replace whole configuration directories. To undo a replacement, remove that individual symlink and move its corresponding backup back to the original path.
 
-- `.config/omo/omo.jsonc` supplies `~/.omo/omo.jsonc`. Model routing is preserved; the OpenCode overlay excludes only the OMC Claude plugin through `claude_code.plugins_override`.
-- `.config/ai/AGENTS.md` holds shared personal preferences. OpenCode loads it through `~/.config/opencode/AGENTS.md` instead of falling back to Claude's global orchestration instructions. Claude imports it from its own `CLAUDE.md`.
+- `.config/omo/omo.jsonc` supplies `~/.omo/omo.jsonc` with OmO's model routing, including the `design-critique-a` and `design-critique-b` categories that the Impeccable critique delegates its two assessments to.
+- `.config/ai/AGENTS.md` holds shared personal preferences. OmO reads it through `~/.config/opencode/AGENTS.md`, which is hard-wired in OmO's rules engine ahead of `~/.claude/CLAUDE.md`; the engine stops at the first file it finds, so this link both supplies these preferences and keeps Claude's OMC orchestration instructions out of OmO. Keep it even though OpenCode is retired. Claude imports the same file from its own `CLAUDE.md`.
 - `.config/claude/` supplies Claude's global instructions, settings, and OMC preferences. The machine-specific OMC `nodeBinary` cache is intentionally omitted; install Node.js and run OMC setup on each new machine to configure its runtime and HUD.
-- OpenCode's main configuration, TUI registration, and existing command/MCP isolation plugins are linked individually. Other portable Claude plugins and user skills remain enabled.
+- `.config/omo/skills/` holds the vendored Impeccable, Vercel `web-design-guidelines`, `frontend-workflow` and marketing skills. The script links every one into `~/.omo/agent/skills/`, and all but `frontend-workflow` into `~/.claude/skills/`; see [the skills README](.config/omo/skills/README.md) for provenance and upgrades. Portable Claude plugins and unrelated user skills remain enabled.
 
-Credentials, `settings.local.json`, plugin installations, unrelated user skills, histories, caches, and runtime state are not copied into this repository or managed by this script. The selected Impeccable, Vercel web-design-guidelines and frontend-workflow skills are managed individually; see [the GPT visual workflow](.config/opencode/README.md) for provenance, verification and rollback. Install other desired plugins and portable skills separately. OpenCode's local MCP servers are referenced through `{env:HOME}`, so the paths are portable, but the servers themselves (headroom, agcanvas, uvx, ast-grep-mcp, portfolio-mcp) must be installed at those locations on a new machine.
+Credentials, `settings.local.json`, plugin installations, unrelated user skills, histories, caches, and runtime state are not copied into this repository or managed by this script. Install other desired plugins and portable skills separately. OmO's MCP servers live in `~/.omo/agent/mcp.json`, which this repository does not manage; the local ones (headroom, agcanvas, uvx, ast-grep-mcp, portfolio-mcp) must be installed on a new machine before they resolve.
 
 The OmO hooks and slash commands (`~/.omo/agent/hooks.json` and `~/.omo/agent/prompts`) and the workspace scripts in `~/.local/bin` are linked by the `links` step of `setup-mac.sh` instead.
 
-Restart OpenCode and Claude Code after applying changes. On first use, Claude may ask to approve the shared preferences import. Updates can rewrite generated configuration or replace symlinks: review the live files and repository diff before rerunning the link script, which backs up divergent live files rather than merging them. No plugin versions or model choices are changed by this restore step.
+Restart OmO and Claude Code after applying changes. On first use, Claude may ask to approve the shared preferences import. Updates can rewrite generated configuration or replace symlinks: review the live files and repository diff before rerunning the link script, which backs up divergent live files rather than merging them. No plugin versions or model choices are changed by this restore step.
 
 ## Components
 
@@ -122,7 +122,7 @@ Restart OpenCode and Claude Code after applying changes. On first use, Claude ma
 - **Themes**: Multiple colorschemes including Catppuccin, Tokyo Night, and Rose Pine
 
 Key features:
-- AI-powered coding assistance (Claude, OpenCode)
+- AI-powered coding assistance (Claude, OmO)
 - Advanced Git integration
 - Flutter and mobile development support
 - Python environment management
@@ -169,37 +169,21 @@ Key features:
 
 ### AI and Coding Assistants
 
-#### OpenCode (`.config/opencode/`)
-
-Specialized AI agents for different development workflows:
-
-- **debug**: Debugging assistance and troubleshooting
-- **docs**: Documentation generation and maintenance
-- **qa**: Quality assurance and code analysis
-- **refactor**: Code refactoring patterns and best practices
-- **review**: Code review guidelines and automation
-- **security**: Security audits and vulnerability scanning
-- **setup**: Project initialization and setup workflows
-- **test**: Test generation and execution
-- **webgen**: Web page generation from ideas
-
-Custom commands:
-- `/setup-mcp`: MCP server configuration
-- Additional commands in `.config/opencode/command/`
-
-Plugins:
-- **oh-my-openagent**, **opencode-antigravity-auth** and **envsitter-guard** from npm
-- **strip-claude-only-commands** and **strip-omc-mcp** (`.config/opencode/plugin/`): keep Claude-only commands and OMC's MCP servers out of OpenCode
-
-MCP servers: Playwright, Chrome DevTools, Linear, reoclo, time, ast-grep, headroom, agcanvas and portfolio.
-
 #### OmO (`.config/omo/`)
 
-- `omo.jsonc` (linked as `~/.omo/omo.jsonc`): agent and category model routing for OpenCode and the native harness.
+OpenCode is retired. Its agents, commands and plugins are left in `.config/opencode/` for reference, are no longer installed or linked, and its skills and slash commands moved here.
+
+- `omo.jsonc` (linked as `~/.omo/omo.jsonc`): model routing for the main session, task categories and curated agents. `design-critique-a` and `design-critique-b` are the two lanes the Impeccable critique delegates its assessments to.
 - `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` when you send a prompt, when a session stops and when it asks you something, for the sound, the notification and the coloured tab marker.
-- `prompts/` (linked as `~/.omo/agent/prompts`): slash commands for `owt` workspaces.
+- `prompts/` (linked as `~/.omo/agent/prompts`): slash commands.
   - `/linear-sync [notes]` posts a progress comment on the workspace's Linear issues and sets them to In Progress, or In Review once a PR is open.
   - `/owt-done [notes]` finishes a workspace after its PR merges: it comments on each issue and moves it to Done, then runs `owt done --detach`. It asks before discarding uncommitted or unmerged work.
+  - `/impeccable [command] [target]` runs the Impeccable design skill.
+  - `/setup-notes`, `/sync-notes`, `/ingest-notes`, `/teleport-notes`, `/analyze-vault`, `/reorganize-notes`, `/preview-notes-delegation` and `/validate-notes-config` manage with-context documentation delegation. They came over from OpenCode and need the with-context MCP server, which is not in `~/.omo/agent/mcp.json`.
+- `skills/` (linked into `~/.omo/agent/skills/`, and into `~/.claude/skills/` for the shared ones): the vendored Impeccable, Vercel `web-design-guidelines`, `frontend-workflow` and marketing skills. See [the skills README](.config/omo/skills/README.md) for provenance, local modifications and upgrades.
+- `archive/`: the OpenCode-era `DEVELOPMENT-WORKFLOW.md` and `UI-WORKFLOW.md`, kept for reference and loaded by nothing.
+
+MCP servers (in `~/.omo/agent/mcp.json`, which this repository does not manage): Playwright, Chrome DevTools, Linear, reoclo, time, ast-grep, headroom, agcanvas and portfolio.
 
 #### Agent workspaces (`owt`)
 
@@ -265,8 +249,8 @@ Docker Compose configuration for local development services in `local_servers/`.
    - Configure in `.config/nvim/lua/absolute/after/`
 2. **Shell Aliases**: Modify `.zshrc` to add custom aliases and functions
 3. **Git Configuration**: Update `.gitignore` or `.rgignore` for global ignore patterns
-4. **OpenCode Agents**: Create custom agents in `.config/opencode/agent/`
-5. **OpenCode Commands**: Add custom commands in `.config/opencode/command/`
+4. **OmO Skills**: Add a skill in `.config/omo/skills/`, then link it with `link-ai-configs.sh`
+5. **OmO Slash Commands**: Add a prompt template in `.config/omo/prompts/`
 
 ### Theme Customization
 
@@ -287,7 +271,7 @@ This repository uses the with-context MCP server for documentation management. S
 
 - Documentation delegation patterns
 - Local vs. vault documentation
-- OpenCode agent workflows
+- OmO skills and slash commands
 - Best practices for AI agents
 
 Key documentation files:
@@ -386,12 +370,12 @@ This project is open source and available under the MIT License. See individual 
 
 - [Absolute VIM](https://github.com/boxpositron/absolute-vim) - Neovim configuration foundation
 - The open-source community for the amazing tools and plugins
-- OpenCode team for AI-powered development workflows
+- The OmO and Claude Code teams for AI-powered development workflows
 - Contributors and users who provide feedback and improvements
 
 ## Resources
 
-- **OpenCode Documentation**: https://opencode.ai/docs
+- **OmO Documentation**: https://github.com/code-yeongyu/oh-my-openagent
 - **Neovim Plugin Ecosystem**: https://github.com/rockerBOO/awesome-neovim
 - **Dotfiles Community**: https://dotfiles.github.io
 
@@ -405,4 +389,4 @@ For questions, issues, or suggestions, please open an issue on the GitHub reposi
 **Platform**: macOS (Darwin)  
 **Primary Editor**: Neovim  
 **Shell**: Zsh  
-**AI Tools**: OpenCode, OmO, Claude Code
+**AI Tools**: OmO, Claude Code, Codex

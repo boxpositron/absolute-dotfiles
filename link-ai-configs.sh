@@ -31,16 +31,6 @@ sources=(
     .config/claude/omc.json
     .config/claude/CLAUDE.md
     .config/claude/settings.json
-    .config/opencode/opencode.json
-    .config/opencode/tui.json
-    .config/opencode/plugin/strip-omc-mcp.ts
-    .config/opencode/plugin/strip-claude-only-commands.ts
-    .config/opencode/plugin/lib/claude-only-command-registry.ts
-    .config/opencode/UI-WORKFLOW.md
-    .config/opencode/DEVELOPMENT-WORKFLOW.md
-    .config/opencode/skills/frontend-workflow
-    .config/opencode/skills/impeccable
-    .config/opencode/skills/web-design-guidelines
 )
 targets=(
     .config/ai/AGENTS.md
@@ -49,26 +39,26 @@ targets=(
     .claude/.omc-config.json
     .claude/CLAUDE.md
     .claude/settings.json
-    .config/opencode/opencode.json
-    .config/opencode/tui.json
-    .config/opencode/plugin/strip-omc-mcp.ts
-    .config/opencode/plugin/strip-claude-only-commands.ts
-    .config/opencode/plugin/lib/claude-only-command-registry.ts
-    .config/opencode/UI-WORKFLOW.md
-    .config/opencode/DEVELOPMENT-WORKFLOW.md
-    .config/opencode/skills/frontend-workflow
-    .config/opencode/skills/impeccable
-    .config/opencode/skills/web-design-guidelines
 )
 
-# Marketing and copy skills vendored from coreyhaines31/marketingskills (see
-# .config/opencode/README.md), linked for OpenCode, Claude Code and OMO.
-marketing_skills=(product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social)
-for skill in "${marketing_skills[@]}"; do
-    for target_dir in .config/opencode/skills .claude/skills .omo/agent/skills; do
-        sources+=(".config/opencode/skills/$skill")
-        targets+=("$target_dir/$skill")
-    done
+# ~/.config/opencode/AGENTS.md above is OmO's global-rules path, not an OpenCode
+# file. OmO's rules engine reads it before ~/.claude/CLAUDE.md and stops at the
+# first hit, so this link both supplies the shared preferences and keeps Claude
+# Code's OMC orchestration text out of OmO. Keep it after OpenCode is gone.
+
+# Skills vendored from upstream repos; provenance, verification and upgrade
+# steps are in .config/omo/skills/README.md. frontend-workflow is the OmO
+# delegation process skill and is not linked into Claude Code; the rest are
+# shared by both harnesses.
+omo_skills=(frontend-workflow impeccable web-design-guidelines product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social)
+claude_skills=(impeccable web-design-guidelines product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social)
+for skill in "${omo_skills[@]}"; do
+    sources+=(".config/omo/skills/$skill")
+    targets+=(".omo/agent/skills/$skill")
+done
+for skill in "${claude_skills[@]}"; do
+    sources+=(".config/omo/skills/$skill")
+    targets+=(".claude/skills/$skill")
 done
 
 # Preflight the entire manifest before changing any live file.

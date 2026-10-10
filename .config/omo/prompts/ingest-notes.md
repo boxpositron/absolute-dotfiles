@@ -1,7 +1,5 @@
 ---
 description: Ingest local documentation files to Obsidian vault
-agent: general
-subtask: true
 ---
 
 # Ingest Notes

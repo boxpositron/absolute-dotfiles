@@ -24,7 +24,6 @@ cask "johannesnagl/tap/showmd", trusted: true
 # AI and agents
 cask "conductor"
 cask "claude"
-cask "opencode-desktop"
 cask "lm-studio"
 cask "ollama-app"
 cask "emdash"
