@@ -32,6 +32,8 @@ Resolve one stable target, run two independent assessments, synthesize a design 
 
 Delegate Assessment A and Assessment B to separate sub-agents. They must not see each other's output. Do not show findings to the user until synthesis.
 
+OmO routing: when the task tool accepts a category, spawn Assessment A with `category: "design-critique-a"` and Assessment B with `category: "design-critique-b"`. Never pass `model` with a category.
+
 Sub-agent gate (all harnesses):
 - Unless a harness-specific gate below overrides this, spawn A and B as two isolated, parallel sub-agents whenever a sub-agent/Task tool is exposed. This is the default and is mandatory; do not run them inline because it is faster.
 - "Unavailable" means exactly one thing: no sub-agent/Task tool is exposed in this session (or, on harnesses that ask, the user declined). It does not mean inconvenient.

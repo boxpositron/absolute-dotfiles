@@ -110,6 +110,33 @@
         "reasoning": "high",
         "prompt_append": "Before substantive UI work, load frontend-workflow. Follow the product's design context, keep one writer per file set, inspect actual desktop and mobile screenshots, exercise the primary interaction, and report verification evidence. Stop when acceptance criteria pass."
       },
+      // impeccable critique. A = design-director review (taste, heuristics): Opus 5.5 has the top Design Arena
+      // website Elo of the models we run (1339 vs Sonnet 5.5 1322, Fable 5.1 1318; GPT-6 unranked, Oct 2026).
+      // B = detector + browser evidence (mechanical tool use): GPT-6.1 Sol, with a Claude fallback so B stays available.
+      "design-critique-a": {
+        "models": [
+          {
+            "model": "anthropic-subscription/claude-opus-5-5",
+            "reasoning": "xhigh"
+          },
+          {
+            "model": "anthropic-subscription/claude-fable-5-1",
+            "reasoning": "xhigh"
+          }
+        ]
+      },
+      "design-critique-b": {
+        "models": [
+          {
+            "model": "chatgpt-subscription/gpt-6.1-sol",
+            "reasoning": "high"
+          },
+          {
+            "model": "anthropic-subscription/claude-sonnet-5-5",
+            "reasoning": "high"
+          }
+        ]
+      },
       "writing": {
         "models": [
           {
