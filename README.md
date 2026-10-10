@@ -22,7 +22,7 @@ This repository contains personal dotfiles for configuring a complete developmen
 
 ## Features
 
-- **Neovim Configuration**: Extensive Lua-based configuration with LSP support, debugging, and 50+ productivity plugins
+- **Neovim Configuration**: Extensive Lua-based configuration with LSP support, debugging, and around 40 productivity plugins
 - **Terminal Emulators**: Configurations for Ghostty and WezTerm with custom themes and visual effects
 - **Shell Environment**: Optimized Zsh configuration with Starship prompt and useful aliases
 - **AI Integration**: OmO and Claude Code configuration, shared agent preferences, and `owt` workspaces that give each agent task its own git worktree
@@ -122,13 +122,12 @@ Restart OmO and Claude Code after applying changes. On first use, Claude may ask
 - **Themes**: Multiple colorschemes including Catppuccin, Tokyo Night, and Rose Pine
 
 Key features:
-- AI-powered coding assistance (Claude, OmO)
-- Advanced Git integration
+- snacks.nvim for the fuzzy picker, notifications and input prompts (replacing Telescope, nvim-notify and dressing)
+- Completion with blink.cmp (replacing nvim-cmp)
+- Advanced Git integration, including inline current-line blame
 - Flutter and mobile development support
 - Python environment management
 - Integrated debugging (DAP)
-- File tree navigation
-- Fuzzy finding with Telescope
 - Terminal integration
 
 ### Terminal Emulators
@@ -206,12 +205,6 @@ owt done                # remove the workspace you are in once its work is merge
 `owt cd` works from any directory. Inside a repository the picker starts filtered to that repo's workspaces and jumps straight in when only one matches. The `owt` function in `.zshrc` performs the `cd`; without it, `owt cd` only prints the path.
 
 `owt done` refuses to discard work unless you pass `--force`. Work counts as merged when the branch is part of the default branch or its Gitea PR is merged (checked with `tea`). It then deletes the remote and local branch, removes the worktree and its memory link, and closes tmux windows open in it. `OWT_ROOT` (default `~/worktrees`) and `OWT_AGENT` (default `omo`) override the defaults; `owt --help` lists every option.
-
-#### Neovim AI Integration
-
-- **CodeCompanion**: AI pair programming with multiple providers
-- **Gen.nvim**: Local LLM integration
-- **LLM.nvim**: Additional LLM capabilities
 
 ## Configuration
 
