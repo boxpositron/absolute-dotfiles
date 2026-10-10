@@ -5,6 +5,7 @@
 # with the agent launched inside it in its own tmux window. A workspace can
 # carry any number of Linear issues; the agent renames the branch to
 # feature/<keys>-<slug> once it knows them and keeps their status in sync.
+# It also titles the window with one to three words naming the work.
 
 set -euo pipefail
 
@@ -42,6 +43,12 @@ Usage (run from anywhere inside the repo):
         feature/<keys>-<slug> (e.g. feature/pra-107-108-imap-timeouts), moves
         each issue to In Progress, and to In Review with the PR link.
   owt open <name>      Open a tmux window running the agent in an existing workspace
+  owt title <words>    Title the tmux windows of the workspace you are in with one to
+                       three words naming the work (owt title imap timeouts). The
+                       agent does this itself; owt open reuses the saved title.
+  owt hook             omo UserPromptSubmit hook (wired in ~/.omo/agent/hooks.json):
+                       inside a workspace, tells the agent its tab title with each
+                       prompt so it keeps the title current; elsewhere prints nothing
   owt ls               List this repo's workspaces and their branches
   owt all              List the workspaces of every repo with their branches and
                        source checkouts (works from any directory)
@@ -149,6 +156,27 @@ pr_info() {
 }
 ws_dir() { printf '%s/%s/%s\n' "$OWT_ROOT" "$(repo_name)" "$1"; }
 
+# A workspace's tab title, kept in the worktree's own git dir so owt open can
+# reuse it and removing the worktree removes it too.
+title_file() { printf '%s/owt-title\n' "$(git -C "$1" rev-parse --path-format=absolute --git-dir)"; }
+
+ws_title() {
+  local file
+  file="$(title_file "$1")"
+  if [[ -f "$file" ]]; then cat "$file"; fi
+}
+
+# tmux windows with a pane open in a workspace, one id per line. tmux reports
+# resolved paths, so compare against the resolved workspace path.
+ws_windows() {
+  local real_dir win path
+  command -v tmux >/dev/null && tmux list-panes -a >/dev/null 2>&1 || return 0
+  real_dir="$(cd "$1" && pwd -P)"
+  tmux list-panes -a -F '#{window_id} #{pane_current_path}' | while read -r win path; do
+    if [[ "$path" == "$real_dir" || "$path" == "$real_dir"/* ]]; then printf '%s\n' "$win"; fi
+  done | sort -u
+}
+
 name_taken() {
   [[ -e "$(ws_dir "$1")" ]] || git -C "$(main_root)" show-ref --verify --quiet "refs/heads/feature/$1"
 }
@@ -197,7 +225,8 @@ install_deps() {
 
 # Standing workspace conventions, appended to the agent's system prompt on every launch.
 workspace_prompt() {
-  local name="$1" dir="$2" branch
+  local name="$1" dir="$2" branch title
+  title="$(ws_title "$dir")"
   branch="$(git -C "$dir" symbolic-ref --quiet --short HEAD || printf 'a detached HEAD')"
   printf 'You are in owt workspace "%s" (%s), a git worktree of %s on branch %s. ' \
     "$name" "$dir" "$(repo_name)" "$branch"
@@ -207,17 +236,26 @@ workspace_prompt() {
     # shellcheck disable=SC2016
     printf '%s is a placeholder: once you know the issues, and before the branch is pushed, rename it with `git branch -m feature/<keys>-<slug>`, where <keys> are the lowercased issue keys joined by hyphens with the team prefix written once (PRA-107 and PRA-108 give pra-107-108) and <slug> is a 2 to 5 word kebab-case summary. ' "$branch"
   fi
+  if [[ -n "$title" ]]; then
+    printf 'Its tmux tab is titled "%s". ' "$title"
+  else
+    printf 'Its tmux tab shows the workspace name until you title it. '
+  fi
+  # shellcheck disable=SC2016
+  printf 'As soon as you know what the work is, and again whenever its focus changes, run `owt title <words>` with one to three short words naming it, never a sentence (for example `owt title imap timeouts`). '
   printf 'When a pull request is open, comment on each issue with a short summary and the PR link, and move each to In Review.'
 }
 
 # launch <name> <dir> [initial message]
 launch() {
-  local name="$1" dir="$2" args
+  local name="$1" dir="$2" args window
   shift 2
   args=(--name "$name" --append-system-prompt "$(workspace_prompt "$name" "$dir")" "$@")
+  window="$(ws_title "$dir")"
+  window="${window:-$name}"
   if [[ -n "${TMUX:-}" ]]; then
-    tmux new-window -n "$name" -c "$dir" -- "$OWT_AGENT" "${args[@]}"
-    say "opened tmux window '$name' running $OWT_AGENT"
+    tmux new-window -n "$window" -c "$dir" -- "$OWT_AGENT" "${args[@]}"
+    say "opened tmux window '$window' running $OWT_AGENT"
   else
     say "not in tmux; start with: cd $(printf '%q' "$dir") && $OWT_AGENT$(printf ' %q' "${args[@]}")"
   fi
@@ -276,6 +314,45 @@ cmd_open() {
   [[ -d "$dir" ]] || die "no workspace at $dir"
   link_memory "$dir"
   launch "$name" "$dir"
+}
+
+# Title the tmux windows of the current workspace with what is being worked on.
+cmd_title() {
+  local name dir title words=() win renamed=0
+  name="$(current_ws)" || die "not inside an owt workspace"
+  dir="$(ws_dir "$name")"
+  [[ -d "$dir" ]] || die "no workspace at $dir"
+  read -ra words <<<"$(printf '%s ' "$@" | tr -s '[:space:]' ' ' | tr -d '[:cntrl:]')"
+  [[ ${#words[@]} -ge 1 && ${#words[@]} -le 3 ]] \
+    || die "a title is one to three words naming the work, e.g. owt title imap timeouts"
+  title="${words[*]}"
+
+  printf '%s\n' "$title" >"$(title_file "$dir")"
+  while read -r win; do
+    tmux rename-window -t "$win" "$title"
+    renamed=$((renamed + 1))
+  done < <(ws_windows "$dir")
+  say "titled '$name' as '$title' ($renamed tmux window(s) renamed)"
+}
+
+# omo UserPromptSubmit hook. Inside a workspace it hands the agent the tab's
+# current title with each prompt, so the title keeps up with the work.
+cmd_hook() {
+  local name dir title context
+  [[ -t 0 ]] || cat >/dev/null
+  git rev-parse --git-dir >/dev/null 2>&1 || return 0
+  name="$(current_ws)" || return 0
+  dir="$(ws_dir "$name")"
+  [[ -d "$dir" ]] || return 0
+  title="$(ws_title "$dir")"
+  if [[ -n "$title" ]]; then
+    context="This is owt workspace \"$name\" and its tmux tab is titled \"$title\". If this prompt changes what the work is about, or the focus shifts while you work, retitle it with \`owt title <words>\`: one to three short words naming the work, never a sentence."
+  else
+    context="This is owt workspace \"$name\" and its tmux tab has no title yet, so it shows the workspace name. As soon as you know what the work is, title it with \`owt title <words>\`: one to three short words naming the work, never a sentence (for example \`owt title imap timeouts\`). Retitle it whenever the focus shifts."
+  fi
+  context="${context//\\/\\\\}"
+  context="${context//\"/\\\"}"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$context"
 }
 
 cmd_ls() {
@@ -471,14 +548,8 @@ cmd_done() {
   fi
 
   # Windows with a pane open in the workspace, collected before the directory goes away.
-  # tmux reports resolved paths, so compare against the resolved workspace path.
-  local windows=() real_dir
-  real_dir="$(cd "$dir" && pwd -P)"
-  if command -v tmux >/dev/null && tmux list-panes -a >/dev/null 2>&1; then
-    while read -r win path; do
-      [[ "$path" == "$real_dir" || "$path" == "$real_dir"/* ]] && windows+=("$win")
-    done < <(tmux list-panes -a -F '#{window_id} #{pane_current_path}' | sort -u)
-  fi
+  local windows=() win
+  while read -r win; do windows+=("$win"); done < <(ws_windows "$dir")
 
   if [[ $merged == yes && $remote_branch == yes ]]; then
     git -C "$root" push --quiet origin --delete "$branch" && say "deleted remote branch $branch"
@@ -494,7 +565,6 @@ cmd_done() {
     say "deleted local branch $branch"
   fi
 
-  local win
   for win in $(printf '%s\n' "${windows[@]+"${windows[@]}"}" | sort -u); do
     tmux kill-window -t "$win" 2>/dev/null || true
   done
@@ -504,6 +574,8 @@ case "${1:-}" in
   new)  shift; cmd_new "$@" ;;
   done) shift; cmd_done "$@" ;;
   open) shift; cmd_open "$@" ;;
+  title) shift; cmd_title "$@" ;;
+  hook) shift; cmd_hook ;;
   ls)   shift; cmd_ls ;;
   all)  shift; cmd_all ;;
   cd)   shift; cmd_cd "$@" ;;

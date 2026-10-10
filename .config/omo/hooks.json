@@ -3,7 +3,8 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "~/.local/bin/omo-notify", "timeout": 10 }
+          { "type": "command", "command": "~/.local/bin/omo-notify", "timeout": 10 },
+          { "type": "command", "command": "~/.local/bin/owt hook", "timeout": 5 }
         ]
       }
     ],

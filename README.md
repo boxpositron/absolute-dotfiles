@@ -175,7 +175,7 @@ Key features:
 OpenCode is retired. Its agents, commands and plugins are left in `.config/opencode/` for reference, are no longer installed or linked, and its skills and slash commands moved here.
 
 - `omo.jsonc` (linked as `~/.omo/omo.jsonc`): model routing for the main session, task categories and curated agents. `design-critique-a` and `design-critique-b` are the two lanes the Impeccable critique delegates its assessments to.
-- `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` when you send a prompt, when a session stops and when it asks you something, for the sound, the notification and the coloured tab marker.
+- `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` when you send a prompt, when a session stops and when it asks you something, for the sound, the notification and the coloured tab marker. It also runs `owt hook` with each prompt, which tells an agent in an `owt` workspace its current tab title so it retitles the tab as the work changes. omo runs a new hook only after you approve it with `/hooks trust <id>` (ids are in `/hooks list`).
 - `prompts/` (linked as `~/.omo/agent/prompts`): slash commands.
   - `/linear-sync [notes]` posts a progress comment on the workspace's Linear issues and sets them to In Progress, or In Review once a PR is open.
   - `/owt-done [notes]` finishes a workspace after its PR merges: it comments on each issue and moves it to Done, then runs `owt done --detach`. It asks before discarding uncommitted or unmerged work.
@@ -197,10 +197,11 @@ owt ls                  # workspaces and their current branches
 owt all                 # workspaces of every repo, with branches and source checkouts (from anywhere)
 owt cd                  # jump into a workspace with fzf; owt cd lagos goes straight there
 owt open lagos          # reopen the agent in a workspace
+owt title imap timeouts # title the workspace's tmux tab (one to three words); the agent does this itself
 owt done                # remove the workspace you are in once its work is merged
 ```
 
-`owt new` starts from the latest `origin` default branch, copies local `.env` files, installs dependencies, and opens a tmux window running omo with the workspace conventions: rename the placeholder branch to `feature/<keys>-<slug>` before pushing, and keep the Linear issues' statuses in sync. Workspaces share the main checkout's omo memory through a link under `~/.omo/memory/agents/`.
+`owt new` starts from the latest `origin` default branch, copies local `.env` files, installs dependencies, and opens a tmux window running omo with the workspace conventions: rename the placeholder branch to `feature/<keys>-<slug>` before pushing, title the tab with one to three words naming the work (`owt title`) and update it when the focus changes, and keep the Linear issues' statuses in sync. The title is saved with the worktree, so `owt open` reopens the tab under it. Workspaces share the main checkout's omo memory through a link under `~/.omo/memory/agents/`.
 
 `owt cd` works from any directory. Inside a repository the picker starts filtered to that repo's workspaces and jumps straight in when only one matches. The `owt` function in `.zshrc` performs the `cd`; without it, `owt cd` only prints the path.
 
