@@ -122,7 +122,7 @@ Restart OmO and Claude Code after applying changes. On first use, Claude may ask
 - **Themes**: Multiple colorschemes including Catppuccin, Tokyo Night, and Rose Pine
 
 Key features:
-- snacks.nvim for the fuzzy picker, notifications and input prompts (replacing Telescope, nvim-notify and dressing)
+- snacks.nvim for the fuzzy picker, file explorer, notifications and input prompts (replacing Telescope, nvim-notify and dressing)
 - Completion with blink.cmp (replacing nvim-cmp)
 - Advanced Git integration, including inline current-line blame
 - Flutter and mobile development support
