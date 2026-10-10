@@ -1,0 +1,67 @@
+#!/usr/bin/env zsh
+# Open the file path under the mouse in a tmux pane, routed by type:
+#   markdown        -> Markdown Preview (GUI)
+#   images, pdf, dirs -> yazi in a split pane (image preview via passthrough)
+#   anything else   -> nvim in a split pane, jumping to :line when present
+#
+# Called from a tmux mouse binding:
+#   tmux-open-path <pane_id> <pane_current_path> <mouse_x> <mouse_line>
+
+emulate -L zsh
+setopt extendedglob
+
+pane=$1 cwd=$2 x=$3 line=$4
+
+fail() { tmux display-message -d 2000 "open-path: $1"; exit 1 }
+
+[[ -n $pane && -n $cwd && $x == <-> ]] || fail "usage: tmux-open-path PANE CWD X LINE"
+
+# Grab the run of path-like characters around the clicked column. Whitespace,
+# quotes, brackets and box-drawing borders end a token.
+local stop=$' \t"\'`()[]{}<>|│┃║─━'
+(( i = x + 1 ))   # mouse_x is 0-based, zsh strings are 1-based
+(( i <= ${#line} )) || fail "nothing under cursor"
+[[ $stop == *${line[i]}* ]] && fail "nothing under cursor"
+(( s = i )); while (( s > 1 )) && [[ $stop != *${line[s-1]}* ]]; do (( s-- )); done
+(( e = i )); while (( e < ${#line} )) && [[ $stop != *${line[e+1]}* ]]; do (( e++ )); done
+token=${line[s,e]}
+
+# Normalise: file:// URLs, @mentions, trailing punctuation, :line[:col], #Lnn.
+token=${token#file://}
+token=${token#@}
+token=${token%%[.,;:!?]##}
+lnum=
+if [[ $token == (#b)(*)\#L(<->)* ]]; then
+    token=$match[1] lnum=$match[2]
+elif [[ $token == (#b)(*):(<->):<-> || $token == (#b)(*):(<->) ]]; then
+    token=$match[1] lnum=$match[2]
+fi
+[[ -n $token ]] || fail "nothing under cursor"
+
+# Resolve against the pane's directory, then the enclosing git root.
+token=${~token}   # expand a leading ~
+# (not "path": zsh ties that name to $PATH)
+file=
+if [[ $token == /* ]]; then
+    [[ -e $token ]] && file=$token
+else
+    for base in $cwd $(git -C $cwd rev-parse --show-toplevel 2>/dev/null); do
+        [[ -e $base/$token ]] && { file=$base/$token; break }
+    done
+fi
+[[ -n $file ]] || fail "no such file: $token"
+file=${file:A}
+
+if [[ -d $file ]]; then
+    tmux split-window -h -t $pane -c $file "yazi ${(q)file}"
+    exit
+fi
+
+case ${file:e:l} in
+    md|markdown|mdx|mdown|mkd|mkdn)
+        open -a "Markdown Preview" $file ;;
+    png|jpg|jpeg|gif|webp|avif|svg|bmp|tif|tiff|heic|ico|pdf)
+        tmux split-window -h -t $pane -c ${file:h} "yazi ${(q)file}" ;;
+    *)
+        tmux split-window -h -t $pane -c $cwd "nvim ${lnum:++$lnum} ${(q)file}" ;;
+esac

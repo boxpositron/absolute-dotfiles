@@ -20,6 +20,7 @@ cask "charles"
 cask "cyberduck"
 cask "chromium"
 cask "johannesnagl/tap/showmd", trusted: true
+cask "markdown-preview"
 
 # AI and agents
 cask "conductor"

@@ -158,7 +158,7 @@ Key features:
 
 ### Development Tools
 
-- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings; sets the terminal title to the session name, after the omo status marker when there is one
+- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings; sets the terminal title to the session name, after the omo status marker when there is one. Ctrl+click a file path in any pane (omo, a shell, logs) to open it with `tmux-open-path`: markdown in Markdown Preview, images, PDFs and directories in yazi, anything else in nvim at the clicked `:line`. yazi and nvim open in a split beside the clicked pane
 - **Zed** (`.config/zed/keymap.json`): Editor key bindings. Settings stay local because they reference machine-specific agent paths
 - **tmux server** (`.tmux-server.conf`): Lightweight tmux config for remote servers
 - **Git**: Global gitignore patterns (`.rgignore`, `.gitignore`)
@@ -232,6 +232,7 @@ Custom scripts and binaries are stored in `.local/bin/`:
 - `claude-tmux`: Claude integration with tmux
 - `cldir`: Change directory with Claude context
 - `owt`: Git worktree workspaces for coding agents (see [Agent workspaces](#agent-workspaces-owt))
+- `tmux-open-path`: Backs tmux's Ctrl+click. Takes the path under the mouse, strips `:line:col`, `#L10`, `@` and `file://`, resolves it against the pane's directory and then its git root, and routes it by type: markdown to Markdown Preview (`cask "markdown-preview"` in `Brewfile.apps`), images, PDFs and directories to yazi, the rest to nvim
 - `omo-notify`: Sound, tab marker and notification for OmO's hooks. Ghostty posts the notification, so clicking it opens the session's tab and pane
 - `omo-status`: Coloured marker in front of the Ghostty tab title for each tmux session running omo: 🔴 stopped with an error, 🟡 waiting for your answer, 🟢 finished, 🔵 working. A tab with several agents shows the most urgent one; focusing the tab clears red, amber and green, and undoes any title you gave the tab by hand so it always shows its session name
 - `docker-nuke`: Force-restart a wedged Docker Desktop, capturing diagnostics to `~/.local/state/docker-nuke/` first (`--dry-run` to preview, `--no-restart` to leave it down, `--deep` for root helpers)
