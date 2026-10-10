@@ -153,6 +153,7 @@ Key features:
 - Starship prompt with custom configuration
 - Auto-completion and syntax highlighting
 - 1Password as the SSH agent, an `sshm` wrapper with completion, and `fs [session]` to reach the remote dev box over mosh into a named tmux session
+- tmux session helpers: `tma [session]` attaches (fzf picker with no argument, switches the client when already inside tmux) and `tml [prefix]` lists sessions. Both Tab-complete the running sessions with their window counts. When no tmux server is up, `tma` starts a new session named after the argument or the current directory, and `tml` and completion say so instead of erroring
 - Resets mouse-reporting modes at each prompt, so an unclean SSH or tmux disconnect cannot leave the terminal spewing escape codes
 
 ### Development Tools

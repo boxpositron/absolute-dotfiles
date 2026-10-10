@@ -198,11 +198,29 @@ _exists() {
 # TMUX  + FZF Setup Start
 #
 
+# Print session names of the running tmux server, one per line. Prints nothing
+# and returns 1 when no server is up, so callers and completion fail cleanly.
+function _tmux_sessions_raw() {
+    tmux list-sessions -F '#S' 2>/dev/null
+}
+
+# tml [prefix]: list tmux sessions, optionally only those starting with prefix.
 function tml() {
-    sessions=$(tmux ls | sed -E 's/:.*$//')
-    for session in $sessions; do
-        echo $session
-    done
+    if ! _exists tmux; then
+        echo "tml: tmux is not installed" >&2
+        return 127
+    fi
+    local sessions
+    sessions=$(_tmux_sessions_raw)
+    if [[ -z $sessions ]]; then
+        echo "tml: no tmux server running (start one with: tma <name>)" >&2
+        return 1
+    fi
+    if [[ -n $1 ]]; then
+        sessions=$(print -r -- "$sessions" | grep -- "^$1")
+        [[ -z $sessions ]] && { echo "tml: no session matches '$1'" >&2; return 1; }
+    fi
+    print -r -- "$sessions"
 }
 
 
@@ -218,18 +236,37 @@ function tmx(){
     fi
 }
 
+# tma [session]: attach to a tmux session. With no argument, pick one with fzf.
+# Inside tmux it switches the client instead of nesting. If no server is up,
+# it starts a new session (named after the argument, or the current directory).
 function tma() {
+    if ! _exists tmux; then
+        echo "tma: tmux is not installed" >&2
+        return 127
+    fi
 
-    # If no argument is passed, show the list of tmux sessions with fzf
-    
-    if [ -z "$1" ]; then
-        tmux attach -t $(tml | fzf)
+    local target="$1"
+
+    if [[ -z $(_tmux_sessions_raw) ]]; then
+        target="${target:-${PWD:t}}"
+        echo "tma: no tmux server running, starting new session '$target'" >&2
+        tmux new-session -s "$target"
         return
     fi
 
-    # If an argument is passed, attach to the session with that name
-    tmux attach -t $1 
+    if [[ -z $target ]]; then
+        target=$(_tmux_sessions_raw | fzf --reverse --prompt="tma> ") || return 1
+    elif ! tmux has-session -t "=$target" 2>/dev/null; then
+        echo "tma: no session named '$target'. Running sessions:" >&2
+        _tmux_sessions_raw | sed 's/^/  /' >&2
+        return 1
+    fi
 
+    if [[ -n $TMUX ]]; then
+        tmux switch-client -t "=$target"
+    else
+        tmux attach-session -t "=$target"
+    fi
 }
 
 function get_tmn_recommendation() {
@@ -258,7 +295,7 @@ function tmn() {
 }
 
 _fzf_complete_tma() {
-  _fzf_complete --multi --reverse --prompt="tma> " -- "$@" < <(tmux ls | sed -E 's/:.*$//')
+  _fzf_complete --reverse --prompt="tma> " -- "$@" < <(_tmux_sessions_raw)
 }
 
 _fzf_complete_tmn() {
@@ -352,6 +389,20 @@ fpath=($HOME/.docker/completions $fpath)
 autoload -Uz compinit
 compinit
 # End of Docker CLI completions
+
+# Tab completion for tma/tml: offer running tmux sessions with window counts.
+# Registered after the last compinit so it is not discarded by a re-init.
+_tmux_session_names() {
+    local -a sessions
+    sessions=(${(f)"$(tmux list-sessions -F '#S:#{session_windows} windows#{?session_attached, (attached),}' 2>/dev/null)"})
+    if (( ! $#sessions )); then
+        _message 'no tmux server running'
+        return 1
+    fi
+    _describe -t tmux-sessions 'tmux session' sessions
+}
+compdef '_arguments "1:tmux session:_tmux_session_names"' tma tml
+zstyle ':completion:*:*:(tma|tml):*:messages' format '%F{yellow}%d%f'
 
 sshm() { TERM=xterm-256color command sshm "$@"; }
 
