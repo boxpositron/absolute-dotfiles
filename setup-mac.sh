@@ -47,6 +47,7 @@ local_servers
 .config/zed/keymap.json
 .config/zed/settings.json
 .config/omo/hooks.json:.omo/agent/hooks.json
+.config/omo/keybindings.json:.omo/agent/keybindings.json
 .config/omo/prompts:.omo/agent/prompts
 "
 
