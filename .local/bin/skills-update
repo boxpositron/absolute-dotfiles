@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# skills-update: refresh omo's upstream-tracked skills. On flowstate-remote it runs daily from the
+# skills-update.timer systemd user unit; `skills-update --install-timer` writes and enables it.
+#
+# Vendored in this repo (.config/omo/skills, linked into ~/.omo/agent/skills), committed and pushed:
+#   impeccable             newest pbakaus/impeccable skill-v* release, re-vendored the way
+#                          .config/omo/skills/README.md describes (path rewrite, OmO routing line)
+#   web-design-guidelines  vercel-labs/agent-skills main, when its content changes
+# Local to this machine (~/.omo/agent/skills, not in git):
+#   vercel-react-best-practices       vercel-labs/agent-skills skills/react-best-practices
+#   docx pdf pptx xlsx skill-creator  anthropics/skills skills/<name>
+# deep-research came from Claude's skill sync and has no public upstream, so it is not updated.
+#
+# Only the skill paths are committed, and the push happens only when main was level with
+# origin/main, so unrelated local edits and unpushed commits are never published. A skill whose
+# update fails is restored to its previous copy, and the run exits non-zero.
+#
+# Env overrides (for testing): DOTFILES, SKILLS, XDG_STATE_HOME.
+
+set -uo pipefail
+
+DOTFILES=${DOTFILES:-$HOME/dotfiles}
+VENDORED=$DOTFILES/.config/omo/skills
+SKILLS=${SKILLS:-$HOME/.omo/agent/skills}
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/skills-update
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+failures=0
+msg=()
+
+log() { printf '%s\n' "$*"; }
+fail() {
+    log "FAIL: $*"
+    failures=$((failures + 1))
+}
+
+install_timer() {
+    local dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+    mkdir -p "$dir"
+    cat >"$dir/skills-update.service" <<EOF
+[Unit]
+Description=Refresh omo skills from their upstream repositories
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=$HOME
+Environment=PATH=$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=$HOME/.local/bin/skills-update
+TimeoutStartSec=15min
+EOF
+    cat >"$dir/skills-update.timer" <<EOF
+[Unit]
+Description=Daily omo skills refresh
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl --user daemon-reload && systemctl --user enable --now skills-update.timer
+}
+
+if [ "${1:-}" = --install-timer ]; then
+    install_timer
+    exit
+fi
+
+# Download one revision of a GitHub repository into its own directory. Nothing in it is executed.
+fetch() {
+    local dir="$work/${1//\//_}@$2"
+    if [ ! -d "$dir" ]; then
+        mkdir -p "$dir"
+        if ! gh api "repos/$1/tarball/$2" | tar xz -C "$dir" --strip-components=1; then
+            rm -rf "$dir"
+            return 1
+        fi
+    fi
+    printf '%s\n' "$dir"
+}
+
+head_sha() { gh api "repos/$1/commits/$2" --jq .sha; }
+
+# The revision recorded for a vendored skill in the provenance table of the skills README.
+readme_rev() { grep -E "^\| \`$1\` \|" "$VENDORED/README.md" | grep -o -E '`[0-9a-f]{40}`' | tr -d '`'; }
+
+# Each vendored updater returns 0 when it changed the skill, 1 when it is current, and 2 or more
+# when it failed and the skill must be restored.
+update_impeccable() {
+    local tag sha src engine dst=$VENDORED/impeccable
+    tag=$(gh api repos/pbakaus/impeccable/releases --jq '[.[] | select(.tag_name | startswith("skill-v"))][0].tag_name') || return 2
+    sha=$(head_sha pbakaus/impeccable "$tag") || return 2
+    if [ "$sha" = "$(readme_rev impeccable)" ]; then
+        log "impeccable: $tag already vendored"
+        return 1
+    fi
+    src=$(fetch pbakaus/impeccable "$sha") || return 2
+    src=$src/.opencode/skills/impeccable
+    [ -f "$src/SKILL.md" ] || { log "impeccable: $tag ships no .opencode skill"; return 2; }
+    rsync -a --delete --exclude LICENSE "$src/" "$dst/"
+    grep -rlF '.opencode/skills/impeccable/scripts' "$dst" |
+        xargs -r sed -i 's#\.opencode/skills/impeccable/scripts#~/.omo/agent/skills/impeccable/scripts#g'
+    if grep -rqF '.opencode/' "$dst"; then
+        log "impeccable: $tag has .opencode paths the rewrite does not cover"
+        return 3
+    fi
+    if ! grep -q '^OmO routing:' "$dst/reference/critique.md"; then
+        python3 - "$dst/reference/critique.md" <<'EOF' || return 3
+import sys
+path = sys.argv[1]
+anchor = "Delegate Assessment A and Assessment B to separate sub-agents."
+routing = ('OmO routing: when the task tool accepts a category, spawn Assessment A with '
+           '`category: "design-critique-a"` and Assessment B with `category: "design-critique-b"`. '
+           'Never pass `model` with a category.')
+lines = open(path).read().split("\n")
+for i, line in enumerate(lines):
+    if line.startswith(anchor):
+        lines[i + 1:i + 1] = ["", routing]
+        open(path, "w").write("\n".join(lines))
+        sys.exit(0)
+sys.exit("impeccable: critique.md no longer has the delegation paragraph the routing line follows")
+EOF
+    fi
+    engine=$(tr -d '[:space:]' <"$dst/scripts/VERSION")
+    sed -i -E "/^\| \`impeccable\` \|/{s/tag \`skill-v[^\`]*\`, engine [0-9.]+/tag \`$tag\`, engine $engine/; s/\`[0-9a-f]{40}\`/\`$sha\`/}" "$VENDORED/README.md"
+    "$dst/scripts/impeccable" engine-probe >/dev/null 2>&1 || log "impeccable: engine $engine download failed; the launcher retries on first use"
+    msg+=("impeccable: $tag, engine $engine ($sha)")
+    log "impeccable: vendored $tag (engine $engine)"
+}
+
+update_web_design_guidelines() {
+    local sha src dst=$VENDORED/web-design-guidelines
+    sha=$(head_sha vercel-labs/agent-skills main) || return 2
+    if [ "$sha" = "$(readme_rev web-design-guidelines)" ]; then
+        log "web-design-guidelines: up to date"
+        return 1
+    fi
+    src=$(fetch vercel-labs/agent-skills "$sha") || return 2
+    src=$src/skills/web-design-guidelines
+    [ -f "$src/SKILL.md" ] || return 2
+    rsync -a --delete "$src/" "$dst/"
+    if ! git -C "$DOTFILES" status --porcelain -- "$dst" | grep -q .; then
+        log "web-design-guidelines: content unchanged at ${sha:0:7}"
+        return 1
+    fi
+    sed -i -E "/^\| \`web-design-guidelines\` \|/s/\`[0-9a-f]{40}\`/\`$sha\`/" "$VENDORED/README.md"
+    msg+=("web-design-guidelines: vercel-labs/agent-skills $sha")
+    log "web-design-guidelines: updated to ${sha:0:7}"
+}
+
+update_vendored() {
+    cd "$DOTFILES" || { fail "no dotfiles checkout at $DOTFILES"; return; }
+    [ "$(git branch --show-current)" = main ] || { fail "dotfiles is not on main; vendored skills skipped"; return; }
+    if git status --porcelain -- .config/omo/skills | grep -q .; then
+        fail "uncommitted edits under .config/omo/skills; vendored skills skipped"
+        return
+    fi
+    git fetch -q origin || { fail "git fetch failed; vendored skills skipped"; return; }
+    local ahead behind name rc
+    read -r ahead behind < <(git rev-list --left-right --count main...origin/main)
+    if [ "$behind" -gt 0 ] && ! git merge -q --ff-only origin/main; then
+        fail "dotfiles cannot fast-forward to origin/main; vendored skills skipped"
+        return
+    fi
+    for name in impeccable web-design-guidelines; do
+        cp "$VENDORED/README.md" "$work/README.md.before"
+        "update_${name//-/_}"
+        rc=$?
+        if [ "$rc" -ge 2 ]; then
+            git checkout -q -- ".config/omo/skills/$name"
+            git clean -fdq -- ".config/omo/skills/$name"
+            cp "$work/README.md.before" "$VENDORED/README.md"
+            fail "$name: update failed (exit $rc); kept the vendored copy"
+        fi
+    done
+    [ "${#msg[@]}" -gt 0 ] || return
+    git add -- .config/omo/skills
+    git commit -q -m "chore(omo): update vendored skills" -m "$(printf '%s\n' "${msg[@]}")" -- .config/omo/skills ||
+        { fail "dotfiles commit failed"; return; }
+    if [ "$ahead" -gt 0 ]; then
+        log "dotfiles: main had $ahead unpushed commits, so $(git rev-parse --short HEAD) stays local"
+    elif git push -q origin main; then
+        log "dotfiles: pushed $(git rev-parse --short HEAD)"
+    else
+        fail "dotfiles push failed; $(git rev-parse --short HEAD) is committed locally"
+    fi
+}
+
+update_local() {
+    local name=$1 repo=$2 path=$3 dst=$SKILLS/$1 sha src
+    if [ -L "$dst" ]; then
+        log "$name: links into the dotfiles, skipped"
+        return
+    fi
+    sha=$(head_sha "$repo" main) || { fail "$name: cannot read $repo"; return; }
+    if [ "$sha" = "$(cat "$STATE/$name" 2>/dev/null)" ]; then
+        log "$name: up to date"
+        return
+    fi
+    src=$(fetch "$repo" "$sha") || { fail "$name: download of $repo failed"; return; }
+    src=$src/$path
+    [ -f "$src/SKILL.md" ] || { fail "$name: $repo has no $path/SKILL.md"; return; }
+    mkdir -p "$dst"
+    if diff -rq "$src" "$dst" >/dev/null 2>&1; then
+        log "$name: content unchanged at ${sha:0:7}"
+    else
+        rsync -a --delete "$src/" "$dst/"
+        log "$name: updated to $repo@${sha:0:7}"
+    fi
+    printf '%s\n' "$sha" >"$STATE/$name"
+}
+
+mkdir -p "$STATE"
+update_vendored
+update_local vercel-react-best-practices vercel-labs/agent-skills skills/react-best-practices
+for name in docx pdf pptx xlsx skill-creator; do
+    update_local "$name" anthropics/skills "skills/$name"
+done
+log "deep-research: no public upstream, not updated"
+[ "$failures" -eq 0 ]
