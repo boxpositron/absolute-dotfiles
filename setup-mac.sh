@@ -48,6 +48,7 @@ local_servers
 .config/zed/settings.json
 .config/omo/hooks.json:.omo/agent/hooks.json
 .config/omo/keybindings.json:.omo/agent/keybindings.json
+.config/omo/extensions/vim-quit.ts:.omo/agent/extensions/vim-quit.ts
 .config/omo/prompts:.omo/agent/prompts
 "
 
