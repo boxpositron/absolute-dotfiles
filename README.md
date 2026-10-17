@@ -206,6 +206,8 @@ owt done                # remove the workspace you are in once its work is merge
 
 `owt done` refuses to discard work unless you pass `--force`. Work counts as merged when the branch is part of the default branch or its Gitea PR is merged (checked with `tea`). It then deletes the remote and local branch, removes the worktree and its memory link, and closes tmux windows open in it. `OWT_ROOT` (default `~/worktrees`) and `OWT_AGENT` (default `omo`) override the defaults; `owt --help` lists every option.
 
+`owt` also runs on Linux servers. On flowstate-remote, `~/.local/bin/owt` links to a clone of this repository, the server's own `~/.zshrc` carries the `owt` wrapper, and its `~/.omo/agent/hooks.json` runs `owt hook` like the Mac's. Its repositories live on GitHub, which `tea` cannot query, so `owt done` there counts a branch as merged only once it is part of the default branch: merge-commit PRs pass, squash-merged ones need `--force`.
+
 ## Configuration
 
 ### Environment Variables
