@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# Ding, tab marker and notification for omo sessions on a remote server
+# (flowstate-remote), the same as omo-notify gives local sessions. Two paths,
+# so each event arrives once:
+#
+#   Title: the server's omo-notify sets the terminal title of every tmux client
+#   attached to the session to "omo:<state>:<unix time>:<project>[:<question>]".
+#   mosh and ssh carry titles to this Mac (mosh drops the OSC 777 banner), where
+#   it becomes the title of the local pane running mosh or ssh. tmux's
+#   pane-title-changed hook (~/.tmux.conf) runs `omo-remote title <pane>`, which
+#   hands the event to omo-notify for that pane.
+#
+#   ntfy: the server also posts each finish, error and question to ntfy, tagged
+#   "omo", plus "attached" when the title reached a terminal. The launchd agent
+#   runs `omo-remote subscribe` and dings for omo pushes without "attached":
+#   sessions that no terminal is showing.
+#
+# Setup: put NTFY_URL, NTFY_TOPIC and NTFY_TOKEN in ~/.config/ntfy/omo-remote.env
+# (chmod 600), then run `omo-remote install` once.
+#
+# Usage: omo-remote title <pane>   (run by the tmux pane-title-changed hook)
+#        omo-remote subscribe      (run by the launchd agent)
+#        omo-remote message        (run by ntfy for each push; reads $NTFY_*)
+#        omo-remote install        (install and start the launchd agent)
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+label="local.omo-remote"
+conf="${OMO_REMOTE_CONF:-$HOME/.config/ntfy/omo-remote.env}"
+log="${OMO_REMOTE_LOG:-$HOME/.local/state/omo-remote.log}"
+# An older event happened while you were away (the Mac slept or mosh was
+# reconnecting): mark the tab, but skip the ding and the banner.
+fresh=120
+
+logline() {
+  mkdir -p "$(dirname "$log")"
+  printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$log"
+}
+
+case ${1:-} in
+  title)
+    pane=${2:?pane id required}
+    title=$(tmux display-message -p -t "$pane" '#{pane_title}' 2>/dev/null) || exit 0
+    [[ $title == *omo:* ]] || exit 0
+    event=${title#*omo:} # mosh puts "[mosh] " in front
+    # Act once per event, however often the title is set again.
+    [[ $(tmux show-option -pqv -t "$pane" @omo_remote_event) == "$event" ]] && exit 0
+    tmux set-option -p -t "$pane" @omo_remote_event "$event"
+
+    IFS=: read -r state when project question <<<"$event"
+    [[ $when =~ ^[0-9]+$ ]] || exit 0
+    case $state in
+      working) payload='{"event":"UserPromptSubmit"}' ;;
+      done) payload='{"hook_event_name":"Stop","stopReason":"stop"}' ;;
+      error) payload='{"hook_event_name":"Stop","stopReason":"error"}' ;;
+      clear) payload='{"hook_event_name":"Stop","stopReason":"aborted"}' ;;
+      input) payload=$(jq -cn --arg q "$question" '{hook_event_name:"Notification",kind:"ask-user-asked",title:$q}') ;;
+      *) exit 0 ;;
+    esac
+    if (($(date +%s) - when > fresh)); then
+      exec "$HOME/.local/bin/omo-status" set "$pane" "$state"
+    fi
+    payload=$(jq -c --arg cwd "${project:-remote}" '. + {cwd: $cwd}' <<<"$payload")
+    OMO_NOTIFY_PANE=$pane exec "$HOME/.local/bin/omo-notify" <<<"$payload"
+    ;;
+  subscribe)
+    if [[ ! -r $conf ]]; then
+      echo "omo-remote: $conf is missing" >&2
+      exit 1
+    fi
+    set -a
+    # shellcheck disable=SC1090
+    . "$conf"
+    set +a
+    : "${NTFY_URL:?NTFY_URL is not set in $conf}" "${NTFY_TOPIC:?NTFY_TOPIC is not set in $conf}"
+    # ntfy reads the token from $NTFY_TOKEN, which keeps it out of `ps`.
+    exec ntfy subscribe "${NTFY_URL%/}/$NTFY_TOPIC" "$(printf '%q' "$0") message"
+    ;;
+  message)
+    tags=",${NTFY_TAGS:-},"
+    # Claude Code posts to the same topic; "attached" means the title path has it.
+    [[ $tags == *,omo,* && $tags != *,attached,* ]] || exit 0
+    (($(date +%s) - ${NTFY_TIME:-0} <= fresh)) || exit 0
+    sound=Glass
+    [[ $tags == *,question,* ]] && sound=Ping
+    afplay "/System/Library/Sounds/${sound}.aiff" >/dev/null 2>&1 &
+    # No pane shows this session, so Ghostty posts the banner from the tab you
+    # used last.
+    target=$(tmux list-clients -F '#{client_activity} #{client_tty}' 2>/dev/null | sort -rn | awk 'NR == 1 { print $2 }')
+    clean() { tr -d '\000-\037\177' <<<"$1" | tr ';' ','; }
+    if [[ -n $target && -w $target ]]; then
+      printf '\033]777;notify;%s;%s\a' "$(clean "omo: ${NTFY_TITLE:-remote session}")" \
+        "$(clean "$(head -n 1 <<<"${NTFY_MESSAGE:-}")")" >"$target"
+    fi
+    logline "ntfy ${NTFY_TITLE:-} target=${target:-none}"
+    ;;
+  install)
+    if [[ ! -r $conf ]]; then
+      echo "omo-remote: put NTFY_URL, NTFY_TOPIC and NTFY_TOKEN in $conf first" >&2
+      exit 1
+    fi
+    command -v ntfy >/dev/null || {
+      echo "omo-remote: install the ntfy CLI first (brew install ntfy)" >&2
+      exit 1
+    }
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    mkdir -p "$(dirname "$log")" "$(dirname "$plist")"
+    cat >"$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.local/bin/omo-remote</string>
+    <string>subscribe</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>$log</string>
+  <key>StandardErrorPath</key>
+  <string>$log</string>
+</dict>
+</plist>
+PLIST
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+    launchctl bootstrap "gui/$(id -u)" "$plist" && echo "omo-remote: listening for ntfy pushes ($plist)"
+    ;;
+  *)
+    sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+    exit 2
+    ;;
+esac

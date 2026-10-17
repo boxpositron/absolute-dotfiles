@@ -25,6 +25,7 @@ brew "tmux"
 brew "zellij"
 brew "yazi"
 brew "mosh"
+brew "ntfy"
 brew "openssh"
 brew "gu1llaum-3/sshm/sshm", trusted: true
 

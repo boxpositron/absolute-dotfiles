@@ -56,7 +56,9 @@ esac
 # Find the tmux pane omo runs in: hooks run detached without TMUX_PANE, so walk
 # up the process tree to the first ancestor whose tty is a tmux pane.
 # Outside tmux, the first tty found is the Ghostty tab's own terminal.
-pane=""
+# omo-remote names the pane itself (OMO_NOTIFY_PANE): for a session on a remote
+# server it is the local pane running mosh or ssh.
+pane="${OMO_NOTIFY_PANE:-}"
 own_tty=""
 panes=$(tmux list-panes -a -F '#{pane_tty} #{pane_id}' 2>/dev/null)
 pid=$PPID
