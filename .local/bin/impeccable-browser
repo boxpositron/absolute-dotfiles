@@ -1,0 +1,287 @@
+#!/bin/sh
+// 2>/dev/null; b="$HOME/.bun/bin/bun"; [ -x "$b" ] || b=bun; exec "$b" "$0" "$@"
+// (sh runs the line above and execs Bun on this file; Bun reads it as a comment.)
+//
+// Chrome stand-in for the impeccable engine, wired in via IMPECCABLE_BROWSER. Linux only: it reads
+// the engine's argv from /proc and finds Chrome in the Linux Puppeteer and Playwright caches, so
+// setup-mac.sh does not link it. On flowstate-remote, ~/.zshenv exports
+// IMPECCABLE_BROWSER="$HOME/.local/bin/impeccable-browser".
+//
+// The engine launches its browser the way Puppeteer does (--remote-debugging-port=0, then reads
+// "DevTools listening on ws://..." from stderr). Here, URL scans run on Browserless (key
+// BROWSERLESS_API_KEY in the Reoclo project flowstate-tools) through a local CDP proxy. Local and
+// private origins (localhost, LAN, Tailscale) are exposed to Browserless through a cloudflared
+// quick tunnel for the length of the scan; the proxy swaps the local origin for the tunnel origin
+// on the way out and back, so the engine and its report only ever see the local URL.
+// Anything else (non-detect launches, or Browserless or the tunnel failing) runs on local Chrome.
+//
+// Env overrides:
+//   IMPECCABLE_BROWSER_MODE   auto (default) | remote | local
+//   IMPECCABLE_TUNNEL         1 (default) tunnels private origins; 0 sends them to local Chrome
+//   BROWSERLESS_TOKEN         use this key instead of the Reoclo secret
+//   BROWSERLESS_URL           default wss://production-sfo.browserless.io
+//   BROWSERLESS_TIMEOUT_MS    Browserless session cap, default 600000
+//   IMPECCABLE_LOCAL_CHROME   local Chrome binary, default newest cached headless shell
+// Decisions are appended to ~/.impeccable/browser.log.
+
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import type { Subprocess } from "bun";
+
+const HOME = process.env.HOME ?? "/home/ubuntu";
+const STATE_DIR = `${HOME}/.impeccable`;
+const TOKEN_CACHE = `${STATE_DIR}/browserless.token`;
+const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+const args = process.argv.slice(2);
+
+mkdirSync(STATE_DIR, { recursive: true });
+const note = (msg: string) =>
+  appendFileSync(`${STATE_DIR}/browser.log`, `${new Date().toISOString()} pid=${process.pid} ${msg}\n`);
+const bin = (name: string) => (existsSync(`${HOME}/.local/bin/${name}`) ? `${HOME}/.local/bin/${name}` : name);
+
+function isPrivateHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    h === "localhost" ||
+    h === "0.0.0.0" ||
+    h === "::1" ||
+    /\.(localhost|local|internal|lan)$/.test(h) ||
+    /^127\./.test(h) ||
+    /^10\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(h) ||
+    /^f[cd][0-9a-f]{2}:/.test(h)
+  );
+}
+
+type Plan = { mode: "remote" | "local"; why: string; privateOrigins: string[] };
+
+// The engine binary is our parent; its argv says what is being scanned.
+function plan(): Plan {
+  const forced = process.env.IMPECCABLE_BROWSER_MODE;
+  if (forced === "local") return { mode: "local", why: "IMPECCABLE_BROWSER_MODE", privateOrigins: [] };
+  let argv: string[];
+  try {
+    argv = readFileSync(`/proc/${process.ppid}/cmdline`, "utf8").split("\0").filter(Boolean);
+  } catch {
+    return { mode: "local", why: "parent argv unreadable", privateOrigins: [] };
+  }
+  const at = argv.indexOf("detect");
+  if (at < 0) return { mode: "local", why: `not a detect run (${argv.slice(1, 3).join(" ")})`, privateOrigins: [] };
+  const valueFlags = new Set(["--scope", "--viewport", "--target"]);
+  const targets: string[] = [];
+  for (let i = at + 1; i < argv.length; i++) {
+    if (valueFlags.has(argv[i])) i++;
+    else if (!argv[i].startsWith("-")) targets.push(argv[i]);
+  }
+  if (targets.length === 0) return { mode: "local", why: "no targets", privateOrigins: [] };
+  const privateOrigins = new Set<string>();
+  for (const t of targets) {
+    if (!/^https?:\/\//i.test(t)) return { mode: "local", why: `file target ${t}`, privateOrigins: [] };
+    const url = new URL(t);
+    if (isPrivateHost(url.hostname)) {
+      if (process.env.IMPECCABLE_TUNNEL === "0") return { mode: "local", why: `private host ${t}, tunnels off`, privateOrigins: [] };
+      privateOrigins.add(url.origin);
+    }
+  }
+  return { mode: "remote", why: targets.join(" "), privateOrigins: [...privateOrigins] };
+}
+
+function localChrome(): string {
+  const pinned = process.env.IMPECCABLE_LOCAL_CHROME;
+  if (pinned) return pinned;
+  const scan = (pattern: string, cwd: string) =>
+    existsSync(cwd) ? [...new Bun.Glob(pattern).scanSync({ cwd, absolute: true, onlyFiles: true })] : [];
+  const newestFirst = (paths: string[]) => paths.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  const found = [
+    ...newestFirst(scan("*/chrome-headless-shell-linux64/chrome-headless-shell", `${HOME}/.cache/puppeteer/chrome-headless-shell`)),
+    ...newestFirst(scan("chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell", `${HOME}/.cache/ms-playwright`)),
+  ];
+  if (found.length === 0) throw new Error("no local Chrome found; set IMPECCABLE_LOCAL_CHROME");
+  return found[0];
+}
+
+type Tunnel = { local: string; remote: string; proc: Subprocess };
+const tunnels: Tunnel[] = [];
+process.on("exit", () => tunnels.forEach((t) => t.proc.kill()));
+
+async function runLocal(why: string): Promise<never> {
+  tunnels.forEach((t) => t.proc.kill());
+  const chrome = localChrome();
+  note(`local ${chrome} (${why})`);
+  // This host's AppArmor blocks unprivileged user namespaces, so Chrome's sandbox cannot start.
+  const flags = args.includes("--no-sandbox") ? args : [...args, "--no-sandbox"];
+  const child = Bun.spawn([chrome, ...flags], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+  for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, () => child.kill(sig));
+  process.exit(await child.exited);
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} timed out after ${ms / 1000}s`)), ms))]);
+}
+
+// A cloudflared quick tunnel to one local origin, alive until this shim exits. The sh wrapper is a
+// watchdog: it stops cloudflared when this process dies, even by SIGKILL, so no tunnel outlives a scan.
+async function openTunnel(local: string): Promise<Tunnel> {
+  const watchdog =
+    'trap \'kill $c 2>/dev/null; exit 0\' TERM; "$0" tunnel --no-autoupdate --url "$1" --http-host-header "$2" & c=$!; ' +
+    'while kill -0 "$3" 2>/dev/null && kill -0 $c 2>/dev/null; do sleep 1; done; kill $c 2>/dev/null';
+  const proc = Bun.spawn(["sh", "-c", watchdog, bin("cloudflared"), local, new URL(local).host, String(process.pid)], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const tunnel: Tunnel = { local, remote: "", proc };
+  tunnels.push(tunnel);
+  const reader = proc.stderr.getReader();
+  const decoder = new TextDecoder();
+  let log = "";
+  await withTimeout(
+    (async () => {
+      while (!(tunnel.remote && /Registered tunnel connection/.test(log))) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error(`cloudflared exited: ${log.trim().split("\n").slice(-2).join(" | ")}`);
+        log += decoder.decode(value);
+        tunnel.remote ||= log.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/)?.[0] ?? "";
+      }
+    })(),
+    30_000,
+    "cloudflared quick tunnel",
+  );
+  // Keep draining cloudflared's log so a full pipe never stalls it.
+  (async () => {
+    while (!(await reader.read()).done);
+  })();
+  // The edge can answer 530 for a moment after registration; wait until it routes to the origin.
+  await withTimeout(
+    (async () => {
+      for (;;) {
+        const status = await fetch(tunnel.remote, { redirect: "manual" }).then((r) => r.status, () => 0);
+        if (status && status !== 530 && status !== 502) return;
+        await Bun.sleep(500);
+      }
+    })(),
+    20_000,
+    `tunnel ${tunnel.remote} readiness`,
+  );
+  return tunnel;
+}
+
+async function browserlessKey(fresh: boolean): Promise<string> {
+  const fromEnv = process.env.BROWSERLESS_TOKEN;
+  if (fromEnv && !fresh) return fromEnv;
+  if (!fresh && existsSync(TOKEN_CACHE) && Date.now() - statSync(TOKEN_CACHE).mtimeMs < TOKEN_TTL_MS) {
+    return readFileSync(TOKEN_CACHE, "utf8").trim();
+  }
+  const proc = Bun.spawn([bin("reoclo"), "secrets", "get", "BROWSERLESS_API_KEY", "--project", "flowstate-tools"], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  const key = out.trim();
+  if (code !== 0 || !key) throw new Error(`reoclo secrets get exited ${code}: ${err.trim().slice(0, 200)}`);
+  writeFileSync(TOKEN_CACHE, key, { mode: 0o600 });
+  return key;
+}
+
+function openUpstream(key: string): Promise<WebSocket> {
+  const url = new URL(process.env.BROWSERLESS_URL ?? "wss://production-sfo.browserless.io");
+  url.searchParams.set("token", key);
+  url.searchParams.set("timeout", process.env.BROWSERLESS_TIMEOUT_MS ?? "600000");
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url.toString());
+    ws.binaryType = "arraybuffer";
+    const timer = setTimeout(() => {
+      ws.close();
+      reject(new Error("connect timed out after 20s"));
+    }, 20_000);
+    ws.onopen = () => {
+      clearTimeout(timer);
+      resolve(ws);
+    };
+    ws.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("connect refused (bad key, quota, or network)"));
+    };
+  });
+}
+
+async function connectBrowserless(): Promise<WebSocket> {
+  try {
+    return await openUpstream(await browserlessKey(false));
+  } catch (first) {
+    try {
+      return await openUpstream(await browserlessKey(true));
+    } catch (second) {
+      throw new Error(`browserless unavailable: ${(first as Error).message}; retry: ${(second as Error).message}`);
+    }
+  }
+}
+
+const decided = plan();
+if (decided.mode === "local") await runLocal(decided.why);
+
+let upstream: WebSocket;
+try {
+  [upstream] = await Promise.all([connectBrowserless(), ...decided.privateOrigins.map(openTunnel)]);
+} catch (error) {
+  await runLocal((error as Error).message);
+}
+const routes = tunnels.map((t) => `${t.local} via ${t.remote}`).join(", ");
+note(`browserless (${decided.why})${routes ? ` tunnels: ${routes}` : ""}`);
+
+// Longest origin first, so http://127.0.0.1:80 never rewrites inside http://127.0.0.1:8080.
+const byLength = [...tunnels].sort((a, b) => b.local.length - a.local.length);
+const outbound = (msg: string) => byLength.reduce((text, t) => text.replaceAll(t.local, t.remote), msg);
+const inbound = (msg: string) => byLength.reduce((text, t) => text.replaceAll(t.remote, t.local), msg);
+
+const exit = () => {
+  try {
+    upstream.close();
+  } catch {}
+  process.exit(0);
+};
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, exit);
+
+const browserId = crypto.randomUUID();
+let client: import("bun").ServerWebSocket<unknown> | null = null;
+const backlog: (string | ArrayBuffer)[] = [];
+upstream.onmessage = (event) => {
+  const data = typeof event.data === "string" ? inbound(event.data) : event.data;
+  if (client) client.send(data);
+  else backlog.push(data);
+};
+upstream.onclose = () => {
+  client?.close();
+  process.exit(0);
+};
+
+const server = Bun.serve({
+  hostname: "127.0.0.1",
+  port: 0,
+  fetch(req, srv) {
+    if (new URL(req.url).pathname === "/json/version") {
+      return Response.json({
+        Browser: "Browserless",
+        webSocketDebuggerUrl: `ws://127.0.0.1:${srv.port}/devtools/browser/${browserId}`,
+      });
+    }
+    if (srv.upgrade(req)) return;
+    return new Response("not found", { status: 404 });
+  },
+  websocket: {
+    maxPayloadLength: 512 * 1024 * 1024,
+    open(ws) {
+      client = ws;
+      for (const msg of backlog.splice(0)) ws.send(msg);
+    },
+    message(_ws, msg) {
+      upstream.send(typeof msg === "string" ? outbound(msg) : msg);
+    },
+    close: exit,
+  },
+});
+
+process.stderr.write(`\nDevTools listening on ws://127.0.0.1:${server.port}/devtools/browser/${browserId}\n`);
