@@ -13,7 +13,7 @@ OpenCode-era evaluation notes and rollback steps are in git history at
 
 | Skill | Upstream | Revision | License |
 |---|---|---|---|
-| `impeccable` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (`.opencode` integration, skill 4.3.1) | `f2c7051853848826aac2f4646581d62a732155ad` | Apache 2.0, included |
+| `impeccable` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (`.opencode` integration, tag `skill-v4.6.0`, engine 0.1.15) | `8a0e198da34ebc5b936a9d5975fb7a3b1cf353b7` | Apache 2.0, included |
 | `web-design-guidelines` | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (`skills/web-design-guidelines/SKILL.md`) | `063bee94c3f4df8453406c830b0a7df0f2860278` | per upstream |
 | ten marketing and copy skills | [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) (`skills/`) | `b9ba399dd88b082b926e261e8ccfb843d20aa066` | MIT, copied into each skill |
 | `frontend-workflow` | local | - | - |
@@ -30,7 +30,11 @@ The ten marketing skills are `product-marketing`, `copywriting`, `copy-editing`,
   `SKILL.md`. Without this the detector and live-server verbs do not resolve under
   OmO. `reference/critique.md` also carries an OmO routing line that sends
   Assessment A to the `design-critique-a` category and Assessment B to
-  `design-critique-b` (defined in `.config/omo/omo.jsonc`).
+  `design-critique-b` (defined in `.config/omo/omo.jsonc`). `LICENSE` comes from the
+  upstream repository root, because the `.opencode` directory ships without one. The
+  engine binary is not vendored: on first run, `scripts/impeccable` downloads the
+  version named in `scripts/VERSION` into `~/.impeccable/bin/<version>/` and checks it
+  against the published checksum.
 - **`web-design-guidelines`**: unchanged. It fetches the current
   [Web Interface Guidelines](https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md)
   when invoked, so its rule feed is intentionally not pinned.
@@ -47,6 +51,12 @@ and rerun `link-ai-configs.sh`. For `impeccable`, re-apply the path rewrite:
 
 ```bash
 cd .config/omo/skills/impeccable
-rg -l -F '.opencode/skills/impeccable/scripts/impeccable' . \
-  | xargs sed -i '' 's#\.opencode/skills/impeccable/scripts/impeccable#~/.omo/agent/skills/impeccable/scripts/impeccable#g'
+rg -l -F '.opencode/skills/impeccable/scripts' . \
+  | xargs sed -i '' 's#\.opencode/skills/impeccable/scripts#~/.omo/agent/skills/impeccable/scripts#g'
 ```
+
+This pattern also covers the base-directory fallback in `SKILL.md`, which ends at
+`scripts` rather than `scripts/impeccable`. Keep `LICENSE` when re-copying (for
+example `rsync -a --delete --exclude LICENSE <upstream>/.opencode/skills/impeccable/ .`),
+and re-add the OmO routing line after the "Delegate Assessment A and Assessment B"
+paragraph in `reference/critique.md`.
