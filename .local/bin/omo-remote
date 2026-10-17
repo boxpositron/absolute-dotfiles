@@ -4,16 +4,21 @@
 # so each event arrives once:
 #
 #   Title: the server's omo-notify sets the terminal title of every tmux client
-#   attached to the session to "omo:<state>:<unix time>:<project>[:<question>]".
-#   mosh and ssh carry titles to this Mac (mosh drops the OSC 777 banner), where
-#   it becomes the title of the local pane running mosh or ssh. tmux's
+#   attached to the session to "<marker> <project> · omo:<state>:<unix time>",
+#   plus ":<question>" when it asks you something, e.g.
+#   "🟢 studio · omo:done:1792249251". mosh and ssh carry titles to this Mac
+#   (mosh drops the OSC 777 banner). In a tmux pane running mosh or ssh, tmux's
 #   pane-title-changed hook (~/.tmux.conf) runs `omo-remote title <pane>`, which
-#   hands the event to omo-notify for that pane.
+#   hands the event to omo-notify for that pane. A plain Ghostty tab just shows
+#   the title, marker first.
 #
 #   ntfy: the server also posts each finish, error and question to ntfy, tagged
 #   "omo", plus "attached" when the title reached a terminal. The launchd agent
-#   runs `omo-remote subscribe` and dings for omo pushes without "attached":
-#   sessions that no terminal is showing.
+#   runs `omo-remote subscribe`, which dings and posts the banner unless a tmux
+#   pane here already handled that event through its title. Sessions no terminal
+#   shows, and sessions in plain tabs, still notify, and only once. A
+#   "mosh-<port>" tag names the mosh connection, so the banner comes from the
+#   plain tab running that mosh-client.
 #
 # Setup: put NTFY_URL, NTFY_TOPIC and NTFY_TOKEN in ~/.config/ntfy/omo-remote.env
 # (chmod 600), then run `omo-remote install` once.
@@ -23,7 +28,8 @@
 #        omo-remote message        (run by ntfy for each push; reads $NTFY_*)
 #        omo-remote install        (install and start the launchd agent)
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# Hooks and launchd run with a minimal PATH; make Homebrew tools reachable.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 label="local.omo-remote"
 conf="${OMO_REMOTE_CONF:-$HOME/.config/ntfy/omo-remote.env}"
@@ -37,18 +43,55 @@ logline() {
   printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$log"
 }
 
+# Whether a tmux pane here running mosh or ssh got this event through its
+# title: the same state and project, stamped within a few seconds of the push.
+# The title usually lands first, so give it up to three seconds.
+title_got_through() {
+  local state=$1 project=$2 sent=$3 i panes
+  for ((i = 0; i < 12; i++)); do
+    panes=$(tmux list-panes -a -F '#{pane_current_command} #{@omo_remote_event}' 2>/dev/null |
+      awk '$1 == "mosh-client" || $1 == "ssh"')
+    [[ -n $panes ]] || return 1 # no tmux pane here talks to a server
+    awk -v s="$state" -v p="$project" -v t="$sent" '
+      { e = substr($0, index($0, " ") + 1)
+        i = index(e, ":"); st = substr(e, 1, i - 1); e = substr(e, i + 1)
+        i = index(e, ":"); w = substr(e, 1, i - 1) + 0; pr = substr(e, i + 1)
+        if (st == s && pr == p && w - t <= 5 && t - w <= 5) found = 1 }
+      END { exit !found }' <<<"$panes" && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+# The terminal of a Ghostty tab running mosh or ssh outside tmux: the one on
+# the mosh port the push names (tags ",mosh-<port>," in $1), else the newest.
+plain_tab_tty() {
+  local panes
+  panes=$(tmux list-panes -a -F '#{pane_tty}' 2>/dev/null)
+  ps -A -o tty=,args= | PANES=$panes TAGS=$1 awk '
+    BEGIN { n = split(ENVIRON["PANES"], list, "\n"); for (i = 1; i <= n; i++) pane[list[i]] = 1 }
+    { cmd = $2; sub(/.*\//, "", cmd) }
+    $1 == "??" || (("/dev/" $1) in pane) || (cmd != "mosh-client" && cmd != "ssh") { next }
+    { tty = "/dev/" $1; if (cmd == "mosh-client" && index(ENVIRON["TAGS"], ",mosh-" $NF ",")) named = tty }
+    END { if (named != "") print named; else if (tty != "") print tty }'
+}
+
 case ${1:-} in
   title)
     pane=${2:?pane id required}
     title=$(tmux display-message -p -t "$pane" '#{pane_title}' 2>/dev/null) || exit 0
-    [[ $title == *omo:* ]] || exit 0
-    event=${title#*omo:} # mosh puts "[mosh] " in front
-    # Act once per event, however often the title is set again.
+    [[ $title == *" · omo:"* ]] || exit 0
+    IFS=: read -r state when question <<<"${title#*" · omo:"}"
+    [[ $when =~ ^[0-9]+$ ]] || exit 0
+    project=${title%%" · omo:"*}
+    project=${project#"[mosh] "} # mosh puts "[mosh] " in front
+    case $project in "🔵 "* | "🟡 "* | "🟢 "* | "🔴 "*) project=${project#* } ;; esac
+    # Act once per event, however often the title is set again. The ntfy
+    # handler reads this to tell whether the title already got through.
+    event="$state:$when:$project"
     [[ $(tmux show-option -pqv -t "$pane" @omo_remote_event) == "$event" ]] && exit 0
     tmux set-option -p -t "$pane" @omo_remote_event "$event"
 
-    IFS=: read -r state when project question <<<"$event"
-    [[ $when =~ ^[0-9]+$ ]] || exit 0
     case $state in
       working) payload='{"event":"UserPromptSubmit"}' ;;
       done) payload='{"hook_event_name":"Stop","stopReason":"stop"}' ;;
@@ -78,21 +121,32 @@ case ${1:-} in
     ;;
   message)
     tags=",${NTFY_TAGS:-},"
-    # Claude Code posts to the same topic; "attached" means the title path has it.
-    [[ $tags == *,omo,* && $tags != *,attached,* ]] || exit 0
+    [[ $tags == *,omo,* ]] || exit 0 # Claude Code posts to the same topic
     (($(date +%s) - ${NTFY_TIME:-0} <= fresh)) || exit 0
-    sound=Glass
-    [[ $tags == *,question,* ]] && sound=Ping
+    case $tags in
+      *,question,*) state=input sound=Ping ;;
+      *,x,*) state=error sound=Glass ;;
+      *) state="done" sound=Glass ;;
+    esac
+    # "attached" only says some terminal shows the session: a tmux pane here
+    # (the title path has it), a plain tab, or a mosh-server left behind.
+    if [[ $tags == *,attached,* ]] &&
+      title_got_through "$state" "${NTFY_TITLE##* · }" "${NTFY_TIME:-0}"; then
+      logline "ntfy $state ${NTFY_TITLE:-} skipped: a tmux pane got it through the title"
+      exit 0
+    fi
     afplay "/System/Library/Sounds/${sound}.aiff" >/dev/null 2>&1 &
-    # No pane shows this session, so Ghostty posts the banner from the tab you
-    # used last.
-    target=$(tmux list-clients -F '#{client_activity} #{client_tty}' 2>/dev/null | sort -rn | awk 'NR == 1 { print $2 }')
+    # Ghostty posts the banner from a plain tab connected with mosh or ssh, so
+    # clicking it lands there, or else from the tmux tab you used last.
+    target=$(plain_tab_tty "$tags")
+    [[ -n $target ]] ||
+      target=$(tmux list-clients -F '#{client_activity} #{client_tty}' 2>/dev/null | sort -rn | awk 'NR == 1 { print $2 }')
     clean() { tr -d '\000-\037\177' <<<"$1" | tr ';' ','; }
     if [[ -n $target && -w $target ]]; then
       printf '\033]777;notify;%s;%s\a' "$(clean "omo: ${NTFY_TITLE:-remote session}")" \
         "$(clean "$(head -n 1 <<<"${NTFY_MESSAGE:-}")")" >"$target"
     fi
-    logline "ntfy ${NTFY_TITLE:-} target=${target:-none}"
+    logline "ntfy $state ${NTFY_TITLE:-} target=${target:-none}"
     ;;
   install)
     if [[ ! -r $conf ]]; then
