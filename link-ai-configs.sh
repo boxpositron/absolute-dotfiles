@@ -50,8 +50,8 @@ targets=(
 # steps are in .config/omo/skills/README.md. frontend-workflow is the OmO
 # delegation process skill and is not linked into Claude Code; the rest are
 # shared by both harnesses.
-omo_skills=(frontend-workflow impeccable web-design-guidelines product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social)
-claude_skills=(impeccable web-design-guidelines product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social)
+omo_skills=(frontend-workflow impeccable web-design-guidelines product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social sound-design)
+claude_skills=(impeccable web-design-guidelines product-marketing copywriting copy-editing emails cold-email content-strategy seo-audit ai-seo launch social sound-design)
 for skill in "${omo_skills[@]}"; do
     sources+=(".config/omo/skills/$skill")
     targets+=(".omo/agent/skills/$skill")

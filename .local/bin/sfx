@@ -1,0 +1,329 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy>=1.26", "mido>=1.3"]
+# ///
+"""Render notification sounds and short effects from a TOML recipe file.
+
+Every sound is synthesised from sine partials and seeded noise: no samples,
+SoundFonts or model output go in, nothing touches the network once uv has
+installed numpy and mido, and a recipe renders to the same audio on every run
+and machine. Each sound is normalised to a target loudness in LUFS
+(ITU-R BS.1770), so a set of sounds plays at one consistent level.
+"""
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+import tomllib
+import wave
+import zlib
+from pathlib import Path
+
+import mido
+import numpy as np
+
+SR = 48_000
+PEAK_CEILING_DBFS = -1.0
+TAIL_DB = -55.0
+DEFAULT_LOUDNESS = -26.0
+DEFAULT_PROGRAM = 11
+NOTE_NAME = re.compile(r"([A-Ga-g])([#b]?)(-?\d)")
+SEMITONES = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+
+# BS.1770 K-weighting at 48 kHz as ((b0, b1, b2), (a1, a2)): a high shelf, then a high-pass.
+K_WEIGHTING = (
+    ((1.53512485958697, -2.69169618940638, 1.19839281085285), (-1.69065929318241, 0.73248077421585)),
+    ((1.0, -2.0, 1.0), (-1.99004745483398, 0.99007225036621)),
+)
+
+TOP_KEYS = {"loudness", "extras", "program", "sound"}
+SOUND_KEYS = {"about", "notes", "tone", "whoosh", "room", "loudness"}
+TONE_KEYS = {"bright", "decay"}
+ROOM_KEYS = {"rt60", "wet"}
+WHOOSH_KEYS = {"start", "duration", "from_hz", "to_hz", "gain", "pan"}
+EXTRAS = {"mp3", "mid"}
+
+
+class RecipeError(Exception):
+    pass
+
+
+def check_keys(table, allowed, where):
+    if not isinstance(table, dict):
+        raise RecipeError(f"{where} must be a table")
+    unknown = sorted(set(table) - allowed)
+    if unknown:
+        raise RecipeError(f"{where}: unknown key {', '.join(unknown)} (allowed: {', '.join(sorted(allowed))})")
+
+
+def midi_note(value, where):
+    if isinstance(value, int) and not isinstance(value, bool):
+        number = value
+    else:
+        match = NOTE_NAME.fullmatch(str(value))
+        if not match:
+            raise RecipeError(f"{where}: {value!r} is neither a MIDI note number nor a note name like E6")
+        letter, accidental, octave = match.groups()
+        number = 12 * (int(octave) + 1) + SEMITONES[letter.upper()] + {"#": 1, "b": -1, "": 0}[accidental]
+    if not 0 <= number <= 127:
+        raise RecipeError(f"{where}: note {value!r} is outside the MIDI range")
+    return number
+
+
+def hz(note):
+    return 440.0 * 2 ** ((note - 69) / 12)
+
+
+def fade_in(x, seconds):
+    n = min(len(x), int(seconds * SR))
+    x[:n] *= 0.5 - 0.5 * np.cos(np.linspace(0, np.pi, n))
+    return x
+
+
+def ding(rng, note, bright, decay):
+    """Struck-bar tone: decaying partials, a few inharmonic ones for the strike."""
+    partials = (  # (frequency ratio, amplitude, decay time constant in seconds)
+        (1.0, 1.0, 0.32 * decay),
+        (2.0, 0.30 * bright, 0.16 * decay),
+        (2.76, 0.16 * bright, 0.07 * decay),
+        (5.40, 0.07 * bright, 0.03 * decay),
+        (8.93, 0.035 * bright, 0.015 * decay),
+    )
+    t = np.arange(int(7 * partials[0][2] * SR)) / SR  # long enough to decay to about -60 dB
+    f0 = hz(note)
+    out = np.zeros_like(t)
+    for ratio, amp, tau in partials:
+        if f0 * ratio < SR * 0.45:
+            out += amp * np.sin(2 * np.pi * f0 * ratio * t + rng.uniform(0, 2 * np.pi)) * np.exp(-t / tau)
+    n = int(0.004 * SR)  # soft mallet tick
+    tick = np.convolve(rng.standard_normal(n), np.ones(8) / 8, mode="same")
+    out[:n] += 0.04 * bright * tick * np.linspace(1, 0, n)
+    return fade_in(out, 0.003)
+
+
+def whoosh(rng, duration, from_hz, to_hz, q=2.0):
+    """Noise through a band-pass whose centre sweeps from from_hz to to_hz."""
+    n = int(duration * SR)
+    noise = rng.standard_normal(n).tolist()
+    coeff = (2 * np.sin(np.pi * np.geomspace(from_hz, to_hz, n) / SR)).tolist()
+    damp = 1 / q
+    low = band = 0.0
+    out = [0.0] * n
+    for i in range(n):  # Chamberlin state-variable filter
+        high = noise[i] - low - damp * band
+        band += coeff[i] * high
+        low += coeff[i] * band
+        out[i] = band
+    y = np.array(out) * np.sin(np.pi * np.linspace(0, 1, n)) ** 2
+    return y / np.abs(y).max()
+
+
+def fftconv(a, b):
+    n = len(a) + len(b) - 1
+    size = 1 << (n - 1).bit_length()
+    return np.fft.irfft(np.fft.rfft(a, size) * np.fft.rfft(b, size), size)[:n]
+
+
+def room(rng, rt60):
+    """Synthetic small-room impulse response: decaying, darkened noise."""
+    t = np.arange(int(rt60 * SR)) / SR
+    ir = rng.standard_normal(len(t)) * np.exp(-6.91 * t / rt60)  # -60 dB at rt60
+    ir = fade_in(np.convolve(ir, np.ones(12) / 12, mode="same"), 0.01)
+    return ir / np.sqrt(np.sum(ir**2))
+
+
+def mix(rng, events, rt60, wet):
+    """events: (start seconds, mono signal, gain, pan from -1 to 1), mixed to stereo."""
+    length = max(int(start * SR) + len(sig) for start, sig, _, _ in events)
+    dry = np.zeros((length, 2))
+    for start, sig, gain, pan in events:
+        i = int(start * SR)
+        theta = (pan + 1) * np.pi / 4  # constant-power pan
+        dry[i : i + len(sig), 0] += sig * gain * np.cos(theta)
+        dry[i : i + len(sig), 1] += sig * gain * np.sin(theta)
+    mono = dry.mean(axis=1)
+    out = np.zeros((length + int(rt60 * SR) - 1, 2))
+    out[:length] = dry
+    if wet > 0:
+        out[:, 0] += wet * fftconv(mono, room(rng, rt60))
+        out[:, 1] += wet * fftconv(mono, room(rng, rt60))
+    # Trim the inaudible tail, then fade the last 30 ms so the end never clicks.
+    level = np.abs(out).max(axis=1)
+    out = out[: np.nonzero(level > level.max() * 10 ** (TAIL_DB / 20))[0][-1] + 1]
+    n = min(len(out), int(0.03 * SR))
+    out[-n:] *= np.linspace(1, 0, n)[:, None]
+    return out
+
+
+def biquad(x, b, a):
+    b0, b1, b2 = b
+    a1, a2 = a
+    y = np.empty_like(x)
+    for ch in range(x.shape[1]):
+        x1 = x2 = y1 = y2 = 0.0
+        out = []
+        for xi in x[:, ch].tolist():
+            yi = b0 * xi + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            x2, x1, y2, y1 = x1, xi, y1, yi
+            out.append(yi)
+        y[:, ch] = out
+    return y
+
+
+def loudness(x):
+    """Integrated loudness in LUFS per ITU-R BS.1770-4: K-weighting, 400 ms blocks, two gates."""
+    z = x
+    for b, a in K_WEIGHTING:
+        z = biquad(z, b, a)
+    block, hop = int(0.4 * SR), int(0.1 * SR)
+    z = np.pad(z, ((0, max(0, block - len(z))), (0, 0)))
+    power = np.array([np.mean(z[i : i + block] ** 2, axis=0).sum() for i in range(0, len(z) - block + 1, hop)])
+
+    def lufs(p):
+        return -0.691 + 10 * np.log10(np.maximum(p, 1e-20))
+
+    power = power[lufs(power) > -70]
+    if not len(power):
+        raise RecipeError("the sound is silent")
+    power = power[lufs(power) > lufs(power.mean()) - 10]
+    return float(lufs(power.mean()))
+
+
+def normalise(x, target):
+    """Scale to the target loudness, or lower if that would push the peak past the ceiling."""
+    measured = loudness(x)
+    gain = target - measured
+    peak = 20 * np.log10(np.abs(x).max()) + gain
+    capped = peak > PEAK_CEILING_DBFS
+    if capped:
+        gain -= peak - PEAK_CEILING_DBFS
+    return x * 10 ** (gain / 20), measured + gain, capped
+
+
+def build(name, spec):
+    where = f"[sound.{name}]"
+    check_keys(spec, SOUND_KEYS, where)
+    tone = {"bright": 1.0, "decay": 1.0, **spec.get("tone", {})}
+    check_keys(tone, TONE_KEYS, f"{where} tone")
+    space = {"rt60": 0.7, "wet": 0.22, **spec.get("room", {})}
+    check_keys(space, ROOM_KEYS, f"{where} room")
+    if not 0.05 <= space["rt60"] <= 5:
+        raise RecipeError(f"{where} room: rt60 must be between 0.05 and 5 seconds")
+    rng = np.random.default_rng(zlib.crc32(name.encode()))
+    events, notes = [], []
+    for i, entry in enumerate(spec.get("notes", [])):
+        if not (isinstance(entry, list) and len(entry) == 4):
+            raise RecipeError(f"{where} notes[{i}] must be [start, note, velocity, pan]")
+        start, note, velocity, pan = entry
+        number = midi_note(note, f"{where} notes[{i}]")
+        notes.append((float(start), number, float(velocity)))
+        events.append((float(start), ding(rng, number, tone["bright"], tone["decay"]), float(velocity), float(pan)))
+    if "whoosh" in spec:
+        w = spec["whoosh"]
+        check_keys(w, WHOOSH_KEYS, f"{where} whoosh")
+        missing = sorted({"duration", "from_hz", "to_hz"} - set(w))
+        if missing:
+            raise RecipeError(f"{where} whoosh is missing {', '.join(missing)}")
+        if not 20 <= min(w["from_hz"], w["to_hz"]) <= max(w["from_hz"], w["to_hz"]) <= 8000:
+            raise RecipeError(f"{where} whoosh: from_hz and to_hz must be between 20 and 8000")
+        signal = whoosh(rng, float(w["duration"]), float(w["from_hz"]), float(w["to_hz"]))
+        events.append((float(w.get("start", 0.0)), signal, float(w.get("gain", 1.0)), float(w.get("pan", 0.0))))
+    if not events:
+        raise RecipeError(f"{where} needs notes, a whoosh, or both")
+    return mix(rng, events, space["rt60"], space["wet"]), notes
+
+
+def write_wav(path, x):
+    pcm = (np.clip(x, -1, 1) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(pcm.tobytes())
+
+
+def write_midi(path, notes, program):
+    mid = mido.MidiFile(ticks_per_beat=480)  # 960 ticks per second at 120 bpm
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+    track.append(mido.Message("program_change", program=program, time=0))
+    messages = []
+    for start, note, velocity in notes:
+        on = round(start * 960)
+        level = max(1, min(127, round(velocity * 110)))
+        messages.append((on, 1, mido.Message("note_on", note=note, velocity=level)))
+        messages.append((on + 384, 0, mido.Message("note_off", note=note, velocity=0)))
+    now = 0
+    for tick, _, message in sorted(messages, key=lambda m: (m[0], m[1])):
+        track.append(message.copy(time=tick - now))
+        now = tick
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    mid.save(path)
+
+
+def write_mp3(wav, mp3):
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-codec:a", "libmp3lame", "-q:a", "2", str(mp3)],
+        check=True,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="sfx",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Recipe format and examples: ~/.omo/agent/skills/sound-design/SKILL.md",
+    )
+    parser.add_argument("recipes", type=Path, help="TOML recipe file")
+    parser.add_argument("out_dir", type=Path, nargs="?", help="where the files go (default: next to the recipe file)")
+    parser.add_argument("--only", nargs="+", metavar="NAME", help="render only these sounds")
+    args = parser.parse_args()
+    try:
+        book = tomllib.loads(args.recipes.read_text())
+        check_keys(book, TOP_KEYS, args.recipes.name)
+        sounds = book.get("sound", {})
+        check_keys(sounds, set(sounds), "[sound]")
+        extras = set(book.get("extras", []))
+        if extras - EXTRAS:
+            raise RecipeError(f"extras: unknown format {', '.join(sorted(extras - EXTRAS))} (allowed: mp3, mid)")
+        if "mp3" in extras and not shutil.which("ffmpeg"):
+            raise RecipeError("mp3 output needs ffmpeg on PATH")
+        names = args.only or list(sounds)
+        if not names:
+            raise RecipeError(f"{args.recipes.name} has no [sound.NAME] tables")
+        unknown = [n for n in names if n not in sounds]
+        if unknown:
+            raise RecipeError(f"no such sound: {', '.join(unknown)}")
+        out_dir = args.out_dir or args.recipes.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            spec = sounds[name]
+            try:
+                audio, notes = build(name, spec)
+                target = float(spec.get("loudness", book.get("loudness", DEFAULT_LOUDNESS)))
+                audio, level, capped = normalise(audio, target)
+            except (TypeError, ValueError) as e:
+                raise RecipeError(f"[sound.{name}]: {e}") from e
+            wav = out_dir / f"{name}.wav"
+            write_wav(wav, audio)
+            written = [wav.name]
+            if "mp3" in extras:
+                write_mp3(wav, wav.with_suffix(".mp3"))
+                written.append(f"{name}.mp3")
+            if "mid" in extras and notes:
+                write_midi(wav.with_suffix(".mid"), notes, int(book.get("program", DEFAULT_PROGRAM)))
+                written.append(f"{name}.mid")
+            peak = 20 * np.log10(np.abs(audio).max())
+            note = ", held below the peak ceiling so quieter than the target" if capped else ""
+            print(f"{name}: {len(audio) / SR:.2f}s, {level:.1f} LUFS, peak {peak:.1f} dBFS{note} -> {', '.join(written)}")
+    except (OSError, tomllib.TOMLDecodeError, RecipeError, subprocess.CalledProcessError) as e:
+        sys.exit(f"sfx: {e}")
+
+
+if __name__ == "__main__":
+    main()

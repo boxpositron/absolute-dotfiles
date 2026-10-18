@@ -17,6 +17,7 @@ OpenCode-era evaluation notes and rollback steps are in git history at
 | `web-design-guidelines` | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (`skills/web-design-guidelines/SKILL.md`) | `063bee94c3f4df8453406c830b0a7df0f2860278` | per upstream |
 | ten marketing and copy skills | [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) (`skills/`) | `b9ba399dd88b082b926e261e8ccfb843d20aa066` | MIT, copied into each skill |
 | `frontend-workflow` | local | - | - |
+| `sound-design` | local | - | - |
 
 The ten marketing skills are `product-marketing`, `copywriting`, `copy-editing`,
 `emails`, `cold-email`, `content-strategy`, `seo-audit`, `ai-seo`, `launch` and
