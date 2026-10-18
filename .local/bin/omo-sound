@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Play one of omo's notification sounds (omo-done, omo-input, omo-error) or any
+# audio file with whatever player this machine has: afplay on macOS, else
+# PipeWire, PulseAudio, ALSA or ffplay on Linux. It blocks until playback ends,
+# so hooks that must not wait run it in the background.
+#
+# The sounds are rendered by sfx from .config/omo/sounds/recipes.toml in the
+# dotfiles checkout this script is linked from.
+#
+# Usage: omo-sound NAME|FILE
+
+sound=${1:?usage: omo-sound NAME|FILE}
+if [[ ! -f $sound ]]; then
+  sound="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../.config/omo/sounds/$sound.wav"
+fi
+if [[ ! -f $sound ]]; then
+  echo "omo-sound: no such sound or file: $1" >&2
+  exit 1
+fi
+
+if command -v afplay >/dev/null; then
+  exec afplay "$sound"
+elif command -v pw-play >/dev/null; then
+  exec pw-play "$sound"
+elif command -v paplay >/dev/null; then
+  exec paplay "$sound"
+elif command -v aplay >/dev/null; then
+  exec aplay -q "$sound"
+elif command -v ffplay >/dev/null; then
+  exec ffplay -nodisp -autoexit -loglevel quiet "$sound"
+fi
+echo "omo-sound: no audio player found (afplay, pw-play, paplay, aplay or ffplay)" >&2
+exit 1

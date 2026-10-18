@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Ding, tab marker and notification for omo (senpi) hooks: UserPromptSubmit,
 # Stop and Notification. Reads the hook JSON payload on stdin. Wired up in
-# ~/.omo/agent/hooks.json. The sound plays through afplay, so Focus modes and
-# notification permissions cannot mute it; the banner is a silent extra.
+# ~/.omo/agent/hooks.json. The sound plays through omo-sound (afplay on macOS),
+# so Focus modes and notification permissions cannot mute it; the banner is a
+# silent extra.
 # Ghostty posts the banner, so clicking it opens the tab it came from, and
 # omo-status then selects the session's pane. omo-status also colours that tab:
 # blue working, amber waiting for you, green finished, red error.
@@ -32,13 +33,13 @@ case "$event" in
     case "$(field '.stopReason')" in
       # Esc/interrupts are your own doing; no need to be told about them.
       aborted) state="clear" ;;
-      error) state="error" message="Stopped with an error" sound="Glass" ;;
-      *) state="done" message="Task finished" sound="Glass" ;;
+      error) state="error" message="Stopped with an error" sound="omo-error" ;;
+      *) state="done" message="Task finished" sound="omo-done" ;;
     esac
     ;;
   Notification)
     if [[ "$(field '.kind')" == "ask-user-asked" ]]; then
-      state=input message="Needs your input: $(field '.title')" sound="Ping"
+      state=input message="Needs your input: $(field '.title')" sound="omo-input"
     else
       # Answered or timed out: the agent carries on.
       state=working
@@ -50,8 +51,8 @@ case "$event" in
 esac
 
 # Background the ding so the hook returns immediately; redirect output so the
-# hook runner is not left waiting on afplay's inherited pipes.
-[[ -n "$sound" ]] && afplay "/System/Library/Sounds/${sound}.aiff" >/dev/null 2>&1 &
+# hook runner is not left waiting on the player's inherited pipes.
+[[ -n "$sound" ]] && "$HOME/.local/bin/omo-sound" "$sound" >/dev/null 2>&1 &
 
 # Find the tmux pane omo runs in: hooks run detached without TMUX_PANE, so walk
 # up the process tree to the first ancestor whose tty is a tmux pane.

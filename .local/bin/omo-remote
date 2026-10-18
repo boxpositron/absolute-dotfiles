@@ -124,9 +124,9 @@ case ${1:-} in
     [[ $tags == *,omo,* ]] || exit 0 # Claude Code posts to the same topic
     (($(date +%s) - ${NTFY_TIME:-0} <= fresh)) || exit 0
     case $tags in
-      *,question,*) state=input sound=Ping ;;
-      *,x,*) state=error sound=Glass ;;
-      *) state="done" sound=Glass ;;
+      *,question,*) state=input sound=omo-input ;;
+      *,x,*) state=error sound=omo-error ;;
+      *) state="done" sound=omo-done ;;
     esac
     # "attached" only says some terminal shows the session: a tmux pane here
     # (the title path has it), a plain tab, or a mosh-server left behind.
@@ -135,7 +135,7 @@ case ${1:-} in
       logline "ntfy $state ${NTFY_TITLE:-} skipped: a tmux pane got it through the title"
       exit 0
     fi
-    afplay "/System/Library/Sounds/${sound}.aiff" >/dev/null 2>&1 &
+    "$HOME/.local/bin/omo-sound" "$sound" >/dev/null 2>&1 &
     # Ghostty posts the banner from a plain tab connected with mosh or ssh, so
     # clicking it lands there, or else from the tmux tab you used last.
     target=$(plain_tab_tty "$tags")

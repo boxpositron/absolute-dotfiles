@@ -1,0 +1,19 @@
+# omo's notification sounds. omo-notify and omo-remote play them through
+# omo-sound. Re-render after editing a recipe: sfx recipes.toml
+# Recipe format: ~/.omo/agent/skills/sound-design/SKILL.md
+loudness = -26.0 # LUFS, the level of macOS's Glass alert
+
+[sound.omo-done]
+about = "quick rising major arpeggio: task finished"
+tone = { bright = 1.0, decay = 1.0 }
+notes = [[0.00, "C6", 0.65, -0.2], [0.07, "E6", 0.75, 0.0], [0.14, "G6", 1.00, 0.2]]
+
+[sound.omo-input]
+about = "rising fourth, second note louder: needs your input"
+tone = { bright = 1.25, decay = 0.8 }
+notes = [[0.00, "E6", 0.80, 0.0], [0.15, "A6", 1.00, 0.0]]
+
+[sound.omo-error]
+about = "low descending minor third, muted: stopped with an error"
+tone = { bright = 0.35, decay = 0.7 }
+notes = [[0.00, "E5", 1.00, 0.0], [0.16, "C#5", 0.90, 0.0]]
