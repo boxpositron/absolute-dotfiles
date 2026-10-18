@@ -429,4 +429,18 @@ function fs() {
     local session="${1:-main}"
     mosh flowstate-remote -- tmux new-session -A -s "$session"
 }
+
+# Send the clipboard image to flowstate-remote agents. Saves it into the
+# Mutagen-synced share (~/Company/flowstate-share <-> /home/ubuntu/share),
+# waits for it to reach the server, then copies the server path to paste into chat.
+function fsimg() {
+    local name="clip-$(date +%Y%m%d-%H%M%S).png"
+    pngpaste ~/Company/flowstate-share/"$name" || return 1
+    echo "uploading $name..."
+    if ! mutagen sync flush fs-share >/dev/null; then
+        echo "warning: sync flush failed, the file may not be on the server yet" >&2
+    fi
+    printf '/home/ubuntu/share/%s' "$name" | pbcopy
+    echo "path copied: /home/ubuntu/share/$name"
+}
 export PATH=$PATH:$HOME/.maestro/bin
