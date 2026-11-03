@@ -57,6 +57,7 @@ Usage (run from anywhere inside the repo):
                        when run inside one; jumps straight in if only one matches).
                        Needs the owt shell function in .zshrc; without it, prints the path.
   owt path <name>      Print a workspace path (cd "$(owt path lagos)")
+  owt completion zsh   Print the zsh tab completion (.zshrc: source <(command owt completion zsh))
   owt rm <name> [--force]
         Remove the workspace and delete its branch if merged.
         --force also discards uncommitted changes and deletes an unmerged branch.
@@ -441,6 +442,114 @@ cmd_cd() {
   printf '%s/%s\n' "$OWT_ROOT" "$picked"
 }
 
+# Data for the zsh completion, as name:description lines. It runs on every Tab, so
+# "all" reads each worktree's HEAD file rather than spawning git per workspace.
+cmd_complete() {
+  case "${1:-}" in
+    here) cmd_ls | awk '{ print $1 ":" $2 }' ;;
+    all)
+      local dir gitdir head
+      for dir in "$OWT_ROOT"/*/*/; do
+        dir="${dir%/}"
+        [[ -f "$dir/.git" ]] || continue
+        gitdir="$(<"$dir/.git")"
+        gitdir="${gitdir#gitdir: }"
+        if [[ ! -f "$gitdir/HEAD" ]]; then
+          head='?'
+        else
+          head="$(<"$gitdir/HEAD")"
+          if [[ "$head" == 'ref: refs/heads/'* ]]; then head="${head#ref: refs/heads/}"; else head='(detached)'; fi
+        fi
+        printf '%s:%s\n' "${dir#"$OWT_ROOT"/}" "$head"
+      done
+      ;;
+    refs) git for-each-ref --format='%(refname:short)' refs/heads refs/remotes refs/tags ;;
+  esac
+}
+
+cmd_completion() {
+  [[ "${1:-}" == zsh ]] || die "usage: owt completion zsh"
+  cat <<'EOF'
+_owt_workspaces_here() {
+  local -a items
+  items=(${(f)"$(command owt __complete here 2>/dev/null)"})
+  (( $#items )) || { _message 'no workspaces here: run this inside a repo that has some, or use owt cd'; return 1 }
+  _describe -t workspaces 'workspace' items
+}
+
+_owt_workspaces_any() {
+  local -a here all
+  local ret=1
+  here=(${(f)"$(command owt __complete here 2>/dev/null)"})
+  all=(${(f)"$(command owt __complete all 2>/dev/null)"})
+  (( $#here )) && _describe -t workspaces-here 'workspace in this repo' here && ret=0
+  (( $#all )) && _describe -t workspaces-all 'workspace in any repo' all && ret=0
+  return ret
+}
+
+_owt_refs() {
+  local -a refs
+  refs=(${(f)"$(command owt __complete refs 2>/dev/null)"})
+  (( $#refs )) || { _message 'no git refs here'; return 1 }
+  _describe -t refs 'git ref' refs
+}
+
+_owt() {
+  local curcontext="$curcontext" state line
+  local -A opt_args
+  local -a commands
+  commands=(
+    'new:create a workspace and open the agent in it'
+    'open:open the agent in an existing workspace'
+    'cd:jump into a workspace of any repo'
+    'ls:list this repo'"'"'s workspaces'
+    'all:list the workspaces of every repo'
+    'path:print a workspace path'
+    'title:title the workspace'"'"'s tmux windows'
+    'done:finish a workspace once its work is merged'
+    'rm:remove a workspace'
+    'completion:print the shell completion'
+    'help:show usage'
+  )
+  _arguments -C '1:command:->command' '*::argument:->argument' && return
+  case $state in
+    command) _describe -t commands 'owt command' commands ;;
+    argument)
+      case $line[1] in
+        new)
+          _arguments \
+            '--name[workspace name instead of a random city]:name: ' \
+            '--base[start from this ref]:git ref:_owt_refs' \
+            '--no-install[skip installing dependencies]' \
+            '--no-launch[do not open the agent]' \
+            '*:Linear issue key: '
+          ;;
+        open|path) _arguments '1:workspace:_owt_workspaces_here' ;;
+        cd) _arguments '1:workspace:_owt_workspaces_any' ;;
+        rm)
+          _arguments \
+            '--force[also discard uncommitted changes and an unmerged branch]' \
+            '1:workspace:_owt_workspaces_here'
+          ;;
+        done)
+          _arguments \
+            '--check[print the workspace state and exit 1 if unsafe]' \
+            '--force[finish anyway, discarding unmerged work]' \
+            '--detach[run the cleanup from tmux 5 seconds later]' \
+            '1::workspace:_owt_workspaces_here'
+          ;;
+        title) _arguments '*:title word: ' ;;
+        completion) _arguments '1:shell:(zsh)' ;;
+      esac
+      ;;
+  esac
+}
+
+compdef _owt owt
+zstyle ':completion:*:*:owt:*:messages' format '%F{yellow}%d%f'
+EOF
+}
+
 cmd_rm() {
   local name="" force=0
   while [[ $# -gt 0 ]]; do
@@ -580,6 +689,8 @@ case "${1:-}" in
   all)  shift; cmd_all ;;
   cd)   shift; cmd_cd "$@" ;;
   path) shift; cmd_path "$@" ;;
+  completion) shift; cmd_completion "$@" ;;
+  __complete) shift; cmd_complete "$@" ;;
   rm)   shift; cmd_rm "$@" ;;
   ""|-h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;

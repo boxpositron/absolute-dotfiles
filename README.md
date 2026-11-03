@@ -199,6 +199,7 @@ owt cd                  # jump into a workspace with fzf; owt cd lagos goes stra
 owt open lagos          # reopen the agent in a workspace
 owt title imap timeouts # title the workspace's tmux tab (one to three words); the agent does this itself
 owt done                # remove the workspace you are in once its work is merged
+owt completion zsh      # the zsh tab completion, which .zshrc sources: commands, flags, workspaces, git refs for --base
 ```
 
 `owt new` starts from the latest `origin` default branch, copies local `.env` files, installs dependencies, and opens a tmux window running omo with the workspace conventions: rename the placeholder branch to `feature/<keys>-<slug>` before pushing, title the tab with one to three words naming the work (`owt title`) and update it when the focus changes, and keep the Linear issues' statuses in sync. The title is saved with the worktree, so `owt open` reopens the tab under it. Workspaces share the main checkout's omo memory through a link under `~/.omo/memory/agents/`.
