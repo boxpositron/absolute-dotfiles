@@ -138,6 +138,13 @@ Key features:
 - Native titlebar; SSH sessions forward the environment and terminfo
 - Does not auto-attach tmux; start or attach sessions yourself
 
+#### Herdr (`.config/herdr-app/`)
+- Herdr desktop app themed to match tmux: Catppuccin Mocha and Latte following the system appearance, JetBrainsMono Nerd Font 14, omo's own sounds, telemetry off
+- A `tmux` layout whose sidebar adds an "omo in tmux" panel listing every omo pane in every tmux session, with its state and message; a click shows that pane
+- Search (Cmd+P, or the sidebar's search button) also finds tmux sessions and panes, by session name, window name, program, folder or omo message, and goes to the one you pick
+- A tmux session can have a Herdr space of its own: opening one from the panel or search makes it, and the panel's spaces button makes one for every session running omo, so Herdr's sidebar lists your sessions and its Agents list shows each one's status
+- omo shows its status in Herdr from inside tmux through `omo-status`; see [its README](.config/herdr-app/README.md)
+
 #### WezTerm (`.config/wezterm/`)
 - Lua-based configuration
 - Custom key bindings
@@ -157,7 +164,7 @@ Key features:
 
 ### Development Tools
 
-- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings; sets the terminal title to the session name, after the omo status marker when there is one. Ctrl+click a file path in any pane (omo, a shell, logs) to open it with `tmux-open-path`: markdown in Markdown Preview, images, PDFs and directories in yazi, anything else in nvim at the clicked `:line`. yazi and nvim open in a split beside the clicked pane
+- **tmux** (`.tmux.conf`): Terminal multiplexer with custom key bindings; sets the terminal title to the session name, after the omo status marker when there is one, and hands a client in Herdr its session's omo status when it attaches or switches session. Ctrl+click a file path in any pane (omo, a shell, logs) to open it with `tmux-open-path`: markdown in Markdown Preview, images, PDFs and directories in yazi, anything else in nvim at the clicked `:line`. yazi and nvim open in a split beside the clicked pane
 - **Zed** (`.config/zed/keymap.json`): Editor key bindings. Settings stay local because they reference machine-specific agent paths
 - **tmux server** (`.tmux-server.conf`): Lightweight tmux config for remote servers
 - **Git**: Global gitignore patterns (`.rgignore`, `.gitignore`)
@@ -174,7 +181,7 @@ Key features:
 OpenCode is retired. Its agents, commands and plugins are left in `.config/opencode/` for reference, are no longer installed or linked, and its skills and slash commands moved here.
 
 - `omo.jsonc` (linked as `~/.omo/omo.jsonc`): model routing for the main session, task categories and curated agents. `design-critique-a` and `design-critique-b` are the two lanes the Impeccable critique delegates its assessments to.
-- `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` when you send a prompt, when a session stops and when it asks you something, for the sound, the notification and the coloured tab marker. It also runs `owt hook` with each prompt, which tells an agent in an `owt` workspace its current tab title so it retitles the tab as the work changes. omo runs a new hook only after you approve it with `/hooks trust <id>` (ids are in `/hooks list`).
+- `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` when a session starts, when you send a prompt, when a session stops and when it asks you something, for the sound, the notification, the coloured tab marker and the status Herdr shows. It also runs `owt hook` with each prompt, which tells an agent in an `owt` workspace its current tab title so it retitles the tab as the work changes. omo runs a new hook only after you approve it with `/hooks trust <id>` (ids are in `/hooks list`).
 - `sounds/`: omo's own notification sounds, rendered offline by `sfx` from `recipes.toml`. They are pure synthesis, so they contain no third-party audio and play on Linux too. `omo-sound` plays them for `omo-notify` and `omo-remote`. Edit a recipe, run `sfx recipes.toml` in that directory, and the next notification uses the new sound.
 - `prompts/` (linked as `~/.omo/agent/prompts`): slash commands.
   - `/linear-sync [notes]` posts a progress comment on the workspace's Linear issues and sets them to In Progress, or In Review once a PR is open.
@@ -197,7 +204,7 @@ owt ls                  # workspaces and their current branches
 owt all                 # workspaces of every repo, with branches and source checkouts (from anywhere)
 owt cd                  # jump into a workspace with fzf; owt cd lagos goes straight there
 owt open lagos          # reopen the agent in a workspace
-owt title imap timeouts # title the workspace's tmux tab (one to three words); the agent does this itself
+owt title imap timeouts # title the workspace's tab (one to three words); the agent does this itself
 owt done                # remove the workspace you are in once its work is merged
 owt completion zsh      # the zsh tab completion, which .zshrc sources: commands, flags, workspaces, git refs for --base
 ```
@@ -206,7 +213,9 @@ owt completion zsh      # the zsh tab completion, which .zshrc sources: commands
 
 `owt cd` works from any directory. Inside a repository the picker starts filtered to that repo's workspaces and jumps straight in when only one matches. The `owt` function in `.zshrc` performs the `cd`; without it, `owt cd` only prints the path.
 
-`owt done` refuses to discard work unless you pass `--force`. Work counts as merged when the branch is part of the default branch or its Gitea PR is merged (checked with `tea`). It then deletes the remote and local branch, removes the worktree and its memory link, and closes tmux windows open in it. `OWT_ROOT` (default `~/worktrees`) and `OWT_AGENT` (default `omo`) override the defaults; `owt --help` lists every option.
+`owt done` refuses to discard work unless you pass `--force`. Work counts as merged when the branch is part of the default branch or its Gitea PR is merged (checked with `tea`). It then deletes the remote and local branch, removes the worktree and its memory link, and closes tmux windows and Herdr tabs open in it. `OWT_ROOT` (default `~/worktrees`) and `OWT_AGENT` (default `omo`) override the defaults; `owt --help` lists every option.
+
+In Herdr outside tmux, `owt` uses Herdr spaces where it would use tmux windows. `owt new` and `owt open` open a space of its own for the workspace, named after its title, which Herdr's sidebar nests under the repo's space when that is open. `owt title` renames it, `owt done` closes it, and `owt done --detach` runs its cleanup as a herdr-core terminal of its own so closing the space can't stop it. Inside tmux, `owt` keeps to tmux windows even when the tmux client runs in Herdr.
 
 `owt` also runs on Linux servers. On flowstate-remote, `~/.local/bin/owt` links to a clone of this repository, the server's own `~/.zshrc` carries the `owt` wrapper, and its `~/.omo/agent/hooks.json` runs `owt hook` like the Mac's. Its repositories live on GitHub, which `tea` cannot query, so `owt done` there counts a branch as merged only once it is part of the default branch: merge-commit PRs pass, squash-merged ones need `--force`.
 
@@ -231,8 +240,9 @@ Custom scripts and binaries are stored in `.local/bin/`:
 - `cldir`: Change directory with Claude context
 - `owt`: Git worktree workspaces for coding agents (see [Agent workspaces](#agent-workspaces-owt))
 - `tmux-open-path`: Backs tmux's Ctrl+click. Takes the path under the mouse, strips `:line:col`, `#L10`, `@` and `file://`, resolves it against the pane's directory and then its git root, and routes it by type: markdown to Markdown Preview (`cask "markdown-preview"` in `Brewfile.apps`), images, PDFs and directories to yazi, the rest to nvim
-- `omo-notify`: Sound, tab marker and notification for OmO's hooks. Ghostty posts the notification, so clicking it opens the session's tab and pane
-- `omo-status`: Coloured marker in front of the Ghostty tab title for each tmux session running omo: 🔴 stopped with an error, 🟡 waiting for your answer, 🟢 finished, 🔵 working. A tab with several agents shows the most urgent one; focusing the tab clears red, amber and green, and undoes any title you gave the tab by hand so it always shows its session name
+- `omo-notify`: Sound, tab marker and notification for OmO's hooks. Ghostty posts the notification, so clicking it opens the session's tab and pane. Messages name the task, the first line of your prompt ("Finished: fix the imap timeouts"). In Herdr it stays quiet and Herdr plays the sound and shows the toast
+- `omo-status`: Coloured marker in front of the Ghostty tab title for each tmux session running omo: 🔴 stopped with an error, 🟡 waiting for your answer, 🟢 finished, 🔵 working. A tab with several agents shows the most urgent one; focusing the tab clears red, amber and green, and undoes any title you gave the tab by hand so it always shows its session name. It also reports the session's most urgent state and message to tmux clients running in Herdr as an OSC 7501 program status, since omo inside tmux cannot report through tmux, and `omo-status list` and `omo-status show <pane>` list every pane running omo and show one in Herdr, for Herdr's "omo in tmux" panel. `omo-status spaces` gives every tmux session running omo a Herdr space of its own, and `omo-status next` (Cmd+J in Herdr) shows the pane that most needs you
+- `herdr-tmux-update`: After a Herdr update, merges Herdr's changes to its search, sidebar chrome and main layout into our copies of them (see [the Herdr README](.config/herdr-app/README.md))
 - `omo-remote`: The same sound, tab marker and notification for omo sessions on a remote server (flowstate-remote). The server's `omo-notify` (kept on the server in `~/.local/bin`, not in this repository) writes the session's state into its terminal title, marker first (`🟢 studio · omo:done:...`). mosh drops notifications but carries titles, and so does ssh, so tmux's `pane-title-changed` hook passes the event to `omo-notify` for the pane running mosh or ssh. Everything else reaches you through ntfy: `omo-remote install` starts a launchd agent that subscribes to the topic and plays the sound and posts the notification for omo pushes, unless a tmux pane here already handled that event through its title, so nothing arrives twice. That covers sessions no terminal is showing and `fs` in a plain Ghostty tab, whose title shows the marker and which posts the notification itself (the coloured tab marker needs tmux). The agent reads `NTFY_URL`, `NTFY_TOPIC` and `NTFY_TOKEN` from `~/.config/ntfy/omo-remote.env` (chmod 600, not in this repository) and needs `brew "ntfy"`
 - `omo-sound`: Plays an omo notification sound by name (`omo-done`, `omo-input`, `omo-error`) or any audio file, with afplay on macOS and pw-play, paplay, aplay or ffplay on Linux
 - `sfx`: Renders notification sounds and short effects from a TOML recipe, offline and from synthesis alone, normalised to one loudness, as WAV plus optional MP3 and MIDI. A uv script; `sfx --help` lists the options and the `sound-design` skill documents the recipe format
