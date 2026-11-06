@@ -1,0 +1,11 @@
+{
+  "programs": {
+    "omo": {
+      "name": "omo",
+      "icon": "omo.svg",
+      "tint": false,
+      "tile": "#041617",
+      "run": ["omo"]
+    }
+  }
+}

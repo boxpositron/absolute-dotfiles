@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# herdr-tmux-update: carry our Herdr copies onto a new Herdr release.
+#
+# picker-tmux, workspace-chrome-tmux and the tmux layout are copies of Herdr's
+# picker, workspace-chrome and main layout with our additions, and Herdr never
+# updates a copy. This merges what Herdr changed in its own versions since we
+# copied them (kept in .config/herdr-app/base/) into ours, with git merge-file,
+# then records the new versions as the base. Run it after Herdr updates; a
+# conflict leaves <<<<<<< blocks in our file to settle by hand.
+#
+# Usage: herdr-tmux-update
+
+set -euo pipefail
+
+app="$HOME/.config/herdr-app"
+dot="${DOTFILES:-$HOME/dotfiles}/.config/herdr-app"
+base="$dot/base"
+status=0
+
+merge() {
+  local name=$1 ours=$2 shipped=$3 was=$4
+  if cmp -s "$shipped" "$was"; then
+    printf '%s: Herdr has not changed it\n' "$name"
+    return
+  fi
+  if git merge-file -L ours -L "Herdr before" -L "Herdr now" "$ours" "$was" "$shipped"; then
+    printf '%s: merged Herdr'"'"'s changes\n' "$name"
+  else
+    printf '%s: merged with conflicts; settle the <<<<<<< blocks in %s\n' "$name" "$ours"
+    status=1
+  fi
+  cp "$shipped" "$was"
+}
+
+merge picker-tmux "$dot/mods/picker-tmux/main.js" "$app/mods/picker/main.js" "$base/picker.js"
+merge workspace-chrome-tmux "$dot/mods/workspace-chrome-tmux/main.js" "$app/mods/workspace-chrome/main.js" "$base/workspace-chrome.js"
+merge "tmux layout" "$dot/layouts/tmux.json" "$app/layouts/main.json" "$base/main.json"
+herdr-app check "$app/mods/picker-tmux" && herdr-app check "$app/mods/workspace-chrome-tmux" || status=1
+exit "$status"

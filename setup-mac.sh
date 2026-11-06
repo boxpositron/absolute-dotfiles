@@ -46,6 +46,15 @@ local_servers
 .config/zellij/config.kdl
 .config/zed/keymap.json
 .config/zed/settings.json
+.config/herdr-app/settings.json
+.config/herdr-app/programs.json
+.config/herdr-app/themes/catppuccin-mocha.json
+.config/herdr-app/themes/catppuccin-latte.json
+.config/herdr-app/layouts/tmux.json
+.config/herdr-app/mods/omo-tmux
+.config/herdr-app/mods/picker-tmux
+.config/herdr-app/mods/workspace-chrome-tmux
+.config/herdr-app/keys.json
 .config/omo/hooks.json:.omo/agent/hooks.json
 .config/omo/keybindings.json:.omo/agent/keybindings.json
 .config/omo/extensions/vim-quit.ts:.omo/agent/extensions/vim-quit.ts
@@ -194,6 +203,15 @@ step_links() {
     for entry in $LINKS; do
         link "${entry%%:*}" "${entry#*:}"
     done
+    # Herdr loads a program icon only from a real file in its folder, not through a link.
+    local icon=.config/herdr-app/omo.svg
+    if ! cmp -s "$DOTFILES/$icon" "$HOME/$icon"; then
+        if $DRY_RUN; then
+            info "would copy ~/$icon"
+        else
+            mkdir -p "$(dirname "$HOME/$icon")" && cp "$DOTFILES/$icon" "$HOME/$icon" && info "copied ~/$icon"
+        fi
+    fi
     for script in "$DOTFILES"/.local/bin/*; do
         name=${script##*/}
         case $name in
