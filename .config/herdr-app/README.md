@@ -60,7 +60,8 @@ A session attached in Ghostty and in Herdr at once is sized to whichever client 
 - Cmd+J in the `tmux` layout (`omo-tmux.next` in `keys.json`, `omo-status next` from a shell) shows the pane that most needs you: a question or a failure, then a finished turn, the longest waiting first. Looking at it clears it, so pressing again moves on.
 - Herdr's agents list reads "<space> · <work>": `omo-status` names a session's Herdr tab after its most urgent pane's window (an `owt` title) or task, and sends it as the report's OSC 7501 `title`. Only tabs still called by their number, or by the label it set, change.
 - omo sends no Stop hook while a background task (a terminal monitor, a child session) is live, so a finished turn could stay "working". `omo-notify` records each pane's transcript (`@omo_transcript`), and `omo-status list` turns a working pane idle when the transcript's last `session-lifecycle` state is `waiting_*`.
-- Spaces sync by themselves: omo's start hook runs `omo-status spaces` when Herdr is running, and tmux's `session-closed` hook closes the space of a session that ended. A lock keeps two syncs from overlapping.
+- Spaces sync by themselves: omo's start hook runs `omo-status spaces --local` when Herdr is running, and tmux's `session-closed` hook closes the space of a session that ended. `--local` opens spaces only for this Mac's sessions; the layers button opens them for every machine's. A lock keeps two syncs from overlapping.
+- tmux marks a client in a Herdr terminal focused even while its space is hidden, since Herdr sends it no focus-out, so `omo-status` doesn't count Herdr clients as looking at a pane. Going to a pane through the panel, search or Cmd+J clears it instead.
 
 ## Herdr updates
 
@@ -68,13 +69,14 @@ A session attached in Ghostty and in Herdr at once is sized to whichever client 
 
 ## flowstate-remote
 
-flowstate-remote is a Herdr machine (`hc machine add flowstate-remote`, herdr-core 0.1.18 installed there), so its spaces and terminals can live in this window. To open a server tmux session in a space of its own:
+flowstate-remote is a Herdr machine (`hc machine add flowstate-remote`, herdr-core 0.1.18 installed there), and its tmux sessions work like the Mac's:
 
-```sh
-herdr-app do space.new --machine flowstate-remote --name studio --argv '["tmux", "attach-session", "-t", "studio"]'
-```
+- The panel, search and Cmd+J list its panes as `flowstate-remote/<session>`. `omo-status` on the Mac reads them by running the server's own `omo-status` through `hc exec --on flowstate-remote`.
+- Opening one shows the Herdr tab already on its session, or makes a space for it on the server. The layers button makes spaces for its sessions too; the automatic syncs don't, so no server session is attached from Herdr, and resized, unless you ask.
+- On the server, `~/.local/bin/omo-status` links to the dotfiles clone's, and `.tmux-server.conf` runs its `sync` and `focus` hooks. The server's own `~/.local/bin/omo-notify`, which is not in this repo (the earlier one is kept as `omo-notify.bak-20261107`), calls `omo-status set` on every omo event. A tmux client in a Herdr terminal there gets the same OSC 7501 report as on the Mac and no `omo:` title.
+- Its ntfy push carries a `herdr` tag when a Herdr terminal shows the session, and `omo-remote` on the Mac then leaves the sound and banner to Herdr.
 
-The server's omo still reports through its terminal title and ntfy; a Herdr client attached to a session there shows no omo status until the server runs this `omo-status` too. A session attached from mosh and from Herdr at once is sized to the client used last.
+A session attached from mosh and from Herdr at once is sized to the client used last.
 
 ## Watch out
 
