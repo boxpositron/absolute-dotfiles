@@ -125,6 +125,11 @@ case ${1:-} in
     tags=",${NTFY_TAGS:-},"
     [[ $tags == *,omo,* ]] || exit 0 # Claude Code posts to the same topic
     (($(date +%s) - ${NTFY_TIME:-0} <= fresh)) || exit 0
+    # "herdr": a Herdr terminal on the server shows the session, so Herdr sounds and shows it.
+    if [[ $tags == *,herdr,* ]]; then
+      logline "ntfy ${NTFY_TITLE:-} skipped: Herdr shows that session"
+      exit 0
+    fi
     case $tags in
       *,question,*) state=input sound=omo-input ;;
       *,x,*) state=error sound=omo-error ;;

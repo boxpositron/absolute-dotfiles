@@ -89,7 +89,7 @@ if [[ -n "$pane" ]]; then
   herdr=$(tmux display-message -p -t "$pane" '#{@omo_herdr}')
   # A session that starts omo gets its Herdr space (when Herdr runs), in the background.
   if [[ $event == SessionStart ]] && command -v herdr-app >/dev/null && herdr-app status >/dev/null 2>&1; then
-    ("$HOME/.local/bin/omo-status" spaces >/dev/null 2>&1 &)
+    ("$HOME/.local/bin/omo-status" spaces --local >/dev/null 2>&1 &)
   fi
 elif [[ -n "${HC_TERMINAL_ID:-}" && -w "$own_tty" ]]; then
   message=$("$HOME/.local/bin/omo-status" tty "$own_tty" "$state" "$message")

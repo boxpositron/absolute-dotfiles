@@ -28,12 +28,19 @@
 #        omo-status show <pane>      (shows the pane in Herdr: the tab already on its session,
 #                                     else a tab in the space named after the session, else a
 #                                     new space for the session)
-#        omo-status spaces           (a Herdr space for every tmux session running omo; closes
-#                                     the spaces it made for sessions that ended)
+#        omo-status spaces [--local] (a Herdr space for every tmux session running omo; closes
+#                                     the spaces it made for sessions that ended. --local opens
+#                                     spaces only for this computer's sessions)
 #        omo-status next             (shows the pane that most needs you: a question or a
 #                                     failure, then a finished turn, the longest waiting first)
 #        omo-status list             (every pane running omo, for Herdr's "omo in tmux" panel:
 #                                     pane, session, window, folder, state, since, message)
+#        omo-status panes            (every tmux pane, for Herdr's search)
+#
+# list, panes, show, next and spaces also cover the tmux of each Herdr machine
+# herdr-core is connected to (`hc machine ls`): there this script runs, through
+# `hc exec --on`, as list-here, panes-here, locate and herdr-sessions, and its
+# panes and sessions come back as "<machine>/%3" and "<machine>/<session>".
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$PATH"
 
@@ -105,7 +112,11 @@ send_report() {
 # The Herdr terminal a tmux client runs in, if any: herdr-core gives the programs
 # in its terminals HC_TERMINAL_ID, and a client keeps the environment it started with.
 herdr_terminal() {
-  ps eww -o command= -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1
+  if [[ -r /proc/$1/environ ]]; then
+    tr '\0' '\n' <"/proc/$1/environ" | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1
+  else
+    ps eww -o command= -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1
+  fi
 }
 
 # Names of the tmux sessions a Herdr terminal shows: their clients run in herdr-core.
@@ -116,21 +127,49 @@ herdr_sessions() {
   done < <(tmux list-clients -F '#{client_pid} #{session_name}')
 }
 
+# Herdr machines herdr-core is connected to. Only where the Herdr app runs: on a
+# machine itself this finds none, so it never reaches further.
+machines() {
+  command -v herdr-app >/dev/null && command -v hc >/dev/null || return 0
+  hc machine ls --json 2>/dev/null | jq -r '.machines[] | select(.state == "connected" and (.temporary | not)) | .name'
+}
+
+# This script with these arguments, here, or on Herdr machine <machine> when one is named.
+at() {
+  local machine=$1
+  shift
+  if [[ -z $machine ]]; then
+    "$0" "$@"
+  else
+    hc exec --on "$machine" --timeout 5 sh -c 'exec "$HOME/.local/bin/omo-status" "$@"' omo-status "$@"
+  fi
+}
+
+# A machine's rows, its name in front of the pane and the session ("flowstate-remote/%3").
+prefixed() {
+  local machine=$1 line
+  while IFS= read -r line; do
+    [[ -n $line ]] && printf '%s/%s\n' "$machine" "${line/"|^|"/"|^|$machine/"}"
+  done
+}
+
 # A tab attached to a tmux session, in the Herdr space named after it, else in a
-# new space for it in <folder>. A space this makes goes in $spaces_file.
+# new space for it in <folder>, on <machine> when the session lives on one. A
+# space this makes goes in $spaces_file.
 open_space() {
-  local session=$1 folder=$2 target=$3 argv space made
+  local session=$1 folder=$2 target=$3 machine=${4:-} argv space made
   argv=$(jq -cn --arg t "$target" '["tmux", "attach-session", "-t", $t]')
-  space=$(herdr-app ls 2>/dev/null | jq -r --arg n "$session" 'first(.spaces[] | select(.name == $n and .machine == null) | .id) // empty')
+  space=$(herdr-app ls 2>/dev/null | jq -r --arg n "$session" --arg m "$machine" \
+    'first(.spaces[] | select(.name == $n and (.machine // "") == $m) | .id) // empty')
   if [[ -n $space ]]; then
     herdr-app "do" tab.new --space "$space" --name "$session" --argv "$argv" >/dev/null
     return
   fi
-  made=$(herdr-app "do" space.new --name "$session" --folder "$folder" --argv "$argv") || return 1
+  made=$(herdr-app "do" space.new --name "$session" --folder "$folder" ${machine:+--machine "$machine"} --argv "$argv") || return 1
   space=$(jq -r '.space // empty' <<<"$made")
   [[ -n $space ]] || return 1
   mkdir -p "$(dirname "$spaces_file")"
-  printf '%s\t%s\n' "$session" "$space" >>"$spaces_file"
+  printf '%s\t%s\n' "${machine:+$machine/}$session" "$space" >>"$spaces_file"
 }
 
 forget() {
@@ -269,7 +308,19 @@ case ${1:-} in
     # A client that just arrived holds the report of where it was before, or none.
     [[ -n $(herdr_terminal "$pid") ]] && send_report "$tty" "$(tmux show-option -qv -t "$session" @omo_report)"
     ;;
-  list)
+  list | panes)
+    "$0" "$1-here"
+    for machine in $(machines); do
+      at "$machine" "$1-here" 2>/dev/null | prefixed "$machine"
+    done
+    ;;
+  panes-here)
+    tmux -u list-panes -a -F '#{pane_id}|^|#{session_name}|^|#{session_attached}|^|#{window_index}|^|#{window_name}|^|#{window_active}|^|#{pane_index}|^|#{pane_active}|^|#{pane_current_command}|^|#{pane_current_path}|^|#{@omo_state}|^|#{@omo_msg}'
+    ;;
+  herdr-sessions)
+    herdr_sessions
+    ;;
+  list-here)
     # omo holds its Stop hook while a background task (a terminal monitor, a child
     # session) is live, so a pane can stay "working" after its turn ended. Its
     # transcript's last session-lifecycle entry says so: waiting_* means it is idle.
@@ -303,20 +354,29 @@ case ${1:-} in
           print f[3] "|^|" f[4] "|^|" f[5] "|^|" f[6] "|^|" state "|^|" f[8] "|^|" msg
         }'
     ;;
-  show)
-    pane=${2:?pane id required}
+  locate)
+    # Selects the pane and prints "<Herdr terminal on its session>\x1f<session>\x1f<folder>",
+    # the terminal empty when no Herdr terminal shows the session.
+    pane=${2:?pane id required} terminal=""
     session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 1
     tmux select-window -t "$pane" \; select-pane -t "$pane"
     while read -r pid client_session; do
       [[ $client_session == "$session" ]] || continue
       terminal=$(herdr_terminal "$pid")
-      if [[ -n $terminal ]]; then
-        herdr-app "do" pane.focus --terminal "$terminal" >/dev/null
-        exit
-      fi
+      [[ -n $terminal ]] && break
     done < <(tmux list-clients -F '#{client_pid} #{session_id}')
-    open_space "$(tmux display-message -p -t "$pane" '#{session_name}')" \
-      "$(tmux display-message -p -t "$pane" '#{pane_current_path}')" "$pane"
+    printf '%s\x1f%s\x1f%s\n' "$terminal" "$(tmux display-message -p -t "$pane" '#{session_name}')" \
+      "$(tmux display-message -p -t "$pane" '#{pane_current_path}')"
+    ;;
+  show)
+    pane=${2:?pane id required} machine=""
+    [[ $pane == */* ]] && machine=${pane%%/*} pane=${pane#*/}
+    IFS=$'\x1f' read -r terminal session folder < <(at "$machine" locate "$pane") || exit 1
+    if [[ -n $terminal ]]; then
+      herdr-app "do" pane.focus --terminal "${machine:+$machine/}$terminal" >/dev/null
+    else
+      open_space "$session" "$folder" "$pane" "$machine"
+    fi
     ;;
   next)
     pane=$("$0" list | awk -F'[|][\\^][|]' '
@@ -332,7 +392,18 @@ case ${1:-} in
     mkdir "$lock" 2>/dev/null || exit 0
     trap 'rmdir "$lock"' EXIT
     here=$(herdr-app status 2>/dev/null | jq -r '.space // empty')
+    connected=$(machines)
     shown=$'\n'"$(herdr_sessions)"$'\n'
+    # --local (omo's start hook, tmux's session-closed hook): a server's session
+    # gets a Herdr client, which resizes it under your mosh client, only on request.
+    rows=list
+    if [[ ${2:-} == --local ]]; then
+      rows=list-here
+    else
+      for machine in $connected; do
+        shown+="$(at "$machine" herdr-sessions 2>/dev/null | sed "s|^|$machine/|")"$'\n'
+      done
+    fi
     opened=0 closed=0
     while IFS= read -r line; do
       pane=${line%%"|^|"*} rest=${line#*"|^|"}
@@ -340,12 +411,21 @@ case ${1:-} in
       rest=${rest#*"|^|"} folder=${rest%%"|^|"*}
       [[ $shown == *$'\n'"$session"$'\n'* ]] && continue
       shown+="$session"$'\n'
-      open_space "$session" "$folder" "$pane" && opened=$((opened + 1))
-    done < <("$0" list)
+      machine=""
+      [[ $pane == */* ]] && machine=${pane%%/*} pane=${pane#*/} session=${session#*/}
+      open_space "$session" "$folder" "$pane" "$machine" && opened=$((opened + 1))
+    done < <("$0" "$rows")
     if [[ -f $spaces_file ]]; then
       kept=""
       while IFS=$'\t' read -r session space; do
-        if tmux has-session -t "=$session" 2>/dev/null; then
+        machine="" name=$session alive=1
+        [[ $session == */* ]] && machine=${session%%/*} name=${session#*/}
+        if [[ -z $machine ]]; then
+          tmux has-session -t "=$name" 2>/dev/null || alive=""
+        elif [[ $'\n'$connected$'\n' == *$'\n'"$machine"$'\n'* ]]; then
+          hc exec --on "$machine" --timeout 5 tmux has-session -t "=$name" >/dev/null 2>&1 || alive=""
+        fi # a machine that is away keeps its spaces: its sessions may well live on
+        if [[ -n $alive ]]; then
           kept+="$session"$'\t'"$space"$'\n'
         else
           herdr-app "do" space.close --id "$space" --confirmed true >/dev/null 2>&1 && closed=$((closed + 1))

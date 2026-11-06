@@ -33,11 +33,10 @@ function spaceColors() {
   if (changed) setShared("space.colors", kept);
   return kept;
 }
-// tmux turns control characters in its output into "_" when Herdr runs it, so
-// fields split on text; -u because Herdr's environment names no UTF-8 locale.
+// Every tmux pane, here and on Herdr machines ("flowstate-remote/%3"), from
+// `omo-status panes`. tmux turns control characters in its output into "_"
+// when Herdr runs it, so fields split on text.
 const SEP = "|^|";
-const TMUX_FORMAT = ["#{pane_id}", "#{session_name}", "#{session_attached}", "#{window_index}", "#{window_name}", "#{window_active}",
-  "#{pane_index}", "#{pane_active}", "#{pane_current_command}", "#{pane_current_path}", "#{@omo_state}", "#{@omo_msg}"].join(SEP);
 // omo-status's states in Herdr's words.
 const OMO = { working: "working", input: "blocked", error: "blocked", done: "done", idle: "idle" };
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
@@ -82,7 +81,7 @@ export default class Picker extends View {
     this.machines = [];
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("tmux", ["-u", "list-panes", "-a", "-F", TMUX_FORMAT]);
+        const r = await exec(`${home()}/.local/bin/omo-status`, ["panes"]);
         if (r.code === 0) this.tmux = tmuxSessions(r.stdout);
       } catch {}
       cx.notify();
