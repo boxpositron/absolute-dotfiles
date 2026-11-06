@@ -2,7 +2,8 @@
 # owt: Conductor-style workspaces for coding agents.
 # Each workspace is a git worktree with a random city name under
 # $OWT_ROOT/<repo>/<name>, on a placeholder branch feature/<name>, set up once,
-# with the agent launched inside it in its own tmux window. A workspace can
+# with the agent launched inside it in its own tmux window, or its own Herdr space
+# when owt runs in Herdr outside tmux. A workspace can
 # carry any number of Linear issues; the agent renames the branch to
 # feature/<keys>-<slug> once it knows them and keeps their status in sync.
 # It also titles the window with one to three words naming the work.
@@ -37,15 +38,16 @@ Usage (run from anywhere inside the repo):
         Create a workspace with a random city name (or <name>) at
         $OWT_ROOT/<repo>/<name> on placeholder branch feature/<name>, from the
         latest origin default branch (or <ref>). Copies local .env files,
-        installs dependencies, and opens a tmux window running the agent.
+        installs dependencies, and opens a tmux window running the agent
+        (a Herdr space when run in Herdr outside tmux).
         Linear issue keys are optional; you can also name issues to the agent
         later. Either way the agent renames the branch to
         feature/<keys>-<slug> (e.g. feature/pra-107-108-imap-timeouts), moves
         each issue to In Progress, and to In Review with the PR link.
-  owt open <name>      Open a tmux window running the agent in an existing workspace
-  owt title <words>    Title the tmux windows of the workspace you are in with one to
-                       three words naming the work (owt title imap timeouts). The
-                       agent does this itself; owt open reuses the saved title.
+  owt open <name>      Open a tmux window (or Herdr space) running the agent in an existing workspace
+  owt title <words>    Title the tmux windows and Herdr spaces and tabs of the workspace you are in
+                       with one to three words naming the work (owt title imap timeouts).
+                       The agent does this itself; owt open reuses the saved title.
   owt hook             omo UserPromptSubmit hook (wired in ~/.omo/agent/hooks.json):
                        inside a workspace, tells the agent its tab title with each
                        prompt so it keeps the title current; elsewhere prints nothing
@@ -65,11 +67,11 @@ Usage (run from anywhere inside the repo):
         Finish a workspace (default: the one you are in). Refuses unless the
         work is committed and merged (into the default branch, or via a merged
         Gitea PR found with tea). Then deletes the remote branch, removes the
-        worktree and local branch, and closes tmux windows open in it.
+        worktree and local branch, and closes tmux windows and Herdr tabs and spaces open in it.
         --check   print the workspace state as key=value lines; exit 1 if unsafe
         --force   finish anyway, discarding unmerged work (remote branch kept)
-        --detach  run the cleanup from tmux 5 seconds later, so an agent
-                  session inside the workspace can finish first
+        --detach  run the cleanup 5 seconds later from tmux (or herdr-core),
+                  so an agent session inside the workspace can finish first
         The omo slash command /owt-done syncs Linear and then runs this.
 
 Workspaces share the main checkout's omo memory: owt new and owt open link the
@@ -167,6 +169,41 @@ ws_title() {
   if [[ -f "$file" ]]; then cat "$file"; fi
 }
 
+# Herdr (its desktop app herdr-app, and herdr-core's hc) stands in for tmux when
+# owt runs in a Herdr terminal outside tmux: herdr-core gives its programs
+# HC_TERMINAL_ID. Inside tmux, tmux wins even when its client is in Herdr.
+in_herdr() {
+  [[ -z "${TMUX:-}" && -n "${HC_TERMINAL_ID:-}" ]] && command -v herdr-app >/dev/null && command -v jq >/dev/null
+}
+
+# Herdr terminals started in a workspace, as a JSON array of addresses. hc reports
+# the folder a terminal started in, which owt sets for the spaces it opens.
+ws_terminals() {
+  local real_dir
+  real_dir="$(cd "$1" && pwd -P)"
+  hc ls --json 2>/dev/null | jq -c --arg d "$1" --arg r "$real_dir" \
+    '[.terminals[] | select(.cwd as $c | [$d, $r] | any($c == . or ($c | startswith(. + "/")))) | .address]'
+}
+
+# Herdr tabs with a terminal started in a workspace, one id per line.
+ws_tabs() {
+  local started
+  command -v herdr-app >/dev/null && command -v hc >/dev/null && command -v jq >/dev/null || return 0
+  started="$(ws_terminals "$1")" || return 0
+  herdr-app ls 2>/dev/null | jq -r --argjson t "${started:-[]}" \
+    '.spaces[].tabs[] | select(any(.terminals[]; .terminal as $a | $t | index($a))) | .id' | sort -u
+}
+
+# Herdr spaces whose every terminal started in a workspace (the spaces owt opened
+# for it), one id per line.
+ws_spaces() {
+  local started
+  command -v herdr-app >/dev/null && command -v hc >/dev/null && command -v jq >/dev/null || return 0
+  started="$(ws_terminals "$1")" || return 0
+  herdr-app ls 2>/dev/null | jq -r --argjson t "${started:-[]}" \
+    '.spaces[] | select([.tabs[].terminals[].terminal] | length > 0 and all(. as $a | $t | index($a))) | .id'
+}
+
 # tmux windows with a pane open in a workspace, one id per line. tmux reports
 # resolved paths, so compare against the resolved workspace path.
 ws_windows() {
@@ -238,9 +275,9 @@ workspace_prompt() {
     printf '%s is a placeholder: once you know the issues, and before the branch is pushed, rename it with `git branch -m feature/<keys>-<slug>`, where <keys> are the lowercased issue keys joined by hyphens with the team prefix written once (PRA-107 and PRA-108 give pra-107-108) and <slug> is a 2 to 5 word kebab-case summary. ' "$branch"
   fi
   if [[ -n "$title" ]]; then
-    printf 'Its tmux tab is titled "%s". ' "$title"
+    printf 'Its tab is titled "%s". ' "$title"
   else
-    printf 'Its tmux tab shows the workspace name until you title it. '
+    printf 'Its tab shows the workspace name until you title it. '
   fi
   # shellcheck disable=SC2016
   printf 'As soon as you know what the work is, and again whenever its focus changes, run `owt title <words>` with one to three short words naming it, never a sentence (for example `owt title imap timeouts`). '
@@ -257,6 +294,15 @@ launch() {
   if [[ -n "${TMUX:-}" ]]; then
     tmux new-window -n "$window" -c "$dir" -- "$OWT_AGENT" "${args[@]}"
     say "opened tmux window '$window' running $OWT_AGENT"
+  elif in_herdr; then
+    local argv made
+    # As a JSON array; NUL-separated, because jq reads the agent's own flags as options.
+    argv="$(printf '%s\0' "$OWT_AGENT" "${args[@]}" | jq -Rsc 'split("\u0000") | .[:-1]')" \
+      || die "could not encode the agent's arguments for Herdr"
+    # A space of its own, which Herdr's sidebar nests under the repo's space when that is open.
+    made="$(herdr-app "do" space.new --name "$window" --folder "$dir" --tab "$window" --argv "$argv")" \
+      || die "Herdr did not open a space: $made"
+    say "opened Herdr space '$window' running $OWT_AGENT"
   else
     say "not in tmux; start with: cd $(printf '%q' "$dir") && $OWT_AGENT$(printf ' %q' "${args[@]}")"
   fi
@@ -317,9 +363,9 @@ cmd_open() {
   launch "$name" "$dir"
 }
 
-# Title the tmux windows of the current workspace with what is being worked on.
+# Title the tmux windows and Herdr tabs of the current workspace with what is being worked on.
 cmd_title() {
-  local name dir title words=() win renamed=0
+  local name dir title words=() win tab space renamed=0 tabs=0 spaces=0
   name="$(current_ws)" || die "not inside an owt workspace"
   dir="$(ws_dir "$name")"
   [[ -d "$dir" ]] || die "no workspace at $dir"
@@ -333,7 +379,13 @@ cmd_title() {
     tmux rename-window -t "$win" "$title"
     renamed=$((renamed + 1))
   done < <(ws_windows "$dir")
-  say "titled '$name' as '$title' ($renamed tmux window(s) renamed)"
+  while read -r tab; do
+    herdr-app "do" tab.rename --id "$tab" --name "$title" >/dev/null && tabs=$((tabs + 1))
+  done < <(ws_tabs "$dir")
+  while read -r space; do
+    herdr-app "do" space.rename --id "$space" --name "$title" >/dev/null && spaces=$((spaces + 1))
+  done < <(ws_spaces "$dir")
+  say "titled '$name' as '$title' ($renamed tmux window(s), $spaces Herdr space(s), $tabs tab(s) renamed)"
 }
 
 # omo UserPromptSubmit hook. Inside a workspace it hands the agent the tab's
@@ -347,9 +399,9 @@ cmd_hook() {
   [[ -d "$dir" ]] || return 0
   title="$(ws_title "$dir")"
   if [[ -n "$title" ]]; then
-    context="This is owt workspace \"$name\" and its tmux tab is titled \"$title\". If this prompt changes what the work is about, or the focus shifts while you work, retitle it with \`owt title <words>\`: one to three short words naming the work, never a sentence."
+    context="This is owt workspace \"$name\" and its tab is titled \"$title\". If this prompt changes what the work is about, or the focus shifts while you work, retitle it with \`owt title <words>\`: one to three short words naming the work, never a sentence."
   else
-    context="This is owt workspace \"$name\" and its tmux tab has no title yet, so it shows the workspace name. As soon as you know what the work is, title it with \`owt title <words>\`: one to three short words naming the work, never a sentence (for example \`owt title imap timeouts\`). Retitle it whenever the focus shifts."
+    context="This is owt workspace \"$name\" and its tab has no title yet, so it shows the workspace name. As soon as you know what the work is, title it with \`owt title <words>\`: one to three short words naming the work, never a sentence (for example \`owt title imap timeouts\`). Retitle it whenever the focus shifts."
   fi
   context="${context//\\/\\\\}"
   context="${context//\"/\\\"}"
@@ -505,7 +557,7 @@ _owt() {
     'ls:list this repo'"'"'s workspaces'
     'all:list the workspaces of every repo'
     'path:print a workspace path'
-    'title:title the workspace'"'"'s tmux windows'
+    'title:title the workspace'"'"'s tmux windows and Herdr tabs'
     'done:finish a workspace once its work is merged'
     'rm:remove a workspace'
     'completion:print the shell completion'
@@ -535,7 +587,7 @@ _owt() {
           _arguments \
             '--check[print the workspace state and exit 1 if unsafe]' \
             '--force[finish anyway, discarding unmerged work]' \
-            '--detach[run the cleanup from tmux 5 seconds later]' \
+            '--detach[run the cleanup 5 seconds later, apart from this session]' \
             '1::workspace:_owt_workspaces_here'
           ;;
         title) _arguments '*:title word: ' ;;
@@ -649,6 +701,9 @@ cmd_done() {
     cmd+=" >>$(printf '%q' "$log") 2>&1"
     if [[ -n "${TMUX:-}" ]]; then
       tmux run-shell -b "$cmd"
+    elif [[ -n "${HC_TERMINAL_ID:-}" ]] && command -v hc >/dev/null; then
+      # A terminal of herdr-core's own, apart from the tab the cleanup closes.
+      hc run --bg --no-parent --rm -- bash -c "$cmd" >/dev/null
     else
       nohup bash -c "$cmd" >/dev/null 2>&1 &
     fi
@@ -656,9 +711,10 @@ cmd_done() {
     return
   fi
 
-  # Windows with a pane open in the workspace, collected before the directory goes away.
-  local windows=() win
+  # Windows and tabs open in the workspace, collected before the directory goes away.
+  local windows=() win tabs=() tab
   while read -r win; do windows+=("$win"); done < <(ws_windows "$dir")
+  while read -r tab; do tabs+=("$tab"); done < <(ws_tabs "$dir")
 
   if [[ $merged == yes && $remote_branch == yes ]]; then
     git -C "$root" push --quiet origin --delete "$branch" && say "deleted remote branch $branch"
@@ -676,6 +732,9 @@ cmd_done() {
 
   for win in $(printf '%s\n' "${windows[@]+"${windows[@]}"}" | sort -u); do
     tmux kill-window -t "$win" 2>/dev/null || true
+  done
+  for tab in "${tabs[@]+"${tabs[@]}"}"; do
+    herdr-app "do" tab.close --id "$tab" --confirmed true >/dev/null 2>&1 || true
   done
 }
 
