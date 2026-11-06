@@ -228,10 +228,16 @@ show_most_urgent() {
 }
 
 # You are looking at a pane when its tab has focus and its window is showing.
+# tmux marks a client in a Herdr terminal focused even while its space is hidden
+# (Herdr sends it no focus-out), so only other clients count; for Herdr, its
+# focus-in hook (omo-status focus) clears the pane when you go there.
 looking_at() {
-  local pane=$1 session=$2
-  [[ $(tmux display-message -p -t "$pane" '#{window_active}') == 1 ]] &&
-    tmux list-clients -t "$session" -F '#{client_flags}' | grep -q focused
+  local pane=$1 session=$2 pid flags
+  [[ $(tmux display-message -p -t "$pane" '#{window_active}') == 1 ]] || return 1
+  while read -r pid flags; do
+    [[ $flags == *focused* && -z $(herdr_terminal "$pid") ]] && return 0
+  done < <(tmux list-clients -t "$session" -F '#{client_pid} #{client_flags}')
+  return 1
 }
 
 # A tab renamed in Ghostty ignores tmux's title until the override is cleared.
@@ -360,6 +366,11 @@ case ${1:-} in
     pane=${2:?pane id required} terminal=""
     session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 1
     tmux select-window -t "$pane" \; select-pane -t "$pane"
+    # Going to a pane is looking at it. A Herdr client gets no focus-in hook for it
+    # (tmux already counts it focused), so a finished or waiting pane clears here.
+    case $(tmux show-option -pqv -t "$pane" @omo_state) in
+      input | done | error) "$0" set "$pane" idle >/dev/null ;;
+    esac
     while read -r pid client_session; do
       [[ $client_session == "$session" ]] || continue
       terminal=$(herdr_terminal "$pid")
