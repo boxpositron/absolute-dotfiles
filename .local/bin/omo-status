@@ -1,19 +1,45 @@
 #!/usr/bin/env bash
-# Coloured attention markers on Ghostty tabs for omo sessions. tmux puts the
-# session's @omo_status in front of the tab title (set-titles-string in
-# ~/.tmux.conf), so each tab shows what its agents need:
+# Coloured attention markers on Ghostty tabs for omo sessions, and the same
+# state reported to Herdr. tmux puts the session's @omo_status in front of the
+# tab title (set-titles-string in ~/.tmux.conf), so each tab shows what its
+# agents need:
 #   🔴 stopped with an error   🟡 waiting for your answer
 #   🟢 finished                🔵 working
-# Each pane running omo keeps its own state in the pane option @omo_state, and
-# the tab shows the most urgent one. Focusing the tab clears red, amber and green,
-# and selects the pane whose banner you were sent (@omo_jump, set by omo-notify).
-# It also clears any title you gave the Ghostty tab by hand, so tabs always show
-# their tmux session's name.
+# An omo at rest (idle) shows no marker.
+# Each pane running omo keeps its own state in the pane option @omo_state and a
+# one-line message in @omo_msg ("Finished: fix the imap timeouts"), and the tab
+# shows the most urgent one. Focusing the tab turns red, amber and green back to
+# idle, and selects the pane whose banner you were sent (@omo_jump, set by
+# omo-notify). It also clears any title you gave the Ghostty tab by hand, so
+# tabs always show their tmux session's name.
 #
-# Usage: omo-status set <pane> <working|input|done|error|clear>
-#        omo-status focus <client>     (run by the tmux client-focus-in hook)
+# Herdr: omo inside tmux cannot report its state through tmux, so a tmux client
+# running in a Herdr terminal gets its session's most urgent state and message
+# as an OSC 7501 program status report. Herdr's sidebar, tab dots, sounds and
+# toasts then cover omo inside tmux. @omo_herdr marks a session a Herdr client
+# shows, and omo-notify leaves the sounds and banners to Herdr there. Ghostty
+# clients get no report. Spec: https://www.superlogical.com/rex/docs/build/program-status
+#
+# Usage: omo-status set <pane> <working|input|done|error|idle|clear> [message]
+#          (prints the message it stored; working with a message sets the task)
+#        omo-status tty <tty> <state> [message]   (omo outside tmux, in Herdr)
+#        omo-status focus <client>   (run by the tmux client-focus-in hook)
+#        omo-status sync <client>    (run when a client attaches or switches session)
+#        omo-status show <pane>      (shows the pane in Herdr: the tab already on its session,
+#                                     else a tab in the space named after the session, else a
+#                                     new space for the session)
+#        omo-status spaces           (a Herdr space for every tmux session running omo; closes
+#                                     the spaces it made for sessions that ended)
+#        omo-status next             (shows the pane that most needs you: a question or a
+#                                     failure, then a finished turn, the longest waiting first)
+#        omo-status list             (every pane running omo, for Herdr's "omo in tmux" panel:
+#                                     pane, session, window, folder, state, since, message)
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$PATH"
+
+# The spaces `show` and `spaces` made, one "<session>\t<space id>" line each, so
+# `spaces` can close them once their session ends.
+spaces_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/spaces"
 
 icon() {
   case $1 in
@@ -26,23 +52,139 @@ icon() {
 
 rank() {
   case $1 in
-    error) echo 4 ;;
-    input) echo 3 ;;
-    done) echo 2 ;;
-    working) echo 1 ;;
+    error) echo 5 ;;
+    input) echo 4 ;;
+    done) echo 3 ;;
+    working) echo 2 ;;
+    idle) echo 1 ;;
     *) echo 0 ;;
   esac
 }
 
+# What a state says when omo-notify gives no message: the task is the first
+# line of the prompt being worked on.
+message_for() {
+  local state=$1 message=$2 task=$3
+  case $state in
+    working) echo "${message:-${task:-Working}}" ;;
+    input) echo "${message:-Needs your input}" ;;
+    done) echo "${message:-${task:+Finished: $task}}" | sed 's/^$/Task finished/' ;;
+    error) echo "${message:-${task:+Failed: $task}}" | sed 's/^$/Stopped with an error/' ;;
+  esac
+}
+
+# An OSC 7501 report body. No state clears the terminal's records.
+report_body() {
+  local state=$1 msg=$2 title=$3 body
+  case $state in
+    "") echo "state=clear" && return ;;
+    input) body="state=blocked:kind=question:app=omo" ;;
+    *) body="state=$state:app=omo" ;;
+  esac
+  [[ -n $msg ]] && body+=":msg=$(printf '%s' "$msg" | base64 | tr -d '\n')"
+  [[ -n $title ]] && body+=":title=$(printf '%s' "${title:0:60}" | base64 | tr -d '\n')"
+  echo "$body"
+}
+
+# Names the Herdr tabs of these terminals after the work, so Herdr's agents list
+# reads "<space> · <label>" rather than the session's name twice. A tab you
+# named stays yours: only tabs called by their number, or by the label this put
+# there last, change.
+label_tabs() {
+  local label=$1 last=$2 tabs
+  shift 2
+  tabs=$(herdr-app ls 2>/dev/null | jq -r --argjson t "$(printf '%s\n' "$@" | jq -R . | jq -cs .)" --arg last "$last" \
+    '.spaces[].tabs[] | select(any(.terminals[]; .terminal as $a | $t | index($a))) | select((.name | test("^[0-9]+$")) or .name == $last) | .id')
+  for tab in $tabs; do herdr-app "do" tab.rename --id "$tab" --name "$label" >/dev/null 2>&1; done
+}
+
+send_report() {
+  [[ -w $1 ]] && printf '\033]7501;%s\033\\' "$2" >"$1"
+}
+
+# The Herdr terminal a tmux client runs in, if any: herdr-core gives the programs
+# in its terminals HC_TERMINAL_ID, and a client keeps the environment it started with.
+herdr_terminal() {
+  ps eww -o command= -p "$1" 2>/dev/null | tr ' ' '\n' | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1
+}
+
+# Names of the tmux sessions a Herdr terminal shows: their clients run in herdr-core.
+herdr_sessions() {
+  local pid session
+  while read -r pid session; do
+    [[ -n $(herdr_terminal "$pid") ]] && printf '%s\n' "$session"
+  done < <(tmux list-clients -F '#{client_pid} #{session_name}')
+}
+
+# A tab attached to a tmux session, in the Herdr space named after it, else in a
+# new space for it in <folder>. A space this makes goes in $spaces_file.
+open_space() {
+  local session=$1 folder=$2 target=$3 argv space made
+  argv=$(jq -cn --arg t "$target" '["tmux", "attach-session", "-t", $t]')
+  space=$(herdr-app ls 2>/dev/null | jq -r --arg n "$session" 'first(.spaces[] | select(.name == $n and .machine == null) | .id) // empty')
+  if [[ -n $space ]]; then
+    herdr-app "do" tab.new --space "$space" --name "$session" --argv "$argv" >/dev/null
+    return
+  fi
+  made=$(herdr-app "do" space.new --name "$session" --folder "$folder" --argv "$argv") || return 1
+  space=$(jq -r '.space // empty' <<<"$made")
+  [[ -n $space ]] || return 1
+  mkdir -p "$(dirname "$spaces_file")"
+  printf '%s\t%s\n' "$session" "$space" >>"$spaces_file"
+}
+
+forget() {
+  tmux set-option -p -u -t "$1" @omo_state \; set-option -p -u -t "$1" @omo_msg \; set-option -p -u -t "$1" @omo_task \
+    \; set-option -p -u -t "$1" @omo_since
+}
+
+# Puts the session's most urgent state in its tab marker and reports it, with its
+# message, to the Herdr clients showing the session when it changed. A pane back
+# at its shell prompt no longer runs omo, so its state goes.
 show_most_urgent() {
-  local session=$1 state best=""
-  while read -r state; do
-    if (($(rank "$state") > $(rank "$best"))); then best=$state; fi
-  done < <(tmux list-panes -s -t "$session" -F '#{@omo_state}')
-  if [[ -n $best ]]; then
+  local session=$1 pane cmd state msg path window task best="" best_msg="" label="" body last pid tty term herdr=() old_label
+  while IFS=$'\x1f' read -r pane cmd state msg path window task; do
+    [[ -n $state ]] || continue
+    case $cmd in
+      zsh | bash | fish | sh | dash | -zsh | -bash)
+        forget "$pane"
+        continue
+        ;;
+    esac
+    if (($(rank "$state") > $(rank "$best"))); then
+      best=$state best_msg=${msg:+${path##*/}: $msg}
+      # The label: a window named for the work (an owt title), else the task.
+      case $window in
+        bun | node | omo | zsh | bash | fish | sh) label=${task:-${path##*/}} ;;
+        mosh-client | ssh) label="" ;; # a server's session: its work is named there
+        *) label=$window ;;
+      esac
+    fi
+  done < <(tmux list-panes -s -t "$session" -F $'#{pane_id}\x1f#{pane_current_command}\x1f#{@omo_state}\x1f#{@omo_msg}\x1f#{pane_current_path}\x1f#{window_name}\x1f#{@omo_task}')
+  ((${#label} > 40)) && label="${label:0:39}…"
+  if [[ -n $(icon "$best") ]]; then
     tmux set-option -t "$session" @omo_status "$(icon "$best")"
   else
     tmux set-option -u -t "$session" @omo_status
+  fi
+  body=$(report_body "$best" "$best_msg" "$label")
+  last=$(tmux show-option -qv -t "$session" @omo_report)
+  while read -r pid tty; do
+    term=$(herdr_terminal "$pid")
+    [[ -n $term ]] || continue
+    herdr+=("$term")
+    [[ $body == "$last" ]] || send_report "$tty" "$body"
+  done < <(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}')
+  tmux set-option -t "$session" @omo_report "$body"
+  if ((${#herdr[@]})); then
+    tmux set-option -t "$session" @omo_herdr 1
+    old_label=$(tmux show-option -qv -t "$session" @omo_label)
+    if [[ -n $label && $label != "$old_label" ]]; then
+      tmux set-option -t "$session" @omo_label "$label"
+      label_tabs "$label" "$old_label" "${herdr[@]}" &
+    fi
+  else
+    tmux set-option -u -t "$session" @omo_herdr
   fi
 }
 
@@ -72,16 +214,34 @@ APPLESCRIPT
 case ${1:-} in
   set)
     pane=${2:?pane id required} state=${3:?state required}
+    # Control characters would end the report early.
+    message=$(tr -d '\000-\037\177' <<<"${4:-}")
     session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 0
-    if [[ $state != working && $state != clear ]] && looking_at "$pane" "$session"; then
-      state=clear
+    task=$(tmux show-option -pqv -t "$pane" @omo_task)
+    if [[ $state == working && -n $message ]]; then
+      task=$message
+      tmux set-option -p -t "$pane" @omo_task "$task"
     fi
-    if [[ $state == clear ]]; then
-      tmux set-option -p -u -t "$pane" @omo_state
-    else
-      tmux set-option -p -t "$pane" @omo_state "$state"
+    message=$(message_for "$state" "$message" "$task")
+    printf '%s\n' "$message"
+    if [[ $state != working && $state != idle && $state != clear ]] && looking_at "$pane" "$session"; then
+      state=idle
     fi
+    # When the pane came into its state, for the time Herdr's panel shows.
+    [[ $state == "$(tmux show-option -pqv -t "$pane" @omo_state)" ]] || tmux set-option -p -t "$pane" @omo_since "$(date +%s)"
+    case $state in
+      clear) forget "$pane" ;;
+      idle) tmux set-option -p -t "$pane" @omo_state idle \; set-option -p -u -t "$pane" @omo_msg ;;
+      *) tmux set-option -p -t "$pane" @omo_state "$state" \; set-option -p -t "$pane" @omo_msg "$message" ;;
+    esac
     show_most_urgent "$session"
+    ;;
+  tty)
+    target=${2:?tty required} state=${3:?state required}
+    message=$(message_for "$state" "$(tr -d '\000-\037\177' <<<"${4:-}")" "")
+    printf '%s\n' "$message"
+    [[ $state == clear ]] && state=""
+    send_report "$target" "$(report_body "$state" "$message")"
     ;;
   focus)
     client=${2:?client required}
@@ -94,11 +254,107 @@ case ${1:-} in
     fi
     while read -r pane state; do
       case $state in
-        input | done | error) tmux set-option -p -u -t "$pane" @omo_state ;;
+        input | done | error) tmux set-option -p -t "$pane" @omo_state idle \; set-option -p -u -t "$pane" @omo_msg ;;
       esac
     done < <(tmux list-panes -s -t "$session" -F '#{pane_id} #{@omo_state}')
     show_most_urgent "$session"
     reset_tab_title "$(tmux display-message -p -t "$session" '#{session_name}')"
+    ;;
+  sync)
+    client=${2:?client required}
+    read -r session pid tty < <(tmux list-clients -F '#{client_name} #{session_id} #{client_pid} #{client_tty}' |
+      awk -v c="$client" '$1 == c { print $2, $3, $4 }')
+    [[ -n $session ]] || exit 0
+    show_most_urgent "$session"
+    # A client that just arrived holds the report of where it was before, or none.
+    [[ -n $(herdr_terminal "$pid") ]] && send_report "$tty" "$(tmux show-option -qv -t "$session" @omo_report)"
+    ;;
+  list)
+    # omo holds its Stop hook while a background task (a terminal monitor, a child
+    # session) is live, so a pane can stay "working" after its turn ended. Its
+    # transcript's last session-lifecycle entry says so: waiting_* means it is idle.
+    while IFS=$'\x1f' read -r pane transcript; do
+      [[ -r $transcript ]] || continue
+      lifecycle=$(tail -c 300000 "$transcript" | grep '"customType":"session-lifecycle"' | tail -n 1 | jq -r '.data.state // empty' 2>/dev/null)
+      [[ $lifecycle == waiting_* ]] && "$0" set "$pane" idle >/dev/null
+    done < <(tmux list-panes -a -F $'#{pane_id}\x1f#{@omo_transcript}\x1f#{@omo_state}' | awk -F$'\x1f' '$3 == "working" && $2 != "" { print $1 "\037" $2 }')
+    # omo is bun running senpi's CLI (or omo's launcher) on the pane's terminal. A
+    # pane omo's hooks haven't reached yet is idle; a pane connected to a server
+    # (mosh, ssh) shows the state its title brought. Fields are split by "|^|",
+    # because tmux prints control characters as "_" when Herdr runs it.
+    omo_ttys=$(ps -A -o tty=,args= |
+      awk '$1 != "??" && /\/senpi\/dist\/bundle\/cli\.js|\/omo-ai\/bin\/omo\.js/ { print "/dev/" $1 }' | sort -u)
+    tmux -u list-panes -a -F '#{pane_tty}|^|#{pane_current_command}|^|#{pane_id}|^|#{session_name}|^|#{window_name}|^|#{pane_current_path}|^|#{@omo_state}|^|#{@omo_since}|^|#{@omo_msg}' |
+      OMO_TTYS=$omo_ttys awk '
+        function fields(s, f,   n, i) {
+          n = 0
+          while ((i = index(s, "|^|")) > 0) { f[++n] = substr(s, 1, i - 1); s = substr(s, i + 3) }
+          f[++n] = s
+          return n
+        }
+        BEGIN { n = split(ENVIRON["OMO_TTYS"], t, "\n"); for (i = 1; i <= n; i++) omo[t[i]] = 1 }
+        {
+          n = fields($0, f)
+          state = f[7]
+          if (f[1] in omo) { if (state == "") state = "idle" }
+          else if (!((f[2] == "mosh-client" || f[2] == "ssh") && state != "")) next
+          msg = f[9]
+          for (i = 10; i <= n; i++) msg = msg "|^|" f[i]
+          print f[3] "|^|" f[4] "|^|" f[5] "|^|" f[6] "|^|" state "|^|" f[8] "|^|" msg
+        }'
+    ;;
+  show)
+    pane=${2:?pane id required}
+    session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 1
+    tmux select-window -t "$pane" \; select-pane -t "$pane"
+    while read -r pid client_session; do
+      [[ $client_session == "$session" ]] || continue
+      terminal=$(herdr_terminal "$pid")
+      if [[ -n $terminal ]]; then
+        herdr-app "do" pane.focus --terminal "$terminal" >/dev/null
+        exit
+      fi
+    done < <(tmux list-clients -F '#{client_pid} #{session_id}')
+    open_space "$(tmux display-message -p -t "$pane" '#{session_name}')" \
+      "$(tmux display-message -p -t "$pane" '#{pane_current_path}')" "$pane"
+    ;;
+  next)
+    pane=$("$0" list | awk -F'[|][\\^][|]' '
+      $5 == "input" || $5 == "error" { r = 2 } $5 == "done" { r = 1 } $5 != "input" && $5 != "error" && $5 != "done" { next }
+      { print r "\t" ($6 == "" ? 0 : $6) "\t" $1 }' | sort -t$'\t' -k1,1nr -k2,2n | head -n 1 | cut -f3)
+    [[ -n $pane ]] || { echo "nothing needs you" >&2; exit 1; }
+    exec "$0" show "$pane"
+    ;;
+  spaces)
+    # One sync at a time: tmux and omo hooks can start several together.
+    lock="${spaces_file%/*}/spaces.lock"
+    mkdir -p "${spaces_file%/*}"
+    mkdir "$lock" 2>/dev/null || exit 0
+    trap 'rmdir "$lock"' EXIT
+    here=$(herdr-app status 2>/dev/null | jq -r '.space // empty')
+    shown=$'\n'"$(herdr_sessions)"$'\n'
+    opened=0 closed=0
+    while IFS= read -r line; do
+      pane=${line%%"|^|"*} rest=${line#*"|^|"}
+      session=${rest%%"|^|"*} rest=${rest#*"|^|"}
+      rest=${rest#*"|^|"} folder=${rest%%"|^|"*}
+      [[ $shown == *$'\n'"$session"$'\n'* ]] && continue
+      shown+="$session"$'\n'
+      open_space "$session" "$folder" "$pane" && opened=$((opened + 1))
+    done < <("$0" list)
+    if [[ -f $spaces_file ]]; then
+      kept=""
+      while IFS=$'\t' read -r session space; do
+        if tmux has-session -t "=$session" 2>/dev/null; then
+          kept+="$session"$'\t'"$space"$'\n'
+        else
+          herdr-app "do" space.close --id "$space" --confirmed true >/dev/null 2>&1 && closed=$((closed + 1))
+        fi
+      done <"$spaces_file"
+      printf '%s' "$kept" >"$spaces_file"
+    fi
+    [[ -n $here ]] && herdr-app "do" space.select --id "$here" >/dev/null
+    echo "opened $opened space(s), closed $closed"
     ;;
   *)
     sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2

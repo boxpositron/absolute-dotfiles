@@ -101,7 +101,9 @@ case ${1:-} in
       *) exit 0 ;;
     esac
     if (($(date +%s) - when > fresh)); then
-      exec "$HOME/.local/bin/omo-status" set "$pane" "$state"
+      # An interrupted session is back at rest.
+      [[ $state == clear ]] && state=idle
+      exec "$HOME/.local/bin/omo-status" set "$pane" "$state" ${question:+"Needs your input: $question"}
     fi
     payload=$(jq -c --arg cwd "${project:-remote}" '. + {cwd: $cwd}' <<<"$payload")
     OMO_NOTIFY_PANE=$pane exec "$HOME/.local/bin/omo-notify" <<<"$payload"

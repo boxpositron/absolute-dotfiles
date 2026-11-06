@@ -1,5 +1,12 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.local/bin/omo-notify", "timeout": 10 }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

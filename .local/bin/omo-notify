@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Ding, tab marker and notification for omo (senpi) hooks: UserPromptSubmit,
-# Stop and Notification. Reads the hook JSON payload on stdin. Wired up in
-# ~/.omo/agent/hooks.json. The sound plays through omo-sound (afplay on macOS),
-# so Focus modes and notification permissions cannot mute it; the banner is a
-# silent extra.
+# Ding, tab marker and notification for omo (senpi) hooks: SessionStart,
+# UserPromptSubmit, Stop and Notification. Reads the hook JSON payload on stdin.
+# Wired up in ~/.omo/agent/hooks.json. The sound plays through omo-sound
+# (afplay on macOS), so Focus modes and notification permissions cannot mute it;
+# the banner is a silent extra.
 # Ghostty posts the banner, so clicking it opens the tab it came from, and
 # omo-status then selects the session's pane. omo-status also colours that tab:
-# blue working, amber waiting for you, green finished, red error.
+# blue working, amber waiting for you, green finished, red error, and keeps a
+# message for it (the prompt being worked on, or the question asked).
+# In Herdr, omo-status reports the state to Herdr (OSC 7501), and Herdr plays
+# the sounds and shows the toasts, so this script stays quiet there.
 
-# Hooks run with a minimal environment, so make Homebrew tools reachable.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# Hooks run with a minimal environment, so make Homebrew tools reachable, and
+# cut messages by character rather than byte.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH" LC_ALL=en_US.UTF-8
 
 payload=$(cat)
 field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null; }
@@ -26,15 +30,21 @@ transcript=$(field '.transcript_path')
 message=""
 sound=""
 case "$event" in
+  SessionStart)
+    state=idle
+    ;;
   UserPromptSubmit)
     state=working
+    # The prompt's first line names the task, for omo-status's messages.
+    message=$(field '.prompt' | sed -n '/[^[:space:]]/{s/^[[:space:]]*//;p;q;}')
+    ((${#message} > 100)) && message="${message:0:99}…"
     ;;
   Stop)
     case "$(field '.stopReason')" in
       # Esc/interrupts are your own doing; no need to be told about them.
-      aborted) state="clear" ;;
-      error) state="error" message="Stopped with an error" sound="omo-error" ;;
-      *) state="done" message="Task finished" sound="omo-done" ;;
+      aborted) state="idle" ;;
+      error) state="error" sound="omo-error" ;;
+      *) state="done" sound="omo-done" ;;
     esac
     ;;
   Notification)
@@ -49,10 +59,6 @@ case "$event" in
     exit 0
     ;;
 esac
-
-# Background the ding so the hook returns immediately; redirect output so the
-# hook runner is not left waiting on the player's inherited pipes.
-[[ -n "$sound" ]] && "$HOME/.local/bin/omo-sound" "$sound" >/dev/null 2>&1 &
 
 # Find the tmux pane omo runs in: hooks run detached without TMUX_PANE, so walk
 # up the process tree to the first ancestor whose tty is a tmux pane.
@@ -72,13 +78,40 @@ while [[ -z "$pane" && "${pid:-1}" -gt 1 ]]; do
   pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
 done
 
-[[ -n "$pane" ]] && "$HOME/.local/bin/omo-status" set "$pane" "$state"
-[[ -n "$message" ]] || exit 0
+# omo-status prints the message it settled on ("Finished: <task>"). Outside
+# tmux, omo in a Herdr terminal reports to that terminal itself.
+herdr=""
+if [[ -n "$pane" ]]; then
+  # omo-status reads the session's lifecycle from it: omo sends no Stop while a
+  # background task (a monitor) is still live, so a pane can say working when it isn't.
+  [[ -n "$transcript" ]] && tmux set-option -p -t "$pane" @omo_transcript "$transcript"
+  message=$("$HOME/.local/bin/omo-status" set "$pane" "$state" "$message")
+  herdr=$(tmux display-message -p -t "$pane" '#{@omo_herdr}')
+  # A session that starts omo gets its Herdr space (when Herdr runs), in the background.
+  if [[ $event == SessionStart ]] && command -v herdr-app >/dev/null && herdr-app status >/dev/null 2>&1; then
+    ("$HOME/.local/bin/omo-status" spaces >/dev/null 2>&1 &)
+  fi
+elif [[ -n "${HC_TERMINAL_ID:-}" && -w "$own_tty" ]]; then
+  message=$("$HOME/.local/bin/omo-status" tty "$own_tty" "$state" "$message")
+  herdr=1
+fi
+[[ -n "$sound" ]] || exit 0
 
 log="${OMO_NOTIFY_LOG:-$HOME/.local/state/omo-notify.log}"
 mkdir -p "$(dirname "$log")"
-printf '%s %s %s %s [%s %s] pane=%s\n' "$(date '+%F %T')" "$event" "$project" "$message" \
-  "$(field '.session_id')" "$(field '.transcript_path')" "${pane:-none}" >>"$log"
+printf '%s %s %s %s [%s %s] pane=%s%s\n' "$(date '+%F %T')" "$event" "$project" "$message" \
+  "$(field '.session_id')" "$(field '.transcript_path')" "${pane:-none}" "${herdr:+ herdr}" >>"$log"
+
+# Herdr plays its own sound and toast; a click on the toast focuses the tmux
+# client, and @omo_jump then selects the pane.
+if [[ -n "$herdr" ]]; then
+  [[ -n "$pane" ]] && tmux set-option -t "$(tmux display-message -p -t "$pane" '#{session_id}')" @omo_jump "$pane"
+  exit 0
+fi
+
+# Background the ding so the hook returns at once; redirect output so the hook
+# runner is not left waiting on the player's inherited pipes.
+"$HOME/.local/bin/omo-sound" "$sound" >/dev/null 2>&1 &
 
 # The banner is an OSC 777 notification for Ghostty. In tmux it goes to the tab's
 # tmux client terminal, because tmux does not pass it on from a pane, and
