@@ -63,6 +63,12 @@ A session attached in Ghostty and in Herdr at once is sized to whichever client 
 - Spaces sync by themselves: omo's start hook runs `omo-status spaces --local` when Herdr is running, and tmux's `session-closed` hook closes the space of a session that ended. `--local` opens spaces only for this Mac's sessions; the layers button opens them for every machine's. A lock keeps two syncs from overlapping.
 - tmux marks a client in a Herdr terminal focused even while its space is hidden, since Herdr sends it no focus-out, so `omo-status` doesn't count Herdr clients as looking at a pane. Going to a pane through the panel, search or Cmd+J clears it instead.
 
+## Board
+
+Cmd+Shift+B in the `tmux` layout, or the screen button in the "omo in tmux" panel's header, opens the board (`mods/omo-board`): every omo session on every machine the omo board knows, read every five seconds from agent-state (`127.0.0.1:4747`, through the omo board's tunnel). Sessions sit in four columns: Needs you (an open question or a blocked goal, oldest first), Working, Done (finished in the last day) and Idle. A card shows the session's title, its machine, project and tmux target, the question waiting or the "For you" part of its last report, its to-do progress, and a dot for how recently it was active: hot under an hour, warm under a day, dim after that. A click runs `omo-status open`, which shows the session in its Herdr space, or a new one, server sessions included. Sessions not in tmux can't be shown from here.
+
+Telegram's "Open on Mac" button (omo-assistant) runs the same `omo-status open` on the Mac through the board, and brings Herdr forward. `omo-presence` tells omo-assistant whether you are at the Mac (Herdr in front, screen unlocked, keyboard or mouse used in the last five minutes); while you are, it keeps a session's questions and errors off Telegram, since Herdr alerts you.
+
 ## Herdr updates
 
 `herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux` and the `tmux` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
