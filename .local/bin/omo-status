@@ -31,6 +31,10 @@
 #        omo-status spaces [--local] (a Herdr space for every tmux session running omo; closes
 #                                     the spaces it made for sessions that ended. --local opens
 #                                     spaces only for this computer's sessions)
+#        omo-status open <target> [<host>]
+#                                    (Telegram's "Open on Mac": shows a board session's tmux
+#                                     target in Herdr and brings Herdr forward; a host that is a
+#                                     Herdr machine's makes it that machine's pane)
 #        omo-status next             (shows the pane that most needs you: a question or a
 #                                     failure, then a finished turn, the longest waiting first)
 #        omo-status list             (every pane running omo, for Herdr's "omo in tmux" panel:
@@ -388,6 +392,15 @@ case ${1:-} in
     else
       open_space "$session" "$folder" "$pane" "$machine"
     fi
+    ;;
+  open)
+    target=${2:?tmux target required} host=${3:-} machine=""
+    if [[ -n $host ]] && command -v hc >/dev/null; then
+      machine=$(hc machine ls --json 2>/dev/null |
+        jq -r --arg h "$host" 'first(.machines[] | select(.host == $h and .state == "connected") | .name) // empty')
+    fi
+    "$0" show "${machine:+$machine/}$target" || exit 1
+    open -a Herdr 2>/dev/null
     ;;
   next)
     pane=$("$0" list | awk -F'[|][\\^][|]' '

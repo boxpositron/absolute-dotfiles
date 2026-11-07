@@ -16,7 +16,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, home, layout, nextCommand, theme } from "herdr";
+import { exec, home, layout, nextCommand, run, theme } from "herdr";
 
 const SEP = "|^|";
 const RANK = { error: 5, input: 4, done: 3, working: 2, idle: 1 };
@@ -275,7 +275,12 @@ export default class OmoTmux extends View {
       .border_color(t.border)
       .text_size(13)
       .child(h_flex().px(16).h(41).pt(14).pb(5).flex_none().items_center().justify_between()
-        .child(div().text_size(11.5).font_medium().text_color(t.dim).child("omo in tmux"))
+        .child(div().flex_1().text_size(11.5).font_medium().text_color(t.dim).child("omo in tmux"))
+        .child(div().id("omo-board").size(22).flex_none().flex().items_center().justify_center().rounded(5)
+          .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer()
+          .tooltip("Board: every omo session on both machines (Cmd+Shift+B)")
+          .on_click(() => run("mod.open", { name: "omo-board" }))
+          .child(svg("mods/workspace-chrome/monitor.svg").size(14)))
         .child(div().id("omo-spaces").size(22).flex_none().flex().items_center().justify_center().rounded(5)
           .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer()
           .tooltip("Give every tmux session running omo its own space")

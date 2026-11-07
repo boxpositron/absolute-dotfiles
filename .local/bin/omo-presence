@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# omo-presence: is David at this Mac? omo-assistant runs it here through the
+# board before it sends a session's question or error to Telegram, and keeps
+# Telegram quiet while he is, since Herdr alerts him then.
+#
+# Prints "present <idle seconds>" when the Herdr app is in front, the screen is
+# unlocked, and the keyboard or mouse was used in the last OMO_PRESENCE_IDLE
+# seconds (default 300). Otherwise "away <reason>". Always exits 0. With another
+# app in front Herdr's alerts can go unseen, so Telegram gets them.
+#
+# Usage: omo-presence
+
+export PATH="/usr/sbin:/usr/bin:/bin:$PATH"
+
+limit=${OMO_PRESENCE_IDLE:-300}
+
+if ! pgrep -xq Herdr; then
+  echo "away herdr-not-running"
+  exit 0
+fi
+if ioreg -n Root -d1 -a | plutil -extract IOConsoleUsers json -o - - 2>/dev/null | grep -q '"CGSSessionScreenIsLocked":true'; then
+  echo "away screen-locked"
+  exit 0
+fi
+# lsappinfo needs no permission, unlike asking System Events.
+front=$(lsappinfo info -only name "$(lsappinfo front)" 2>/dev/null | sed -n '1s/^"\([^"]*\)".*/\1/p')
+if [[ $front != Herdr ]]; then
+  echo "away front-app-${front:-unknown}"
+  exit 0
+fi
+idle=$(ioreg -c IOHIDSystem -d 4 | awk '/HIDIdleTime/ { print int($NF / 1000000000); exit }')
+if [[ -z $idle ]]; then
+  echo "away idle-unknown"
+elif ((idle < limit)); then
+  echo "present $idle"
+else
+  echo "away idle-$idle"
+fi

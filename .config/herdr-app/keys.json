@@ -72,6 +72,7 @@
   },
   "layout:tmux": {
     "cmd-p": "mod.open:picker-tmux",
-    "cmd-j": "omo-tmux.next"
+    "cmd-j": "omo-tmux.next",
+    "cmd-shift-b": "mod.open:omo-board"
   }
 }
