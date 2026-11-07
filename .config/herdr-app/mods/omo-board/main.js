@@ -11,7 +11,9 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, home, theme, props, closeOverlay } from "herdr";
 
-const SESSIONS = "http://127.0.0.1:4747/api/sessions";
+// Live sessions only, compact (no transcripts): about 12 KB where the full list is about 700 KB.
+const SESSIONS = "http://127.0.0.1:4747/api/sessions?alive=1&compact=1";
+const CACHE = "sessions";
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
 const COLUMNS = [
@@ -22,31 +24,14 @@ const COLUMNS = [
 ];
 
 function column(s, now) {
-  if (s.lifecycle === "blocked" || s.needsDavid || (s.openQuestions?.length ?? 0) > 0 || s.boardQuestion) return "needs";
+  if (s.lifecycle === "blocked") return "needs";
   if (s.lifecycle === "active") return "working";
   if (s.lifecycle === "done" && now - (s.lifecycleSince ?? s.lastActivity ?? 0) < DAY) return "done";
   return "idle";
 }
 
-function questionElseForYou(s) {
-  const question = s.boardQuestion?.text ?? s.boardQuestion?.title ?? s.openQuestions?.[0]?.question ?? s.openQuestions?.[0]?.title ?? (typeof s.needsDavid === "string" ? s.needsDavid : "");
-  let text = question || s.handoff?.text || s.boardExcerpt || s.lastReply?.text || "";
-  const forYou = text.indexOf("For you:");
-  if (!question && forYou >= 0) text = text.slice(forYou + 8);
-  text = text.replace(/\*\*|`/g, "").replace(/\s+/g, " ").trim();
-  return text.length > 220 ? `${text.slice(0, 219)}…` : text;
-}
-
-function todos(s) {
-  let done = 0;
-  let all = 0;
-  for (const group of s.todos ?? []) {
-    for (const task of group.tasks ?? []) {
-      all++;
-      if (task.status === "completed") done++;
-    }
-  }
-  return all ? `${done}/${all}` : "";
+function progress(s) {
+  return s.todos?.all ? `${s.todos.done}/${s.todos.all}` : "";
 }
 
 function ago(ms) {
@@ -58,10 +43,19 @@ function ago(ms) {
 }
 
 export default class Board extends View {
+  // The last answer, kept in localStorage, shows at once; a fresh one follows. curl rather than fetch, because
+  // the ETag header is how agent-state says "unchanged" (a 304 with no body) and fetch doesn't expose headers.
   init(_props, cx) {
-    this.sessions = [];
+    let cached = null;
+    try {
+      cached = JSON.parse(localStorage.getItem(CACHE) ?? "null");
+    } catch {}
+    this.sessions = cached?.sessions ?? [];
+    this.etag = cached?.etag ?? null;
+    this.fetchedAt = cached?.at ?? 0;
+    this.loaded = Boolean(cached);
     this.problem = null;
-    this.loaded = false;
+    this.paintedAt = 0;
     this.handle = cx.focus_handle();
     this.refresh(cx);
     cx.timer.every(5000, (cx) => this.refresh(cx));
@@ -71,17 +65,35 @@ export default class Board extends View {
     if (this.busy) return;
     this.busy = true;
     cx.spawn(async (cx) => {
+      let changed = !this.loaded;
       try {
-        const r = await exec("curl", ["-s", "-m", "5", SESSIONS]);
-        if (r.code !== 0) throw new Error(`agent-state didn't answer (curl ${r.code}); is the board tunnel up?`);
-        this.sessions = JSON.parse(r.stdout).filter((s) => s.alive);
+        const args = ["-s", "-m", "5", "-D", "/dev/stderr", SESSIONS];
+        if (this.etag) args.unshift("-H", `If-None-Match: ${this.etag}`);
+        const r = await exec("curl", args);
+        const status = Number(r.stderr.match(/^HTTP\/[\d.]+ (\d{3})/m)?.[1] ?? 0);
+        if (r.code !== 0 || !status) throw new Error(`agent-state didn't answer (curl ${r.code}); is the board tunnel up?`);
+        if (status === 200) {
+          this.sessions = JSON.parse(r.stdout);
+          this.etag = r.stderr.match(/^etag:\s*(\S+)/im)?.[1] ?? null;
+          this.fetchedAt = Date.now();
+          localStorage.setItem(CACHE, JSON.stringify({ at: this.fetchedAt, etag: this.etag, sessions: this.sessions }));
+          changed = true;
+        } else if (status === 304) {
+          this.fetchedAt = Date.now();
+        } else {
+          throw new Error(`agent-state answered ${status}`);
+        }
+        if (this.problem) changed = true;
         this.problem = null;
       } catch (e) {
-        this.problem = `${e?.message ?? e}`;
+        const problem = `${e?.message ?? e}`;
+        if (problem !== this.problem) changed = true;
+        this.problem = problem;
       }
       this.loaded = true;
       this.busy = false;
-      cx.notify();
+      // Repaint for new data, and once a minute so the ages move on.
+      if (changed || Date.now() - this.paintedAt > 60000) cx.notify();
     });
   }
 
@@ -104,8 +116,8 @@ export default class Board extends View {
     const age = now - (s.lastActivity ?? s.startedAt ?? now);
     const heat = age < HOUR ? t.working : age < DAY ? t.blocked : t.dim;
     const where = [s.machine !== "mac" ? s.machine : null, s.project, s.tmux].filter(Boolean).join(" · ");
-    const text = questionElseForYou(s);
-    const progress = todos(s);
+    const text = s.excerpt ?? "";
+    const done = progress(s);
     const canOpen = Boolean(s.tmux);
     return v_flex()
       .id(`card-${s.machine}-${s.sid}`)
@@ -125,14 +137,16 @@ export default class Board extends View {
       .child(h_flex().pt(2).gap(8).items_center().text_size(11).text_color(t.dim)
         .child(div().size(7).flex_none().rounded(4).bg(heat))
         .child(ago(age))
-        .when(Boolean(progress), (el) => el.child(h_flex().gap(4).items_center()
+        .when(Boolean(done), (el) => el.child(h_flex().gap(4).items_center()
           .child(svg("mods/workspace-chrome/circle-check.svg").size(11))
-          .child(progress))));
+          .child(done))));
   }
 
   render() {
     const t = theme();
     const now = Date.now();
+    this.paintedAt = now;
+    const old = this.fetchedAt && now - this.fetchedAt > 60000 ? ` · updated ${ago(now - this.fetchedAt)} ago` : "";
     const groups = Object.fromEntries(COLUMNS.map(([key]) => [key, []]));
     for (const s of this.sessions) groups[column(s, now)].push(s);
     const by = (field, dir) => (a, b) => dir * ((a[field] ?? 0) - (b[field] ?? 0));
@@ -174,7 +188,7 @@ export default class Board extends View {
       .child(h_flex().items_center().gap(10)
         .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Board"))
         .child(div().flex_1().text_size(11.5).text_color(t.dim)
-          .child(this.problem ?? `${this.sessions.length} omo sessions across your machines`))
+          .child(this.problem ?? `${this.sessions.length} omo sessions across your machines${old}`))
         .child(div().text_size(11).text_color(t.dim).child("Esc")))
       // The popup takes its content's height, so the columns get theirs.
       .child(h_flex().h(640).gap(12).items_start().children(COLUMNS.map(col)));
