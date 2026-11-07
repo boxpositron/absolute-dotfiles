@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+# omo-work: hours and the task for client work in omo.
+#
+# omo's hooks run `omo-work hook` (UserPromptSubmit, Stop, Notification). In a
+# session working in a client's code it logs each stretch the agent works: from
+# a prompt to the end of its turn, paused while a question waits for you. With
+# each prompt it tells the agent whose code this is and, once the agent has bound
+# the session to a task, the logged time not yet posted to that task. The rules
+# for the work itself are private, in ~/.config/omo-work/rules.md, which the
+# shared AGENTS.md points agents to.
+#
+# Clients come from the session's folder, by the rules in the private file
+# ~/.config/omo-work/customers (an owt workspace goes by its main checkout), one
+# per line, the first that matches wins:
+#   <folder>  <client>  <billed|in-house>
+# A <folder> ending in /* makes each of its subfolders a client; <client> "*"
+# then means the subfolder's name. "~" is your home; # starts a comment. Without
+# the file, no folder is a client. In-house clients are tracked, never billed.
+#
+# Usage: omo-work hook                     (omo's hooks; reads the payload on stdin)
+#        omo-work bind <task id> [<client> [--in-house]]
+#                                          (this session's work goes to that task; name
+#                                           the client for work outside its folder)
+#        omo-work status                   (this session: client, task, time not posted)
+#        omo-work posted                   (marks this session's logged time as posted)
+#        omo-work report [<client>]        (logged time by client and task)
+# bind, status and posted find the session in $PI_SESSION_ID, which omo sets.
+#
+# State in ~/.local/state/omo-work: log.tsv, one stretch per line
+#   start  end  session  client  kind  task  posted      (times in Unix seconds)
+# and sessions/<id>: the session's client, kind, task, transcript and open stretch.
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$PATH"
+
+customers="${XDG_CONFIG_HOME:-$HOME/.config}/omo-work/customers"
+rules="${XDG_CONFIG_HOME:-$HOME/.config}/omo-work/rules.md"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/omo-work"
+log="$state/log.tsv"
+mkdir -p "$state/sessions"
+
+die() {
+  echo "omo-work: $*" >&2
+  exit 1
+}
+
+# "<client>\t<billed|in-house>" for the code in a folder, by the customers file;
+# fails outside clients' code. The folder itself first, then its main checkout.
+classify() {
+  local dir=$1 main candidate pattern client kind base
+  [[ -r $customers ]] || return 1
+  main=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && main=${main%/.git}
+  for candidate in "$dir" ${main:+"$main"}; do
+    while read -r pattern client kind; do
+      [[ -z $pattern || $pattern == \#* ]] && continue
+      pattern=${pattern/#\~/$HOME}
+      if [[ $pattern == */\* ]]; then
+        base=${pattern%/\*}
+        [[ $candidate == "$base"/?* ]] || continue
+        if [[ $client == "*" ]]; then
+          client=${candidate#"$base"/}
+          client=${client%%/*}
+        fi
+      else
+        [[ $candidate == "$pattern" || $candidate == "$pattern"/* ]] || continue
+      fi
+      printf '%s\t%s\n' "$client" "${kind:-billed}"
+      return 0
+    done <"$customers"
+  done
+  return 1
+}
+
+get() {
+  [[ -f $state/sessions/$1 ]] && sed -n "s/^$2=//p" "$state/sessions/$1" | head -n 1
+}
+
+put() {
+  local f="$state/sessions/$1"
+  { grep -v "^$2=" "$f" 2>/dev/null; printf '%s=%s\n' "$2" "$3"; } >"$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# Runs a command holding the log's lock; several sessions write the log.
+locked() {
+  local i=0 rc
+  until mkdir "$state/lock" 2>/dev/null; do
+    ((++i > 100)) && break # a lock left by a killed run: go ahead after about 5 seconds
+    sleep 0.05
+  done
+  "$@"
+  rc=$?
+  rmdir "$state/lock" 2>/dev/null
+  return $rc
+}
+
+append_row() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t0\n' "$@" >>"$log"
+}
+
+open_stretch() {
+  [[ -n $(get "$1" open) ]] || put "$1" open "${2:-$(date +%s)}"
+}
+
+close_stretch() {
+  local s=$1 end=${2:-$(date +%s)} start
+  start=$(get "$s" open)
+  [[ -n $start ]] || return 0
+  put "$s" open ""
+  ((end > start)) || return 0
+  locked append_row "$start" "$end" "$s" "$(get "$s" client)" "$(get "$s" kind)" "$(get "$s" task)"
+}
+
+# Logs the open stretch up to now and keeps it running, so a summary covers now.
+split_stretch() {
+  [[ -n $(get "$1" open) ]] || return 0
+  close_stretch "$1"
+  open_stretch "$1"
+}
+
+epoch() {
+  local t=${1%%.*}
+  t=${t%Z}
+  date -j -u -f '%Y-%m-%dT%H:%M:%S' "$t" +%s 2>/dev/null || date -u -d "${t}Z" +%s 2>/dev/null
+}
+
+# When the turn before went quiet, if after <since>. omo sends no Stop while a
+# background task (a monitor) is live, so a stretch can still be open when the
+# next prompt comes; the transcript's lifecycle says when the agent stopped.
+went_quiet() {
+  local transcript=$1 since=$2 iso e
+  [[ -r $transcript ]] || return 1
+  iso=$(tail -c 300000 "$transcript" | grep '"customType":"session-lifecycle"' |
+    jq -r 'select(.data.state | startswith("waiting")) | .data.since' 2>/dev/null | tail -n 1)
+  [[ -n $iso ]] && e=$(epoch "$iso") && ((e > since)) && echo "$e"
+}
+
+clock() {
+  date -r "$1" "$2" 2>/dev/null || date -d "@$1" "$2"
+}
+
+duration() {
+  printf '%dh%02dm' $(($1 / 3600)) $(($1 % 3600 / 60))
+}
+
+# This session's logged time not on its task yet: "1h05m in 2 stretches, from
+# 2026-11-07 09:10 to 2026-11-07 10:40", or with "all" each stretch.
+pending() {
+  local s=$1 start end total=0 n=0 first="" last=0 parts=""
+  while IFS=$'\t' read -r start end; do
+    total=$((total + end - start))
+    n=$((n + 1))
+    [[ -n $first ]] || first=$start
+    ((end > last)) && last=$end
+    parts+="${parts:+, }$(clock "$start" '+%Y-%m-%d %H:%M') to $(clock "$end" +%H:%M)"
+  done < <(awk -F'\t' -v s="$s" '$3 == s && $7 == 0 { print $1 "\t" $2 }' "$log" 2>/dev/null)
+  ((n)) || return 1
+  [[ ${2:-} == all ]] || parts="from $(clock "$first" '+%Y-%m-%d %H:%M') to $(clock "$last" '+%Y-%m-%d %H:%M')"
+  printf '%s in %d stretch%s, %s' "$(duration "$total")" "$n" "$( ((n > 1)) && echo es)" "$parts"
+}
+
+who() {
+  local s=$1
+  if [[ $(get "$s" kind) == in-house ]]; then
+    printf 'in-house client %s (tracked, never billed)' "$(get "$s" client)"
+  else
+    printf 'client "%s"' "$(get "$s" client)"
+  fi
+}
+
+context() {
+  local s=$1 task text time
+  task=$(get "$s" task)
+  if [[ -z $task ]]; then
+    text="Client work: this session is in the code of $(who "$s"). Its work has no task yet. Before changing anything, read and follow $rules: settle the work's PRD, $([[ $(get "$s" kind) == in-house ]] || printf 'ask whether it is billable, ')then find or create its task and run \`omo-work bind <task id>\`. A question or a read-only look needs none of this."
+  else
+    if time=$(pending "$s"); then
+      time="Logged and not on the task yet: $time. Post it in a dated task comment at the next milestone or when the work is done, then run \`omo-work posted\`."
+    else
+      time="All logged time is on the task."
+    fi
+    text="Client work: this session is in the code of $(who "$s"), on task $task. $time Keep the task's timeline in dated comments and close the task when the work is finished, as $rules says."
+  fi
+  jq -cn --arg c "$text" '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $c}}'
+}
+
+hook() {
+  local payload event sid transcript found quiet
+  payload=$(cat)
+  field() { jq -r "$1 // empty" <<<"$payload" 2>/dev/null; }
+  event=$(field '.hook_event_name // .event')
+  sid=$(field '.session_id')
+  transcript=$(field '.transcript_path')
+  [[ -n $sid ]] || return 0
+  # Only top-level sessions: subagents and background sessions keep transcripts elsewhere.
+  [[ -z $transcript || $transcript == */.omo/agent/sessions/* ]] || return 0
+  if [[ ! -f $state/sessions/$sid ]]; then
+    [[ $event == UserPromptSubmit ]] || return 0
+    found=$(classify "$(field '.cwd')") || return 0
+    put "$sid" client "${found%%$'\t'*}"
+    put "$sid" kind "${found#*$'\t'}"
+  fi
+  [[ -n $transcript ]] && put "$sid" transcript "$transcript"
+  case $event in
+    UserPromptSubmit)
+      if [[ -n $(get "$sid" open) ]] && quiet=$(went_quiet "$transcript" "$(get "$sid" open)"); then
+        close_stretch "$sid" "$quiet"
+      fi
+      open_stretch "$sid"
+      context "$sid"
+      ;;
+    Stop) close_stretch "$sid" ;;
+    Notification)
+      case $(field '.kind') in
+        ask-user-asked) close_stretch "$sid" ;;
+        ask-user-settled | ask-user-timeout) open_stretch "$sid" ;;
+      esac
+      ;;
+  esac
+  return 0
+}
+
+retask() {
+  [[ -f $log ]] || return 0
+  awk -F'\t' -v OFS='\t' -v s="$1" -v t="$2" '$3 == s && $7 == 0 && $6 == "" { $6 = t } 1' "$log" >"$log.tmp" &&
+    mv "$log.tmp" "$log"
+}
+
+mark_posted() {
+  [[ -f $log ]] || return 0
+  awk -F'\t' -v OFS='\t' -v s="$1" '$3 == s && $7 == 0 { $7 = 1 } 1' "$log" >"$log.tmp" && mv "$log.tmp" "$log"
+}
+
+session() {
+  [[ -n ${PI_SESSION_ID:-} ]] || die "no PI_SESSION_ID: run it from the omo session doing the work"
+  echo "$PI_SESSION_ID"
+}
+
+case ${1:-} in
+  hook)
+    hook
+    ;;
+  bind)
+    task=${2:?usage: omo-work bind <task id> [<client> [--in-house]]}
+    s=$(session) || exit 1
+    if [[ -n ${3:-} ]]; then
+      put "$s" client "$3"
+      put "$s" kind "$([[ ${4:-} == --in-house ]] && echo in-house || echo billed)"
+    elif [[ ! -f $state/sessions/$s ]]; then
+      found=$(classify "$PWD") || die "this folder isn't a client's code: omo-work bind <task id> <client> [--in-house]"
+      put "$s" client "${found%%$'\t'*}"
+      put "$s" kind "${found#*$'\t'}"
+    fi
+    old=$(get "$s" task)
+    [[ -n $old && $old != "$task" ]] && pending "$s" >/dev/null &&
+      die "time logged for task $old is not posted yet: post it, run omo-work posted, then bind again"
+    put "$s" task "$task"
+    locked retask "$s" "$task"
+    open_stretch "$s"
+    echo "omo-work: this session's work for $(get "$s" client) ($(get "$s" kind)) goes to task $task"
+    ;;
+  status)
+    s=$(session) || exit 1
+    [[ -f $state/sessions/$s ]] || die "this session isn't tracked: it isn't in a customer's code, and nothing was bound"
+    split_stretch "$s"
+    echo "customer: $(who "$s")"
+    echo "task:     $(get "$s" task || true)"
+    echo "not posted: $(pending "$s" all || echo none)"
+    ;;
+  posted)
+    s=$(session) || exit 1
+    split_stretch "$s"
+    if summary=$(pending "$s"); then
+      locked mark_posted "$s"
+      echo "omo-work: marked $summary as posted"
+    else
+      echo "omo-work: nothing waiting to be posted"
+    fi
+    ;;
+  report)
+    [[ -s $log ]] || { echo "omo-work: nothing logged yet"; exit 0; }
+    awk -F'\t' -v want="${2:-}" '
+      want == "" || tolower($4) == tolower(want) {
+        k = $4 "\t" ($6 == "" ? "(no task)" : $6); t[k] += $2 - $1; n[k]++; if ($7 == 0) u[k] += $2 - $1
+      }
+      END { for (k in t) printf "%s\t%d\t%d\t%d\n", k, t[k], n[k], u[k] }' "$log" | sort |
+      while IFS=$'\t' read -r client task total n unposted; do
+        printf '%-14s %-38s %s in %d stretch%s%s\n' "$client" "$task" "$(duration "$total")" "$n" \
+          "$( ((n > 1)) && echo es)" "$( ((unposted)) && echo ", $(duration "$unposted") not posted")"
+      done
+    ;;
+  *)
+    sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+    exit 2
+    ;;
+esac
