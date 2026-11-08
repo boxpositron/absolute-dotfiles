@@ -60,6 +60,7 @@ local_servers
 .config/omo/hooks.json:.omo/agent/hooks.json
 .config/omo/keybindings.json:.omo/agent/keybindings.json
 .config/omo/extensions/vim-quit.ts:.omo/agent/extensions/vim-quit.ts
+.config/omo/extensions/omo-working.ts:.omo/agent/extensions/omo-working.ts
 .config/omo/prompts:.omo/agent/prompts
 "
 
