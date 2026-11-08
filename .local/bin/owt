@@ -72,7 +72,7 @@ Usage (run from anywhere inside the repo):
         --force   finish anyway, discarding unmerged work (remote branch kept)
         --detach  run the cleanup 5 seconds later from tmux (or herdr-core),
                   so an agent session inside the workspace can finish first
-        The omo slash command /owt-done syncs Linear and then runs this.
+        The omo slash command /owt-done syncs the session as /sq does (Studio, memory, a handoff) and Linear, then runs this.
 
 Workspaces share the main checkout's omo memory: owt new and owt open link the
 workspace's memory id to the main store, and owt done and owt rm remove the link.
