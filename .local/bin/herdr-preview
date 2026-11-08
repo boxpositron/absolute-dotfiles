@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Opens a file or folder in Herdr's rich preview, beside the terminal you ran it in.
+#
+# Usage: herdr-preview [--split | --tab] <path>
+#          --split  a split to the right of this terminal's pane (default)
+#          --tab    a new tab named after the file, in this terminal's space
+#
+# The preview shows Markdown, images, PDFs, Word documents, HTML, code, logs and
+# folders; its header copies the path, reveals the file in Finder and opens it
+# (see ~/.config/herdr-app/mods/preview). Run inside tmux, it finds the Herdr
+# terminal the tmux client runs in. Outside Herdr, or without herdr-app, it says
+# so and opens the path with the default app instead.
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$PATH"
+
+usage() {
+  sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+  exit 2
+}
+
+place="split" path=""
+while (($#)); do
+  case $1 in
+    --tab) place=tab ;;
+    --split) place="split" ;;
+    -h | --help) usage ;;
+    --) shift && path=${1:-} && break ;;
+    -*) usage ;;
+    *) path=$1 ;;
+  esac
+  shift
+done
+[[ -n $path ]] || usage
+
+tilde="~"
+case $path in
+  "$tilde") path=$HOME ;;
+  "$tilde"/*) path="$HOME/${path:2}" ;;
+esac
+if [[ -d $path ]]; then
+  path=$(cd "$path" && pwd)
+elif [[ $path == /* ]]; then
+  :
+else
+  path="$PWD/${path#./}"
+fi
+if [[ -e $path && ! -d $path ]]; then
+  path="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+fi
+
+# The Herdr terminal a tmux client runs in: herdr-core gives the programs in its
+# terminals HC_TERMINAL_ID, and a client keeps the environment it started with.
+client_terminal() {
+  local pid
+  pid=$(tmux display-message -p '#{client_pid}' 2>/dev/null) || return 0
+  [[ -n $pid ]] || return 0
+  ps eww -o command= -p "$pid" 2>/dev/null | tr ' ' '\n' | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1
+}
+
+fallback() {
+  echo "herdr-preview: $1; opening $path with the default app" >&2
+  exec open "$path"
+}
+
+command -v herdr-app >/dev/null || fallback "herdr-app is not installed"
+terminal=${HC_TERMINAL_ID:-}
+[[ -z $terminal && -n ${TMUX:-} ]] && terminal=$(client_terminal)
+[[ -n $terminal ]] || fallback "this terminal is not in Herdr"
+
+where=$(herdr-app ls 2>/dev/null | jq -r --arg t "$terminal" \
+  'first(.spaces[] as $s | $s.tabs[].terminals[] | select(.terminal == $t) | [.pane, $s.id] | @tsv) // empty')
+[[ -n $where ]] || fallback "Herdr does not show this terminal"
+IFS=$'\t' read -r pane space <<<"$where"
+
+props=$(jq -cn --arg f "$path" '{file: $f}')
+if [[ $place == tab ]]; then
+  herdr-app "do" tab.new --space "$space" --name "$(basename "$path")" --mod preview --props "$props" >/dev/null
+else
+  herdr-app "do" pane.split --pane "$pane" --direction right --mod preview --props "$props" >/dev/null
+fi

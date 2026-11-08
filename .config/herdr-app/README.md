@@ -13,6 +13,8 @@ Herdr's desktop app (`herdr-app`, with herdr-core as `hc`) as the window around 
 - `mods/omo-tmux/`: the "omo in tmux" panel.
 - `mods/picker-tmux/`: Herdr's search ("Go to…") with tmux sessions and panes added, cloned from Herdr's `picker` in 0.1.13.
 - `mods/workspace-chrome-tmux/`: Herdr's sidebar header and footer, cloned from `workspace-chrome` in 0.1.13, whose search button opens `picker-tmux`. It uses the shipped mod's icons, since Herdr loads no images through the link.
+- `mods/omo-board/`: the board view (see Board).
+- `mods/preview/`: the file preview (see Preview).
 - `keys.json`: Herdr's default keys, plus Cmd+P opening `picker-tmux` in the `tmux` layout. Herdr stops adding its new default shortcuts to a `keys.json` you have edited, so add new ones here by hand.
 - `omo.svg`: omo's icon. It is copied, not linked: Herdr loads a program icon only from a real file in its folder.
 
@@ -68,6 +70,27 @@ A session attached in Ghostty and in Herdr at once is sized to whichever client 
 Cmd+Shift+B in the `tmux` layout, or the screen button in the "omo in tmux" panel's header, opens the board (`mods/omo-board`): every omo session on every machine the omo board knows, read every five seconds from agent-state (`127.0.0.1:4747`, through the omo board's tunnel). Sessions sit in four columns: Needs you (an open question or a blocked goal, oldest first), Working, Done (finished in the last day) and Idle. A card shows the session's title, its machine, project and tmux target, the question waiting or the "For you" part of its last report, its to-do progress, and a dot for how recently it was active: hot under an hour, warm under a day, dim after that. A click runs `omo-status open`, which shows the session in its Herdr space, or a new one, server sessions included. Sessions not in tmux can't be shown from here.
 
 Telegram's "Open on Mac" button (omo-assistant) runs the same `omo-status open` on the Mac through the board, and brings Herdr forward. `omo-presence` tells omo-assistant whether you are at the Mac (Herdr in front, screen unlocked, keyboard or mouse used in the last five minutes); while you are, it keeps a session's questions and errors off Telegram, since Herdr alerts you.
+
+## Preview
+
+`mods/preview` shows a file beside your terminal:
+
+- Markdown rendered, with a Rendered/Source toggle; HTML the same way.
+- Images fitted to the pane, never enlarged; HEIC and TIFF are converted first.
+- Text and code with line numbers and highlighting. Compact JSON (three lines or fewer) is pretty-printed. Files over 1 MB or 20,000 lines show their start, and say so.
+- Word, RTF and similar documents through `textutil`; PDFs page by page (the first 20 pages); Keynote, Numbers, PowerPoint and Excel files through Quick Look.
+- Folders as a list you can click through, and anything else as an info card.
+
+The header copies the path (Cmd+Shift+C), reveals the file in Finder (Cmd+Shift+R), opens it in its default app (Cmd+O) and reloads it (Cmd+R). It also reloads by itself when the file changes. For text, code, Markdown, HTML files and folders, Edit (Cmd+E) opens nvim in a terminal below the preview, in the file's folder, so the preview follows each save. nvim starts through your interactive login shell, so it has what your terminals have; started bare, it lacks `XDG_CONFIG_HOME` from `.zshrc` and the nvim config's WezTerm theme sync fails.
+
+Open it with `herdr-preview <path>`, a split beside the terminal you run it in (`--tab` for a tab of its own), or Ctrl+click a Markdown, image, PDF or document path in a tmux pane inside Herdr (`tmux-open-path`). Outside Herdr, Ctrl+click keeps its old routes. Herdr has no setting for what its own Cmd+click does with file paths.
+
+Watch out:
+
+- Herdr's `image()` only loads files inside `~/.config/herdr-app`, so images, converted images and PDF pages are copied into `~/.config/herdr-app/preview-cache`, outside this repo and pruned after 7 days.
+- Herdr's Markdown view draws no images: an image in Markdown shows as an "Image: alt" link that opens it in the preview. Bold and italic showed as plain text in testing.
+- Code doesn't wrap, so columns stay aligned; long lines scroll sideways.
+- An open preview pane keeps running its old code after `main.js` changes, even after a layout switch: close and reopen it.
 
 ## Herdr updates
 

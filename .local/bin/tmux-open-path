@@ -3,14 +3,16 @@
 #   markdown        -> Markdown Preview (GUI)
 #   images, pdf, dirs -> yazi in a split pane (image preview via passthrough)
 #   anything else   -> nvim in a split pane, jumping to :line when present
+# When the clicking tmux client runs in a Herdr terminal, markdown, images, pdf
+# and documents open in Herdr's preview beside it instead (~/.local/bin/herdr-preview).
 #
 # Called from a tmux mouse binding:
-#   tmux-open-path <pane_id> <pane_current_path> <mouse_x> <mouse_line>
+#   tmux-open-path <pane_id> <pane_current_path> <mouse_x> <mouse_line> [<client_pid>]
 
 emulate -L zsh
 setopt extendedglob
 
-pane=$1 cwd=$2 x=$3 line=$4
+pane=$1 cwd=$2 x=$3 line=$4 client=${5:-}
 
 fail() { tmux display-message -d 2000 "open-path: $1"; exit 1 }
 
@@ -51,6 +53,17 @@ else
 fi
 [[ -n $file ]] || fail "no such file: $token"
 file=${file:A}
+
+# Herdr gives the programs in its terminals HC_TERMINAL_ID, and a tmux client keeps
+# the environment it started with.
+herdr=
+[[ $client == <-> ]] && herdr=$(ps eww -o command= -p $client 2>/dev/null | tr ' ' '\n' | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1)
+if [[ -n $herdr && -x ~/.local/bin/herdr-preview ]]; then
+    case ${file:e:l} in
+        md|markdown|mdx|mdown|mkd|mkdn|png|jpg|jpeg|gif|webp|svg|bmp|tif|tiff|heic|ico|pdf|docx|doc|rtf|odt|pages|pptx|xlsx|key|numbers)
+            HC_TERMINAL_ID=$herdr ~/.local/bin/herdr-preview $file >/dev/null 2>&1 && exit ;;
+    esac
+fi
 
 if [[ -d $file ]]; then
     tmux split-window -h -t $pane -c $file "yazi ${(q)file}"
