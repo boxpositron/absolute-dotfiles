@@ -10,6 +10,9 @@ AGENTS.md
 !.config/ai/AGENTS.md
 .config/opencode/plugin/node_modules
 .config/opencode/plugin/package-lock.json
+.config/omo/skills/stageshow/node_modules/
+.config/omo/skills/stageshow/dist/
+.config/omo/skills/stageshow/shots/
 # Herdr writes its type files into each mod folder it loads.
 .config/herdr-app/mods/*/gpui-kit.d.ts
 .config/herdr-app/mods/*/jsconfig.json
