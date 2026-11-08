@@ -34,10 +34,12 @@ usage() {
 owt: Conductor-style git worktree workspaces for coding agents
 
 Usage (run from anywhere inside the repo):
-  owt new [ISSUE-1 ISSUE-2 ...] [--name <name>] [--base <ref>] [--no-install] [--no-launch]
+  owt new [ISSUE-1 ISSUE-2 ...] [--name <name>] [--base <ref>] [--no-ff] [--no-install] [--no-launch]
         Create a workspace with a random city name (or <name>) at
         $OWT_ROOT/<repo>/<name> on placeholder branch feature/<name>, from the
-        latest origin default branch (or <ref>). Copies local .env files,
+        latest origin default branch (or <ref>). Fetches that branch and
+        fast-forwards its local copy first; --no-ff skips both and starts from
+        the ref as it is here. Copies local .env files,
         installs dependencies, and opens a tmux window running the agent
         (a Herdr space when run in Herdr outside tmux).
         Linear issue keys are optional; you can also name issues to the agent
@@ -308,12 +310,51 @@ launch() {
   fi
 }
 
+# Fast-forward local branch $2 to origin/$2, wherever it is checked out.
+# A branch that is already there or ahead is left alone.
+ff_local_branch() {
+  local root="$1" branch="$2" local_ref="refs/heads/$2" remote_ref="refs/remotes/origin/$2" holder
+  git -C "$root" merge-base --is-ancestor "$remote_ref" "$local_ref" && return 0
+  if ! git -C "$root" merge-base --is-ancestor "$local_ref" "$remote_ref"; then
+    say "local $branch has diverged from origin/$branch"
+    return 1
+  fi
+  holder="$(git -C "$root" worktree list --porcelain \
+    | awk -v ref="branch $local_ref" '/^worktree /{path=substr($0,10)} $0==ref{print path; exit}')"
+  if [[ -n "$holder" ]]; then
+    git -C "$holder" merge --quiet --ff-only "$remote_ref" || return 1
+  else
+    git -C "$root" fetch --quiet . "$remote_ref:$local_ref" || return 1
+  fi
+  say "fast-forwarded $branch"
+}
+
+# Fetch the branch a workspace starts from and fast-forward its local copy.
+# Tags, commits and unpushed branches have nothing to fast-forward. A local copy
+# that cannot move only stops the workspace when that copy is the base.
+fast_forward_base() {
+  local root="$1" base="$2" branch="${2#origin/}"
+  if [[ "$base" != origin/* ]]; then
+    git -C "$root" show-ref --verify --quiet "refs/heads/$base" || return 0
+    git -C "$root" show-ref --verify --quiet "refs/remotes/origin/$base" || return 0
+  fi
+  say "fetching origin/$branch"
+  git -C "$root" fetch --quiet origin "$branch" \
+    || die "could not fetch origin/$branch; pass --no-ff to use what is already here"
+  git -C "$root" show-ref --verify --quiet "refs/heads/$branch" || return 0
+  if ! ff_local_branch "$root" "$branch"; then
+    [[ "$base" == origin/* ]] || die "could not fast-forward $branch; pass --no-ff to start from it as it is"
+    say "could not fast-forward local $branch; the workspace still starts from $base"
+  fi
+}
+
 cmd_new() {
-  local issues=() name="" base="" install=1 open=1
+  local issues=() name="" base="" install=1 open=1 ff=1
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name) name="${2:-}"; [[ -n "$name" ]] || die "--name needs a value"; shift 2 ;;
       --base) base="${2:-}"; [[ -n "$base" ]] || die "--base needs a ref"; shift 2 ;;
+      --no-ff) ff=0; shift ;;
       --no-install) install=0; shift ;;
       --no-launch) open=0; shift ;;
       -*) die "unknown option $1" ;;
@@ -334,10 +375,7 @@ cmd_new() {
   branch="feature/$name"
 
   base="${base:-$(default_base)}"
-  if [[ "$base" == origin/* ]]; then
-    say "fetching $base"
-    git -C "$root" fetch --quiet origin "${base#origin/}"
-  fi
+  if [[ $ff -eq 1 ]]; then fast_forward_base "$root" "$base"; fi
   mkdir -p "$(dirname "$dir")"
   git -C "$root" worktree add --no-track -b "$branch" "$dir" "$base"
 
@@ -572,6 +610,7 @@ _owt() {
           _arguments \
             '--name[workspace name instead of a random city]:name: ' \
             '--base[start from this ref]:git ref:_owt_refs' \
+            '--no-ff[do not fetch or fast-forward the base first]' \
             '--no-install[skip installing dependencies]' \
             '--no-launch[do not open the agent]' \
             '*:Linear issue key: '
