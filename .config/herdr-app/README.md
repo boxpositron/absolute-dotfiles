@@ -83,7 +83,7 @@ Telegram's "Open on Mac" button (omo-assistant) runs the same `omo-status open` 
 
 The header copies the path (Cmd+Shift+C), reveals the file in Finder (Cmd+Shift+R), opens it in its default app (Cmd+O) and reloads it (Cmd+R). It also reloads by itself when the file changes. For text, code, Markdown, HTML files and folders, Edit (Cmd+E) opens nvim in a terminal below the preview, in the file's folder, so the preview follows each save. nvim starts through your interactive login shell, so it has what your terminals have; started bare, it lacks `XDG_CONFIG_HOME` from `.zshrc` and the nvim config's WezTerm theme sync fails.
 
-Open it with `herdr-preview <path>`, a split beside the terminal you run it in (`--tab` for a tab of its own), or Ctrl+click a Markdown, image, PDF or document path in a tmux pane inside Herdr (`tmux-open-path`). Outside Herdr, Ctrl+click keeps its old routes. Herdr has no setting for what its own Cmd+click does with file paths.
+Open it with `herdr-preview <path>`, a split beside the terminal you run it in (`--tab` for a tab of its own), or Ctrl+click a Markdown, image, PDF or document path in a tmux pane inside Herdr (`tmux-open-path`). Ctrl+click anywhere on a Markdown link or image in a pane, `[label](target)` or `![alt](target)`, opens its target. omo draws a link as `label (target)`, and Ctrl+click on the label opens the target too; omo draws an image link as its alt text only, so it has no path to click. Outside Herdr, Ctrl+click keeps its old routes. Herdr has no setting for what its own Cmd+click does with file paths.
 
 Watch out:
 
