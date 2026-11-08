@@ -41,6 +41,15 @@ function find(node, id) {
 
 const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
+// Time left to a scheduled wake-up: m:ss under an hour, then hours and minutes.
+function countdown(ms) {
+  if (ms <= 0) return "due";
+  const s = Math.ceil(ms / 1000);
+  if (s < 3600) return `in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const h = Math.floor(s / 3600);
+  return h < 24 ? `in ${h}h ${Math.floor((s % 3600) / 60)}m` : `in ${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
 function duration(ms) {
   const m = Math.floor(ms / 60000);
   if (m < 1) return "<1m";
@@ -52,10 +61,10 @@ function duration(ms) {
 function parse(stdout) {
   const panes = [];
   for (const line of stdout.split("\n")) {
-    const [pane, session, window, path, state, since, ...msg] = line.split(SEP);
+    const [pane, session, window, path, state, since, resume, ...msg] = line.split(SEP);
     if (!pane) continue;
     const project = (path ?? "").split("/").filter(Boolean).pop() ?? "~";
-    panes.push({ pane, session, window, project, state, since: Number(since) * 1000 || null, msg: msg.join(SEP) });
+    panes.push({ pane, session, window, project, state, since: Number(since) * 1000 || null, resumeAt: Number(resume) * 1000 || null, msg: msg.join(SEP) });
   }
   return panes;
 }
@@ -82,6 +91,8 @@ export default class OmoTmux extends View {
     cx.timer.every(2000, (cx) => this.refresh(cx));
     // The times on the rows count up.
     cx.timer.every(30000, (cx) => cx.notify());
+    // Scheduled wake-ups count down here, so no report is sent every second.
+    cx.timer.every(1000, (cx) => { if (this.panes.some((p) => p.resumeAt)) cx.notify(); });
     // keys.json binds "omo-tmux.next" (Cmd+J in the tmux layout): the pane that most needs you.
     cx.spawn(async (cx) => {
       for (;;) {
@@ -206,6 +217,7 @@ export default class OmoTmux extends View {
   row(t, p, now) {
     const label = GENERIC.has(p.window) || p.window === p.project ? p.project : `${p.project} \u00b7 ${p.window}`;
     const quiet = p.state === "idle";
+    const wake = p.resumeAt && p.state !== "working";
     const flash = this.flash.get(p.pane);
     return h_flex()
       .id(`omo-${p.pane}`)
@@ -224,7 +236,8 @@ export default class OmoTmux extends View {
       .child(v_flex().flex_1().min_w(0).gap(1)
         .child(div().truncate().text_color(quiet ? t.muted : t.foreground).child(label))
         .when(Boolean(p.msg), (el) => el.child(div().truncate().text_size(11.5).text_color(t.dim).child(p.msg))))
-      .when(!quiet && Boolean(p.since), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - p.since))))
+      .when(Boolean(wake), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi5).child(countdown(p.resumeAt - now))))
+      .when(!wake && !quiet && Boolean(p.since), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - p.since))))
       .child(this.status(t, p.state));
   }
 

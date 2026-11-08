@@ -37,6 +37,15 @@ function progress(s) {
   return s.todos?.all ? `${s.todos.done}/${s.todos.all}` : "";
 }
 
+// Time left to a scheduled wake-up: m:ss under an hour, then hours and minutes.
+function countdown(ms) {
+  if (ms <= 0) return "due";
+  const s = Math.ceil(ms / 1000);
+  if (s < 3600) return `in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const h = Math.floor(s / 3600);
+  return h < 24 ? `in ${h}h ${Math.floor((s % 3600) / 60)}m` : `in ${Math.floor(h / 24)}d ${h % 24}h`;
+}
+
 function ago(ms) {
   const m = Math.floor(ms / 60000);
   if (m < 1) return "now";
@@ -62,6 +71,8 @@ export default class Board extends View {
     this.handle = cx.focus_handle();
     this.refresh(cx);
     cx.timer.every(5000, (cx) => this.refresh(cx));
+    // Scheduled wake-ups count down here, between fetches.
+    cx.timer.every(1000, (cx) => { if (this.sessions.some((s) => s.resumeAt)) cx.notify(); });
   }
 
   refresh(cx) {
@@ -140,6 +151,7 @@ export default class Board extends View {
       .child(h_flex().pt(2).gap(8).items_center().text_size(11).text_color(t.dim)
         .child(div().size(7).flex_none().rounded(4).bg(heat))
         .child(ago(age))
+        .when(Boolean(s.resumeAt), (el) => el.child(div().text_color(t.ansi5).child(`resumes ${countdown(s.resumeAt - now)}`)))
         .when(Boolean(done), (el) => el.child(h_flex().gap(4).items_center()
           .child(svg("mods/workspace-chrome/circle-check.svg").size(11))
           .child(done))));
