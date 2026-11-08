@@ -51,6 +51,10 @@
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$PATH"
 
+# Run from outside tmux with no UTF-8 locale (Herdr's panel, `hc exec`), tmux prints control
+# characters as "_", which destroys the tab and \x1f field separators used below.
+tmux() { command tmux -u "$@"; }
+
 # The spaces `show` and `spaces` made, one "<session>\t<space id>" line each, so
 # `spaces` can close them once their session ends.
 spaces_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/spaces"
