@@ -186,9 +186,11 @@ OpenCode is retired. Its agents, commands and plugins are left in `.config/openc
 - `prompts/` (linked as `~/.omo/agent/prompts`): slash commands.
   - `/linear-sync [notes]` posts a progress comment on the workspace's Linear issues and sets them to In Progress, or In Review once a PR is open.
   - `/owt-done [notes]` finishes a workspace after its PR merges: it comments on each issue and moves it to Done, then runs `owt done --detach`. It asks before discarding uncommitted or unmerged work.
+  - `/sq` (safe quit) gets a session ready to close: it finishes or stops its running work, posts logged client time and progress to Studio, updates Linear, commits and pushes the session's own changes (checking a public repository's diff for secrets and private details first), saves memory and writes a handoff. Its last line is `SQ: ready`, or `SQ: hold <reason>` when closing would lose work.
   - `/impeccable [command] [target]` runs the Impeccable design skill.
   - `/setup-notes`, `/sync-notes`, `/ingest-notes`, `/teleport-notes`, `/analyze-vault`, `/reorganize-notes`, `/preview-notes-delegation` and `/validate-notes-config` manage with-context documentation delegation. They came over from OpenCode and need the with-context MCP server, which is not in `~/.omo/agent/mcp.json`.
 - `skills/` (linked into `~/.omo/agent/skills/`, and into `~/.claude/skills/` for the shared ones): the vendored Impeccable, Vercel `web-design-guidelines`, `frontend-workflow`, `sound-design` and marketing skills. See [the skills README](.config/omo/skills/README.md) for provenance, local modifications and upgrades.
+- `extensions/vim-quit.ts` (linked into `~/.omo/agent/extensions/`): `:q`, `:q!`, `:qa` and `:wq` quit omo, and `:sq` runs `/sq` and closes the session once it ends with `SQ: ready`. It also acts on quit and handover requests written to `~/.local/state/omo-sessions/requests/<session id>.json`, for a session manager that is not written yet.
 - `archive/`: the OpenCode-era `DEVELOPMENT-WORKFLOW.md` and `UI-WORKFLOW.md`, kept for reference and loaded by nothing.
 
 MCP servers (in `~/.omo/agent/mcp.json`, which this repository does not manage): Playwright, Chrome DevTools, Linear, reoclo, time, ast-grep, headroom, agcanvas and portfolio.
