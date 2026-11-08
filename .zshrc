@@ -366,6 +366,9 @@ export NVM_DIR="$HOME/.config/nvm"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
 
 # direnv setup
+# Empty log format silences direnv's "loading .envrc" / "export +VAR" chatter
+# on every cd. Errors still print (direnv uses a fixed format for those).
+export DIRENV_LOG_FORMAT=''
 eval "$(direnv hook zsh)"
 
 # bun completions
