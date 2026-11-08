@@ -13,7 +13,7 @@ OpenCode-era evaluation notes and rollback steps are in git history at
 
 | Skill | Upstream | Revision | License |
 |---|---|---|---|
-| `impeccable` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (`.opencode` integration, tag `skill-v4.8.0`, engine 0.1.18) | `414603bf14c7a344edb466bb1f85690c77ce8b7d` | Apache 2.0, included |
+| `impeccable` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) (`.opencode` integration, tag `skill-v4.8.1`, engine 0.1.19) | `924bbd194d02e5e15a227e75b5901fb0d7a4ecad` | Apache 2.0, included |
 | `web-design-guidelines` | [vercel-labs/agent-skills](https://github.com/vercel-labs/agent-skills) (`skills/web-design-guidelines/SKILL.md`) | `063bee94c3f4df8453406c830b0a7df0f2860278` | per upstream |
 | ten marketing and copy skills | [coreyhaines31/marketingskills](https://github.com/coreyhaines31/marketingskills) (`skills/`) | `b9ba399dd88b082b926e261e8ccfb843d20aa066` | MIT, copied into each skill |
 | `stageshow` | [benjitaylor/skills](https://github.com/benjitaylor/skills) (`stageshow/`) | `802057409787133703c56001080169e347305572` | MIT, included; app icons and brand artwork keep their own terms (`NOTICE.md`, `kit/brands/`) |
