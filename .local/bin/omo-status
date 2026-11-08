@@ -9,9 +9,10 @@
 # An omo at rest (idle) shows no marker.
 # Each pane running omo keeps its own state in the pane option @omo_state and a
 # one-line message in @omo_msg ("Finished: fix the imap timeouts"), and the tab
-# shows the most urgent one. Focusing the tab turns red, amber and green back to
-# idle, and selects the pane whose banner you were sent (@omo_jump, set by
-# omo-notify). It also clears any title you gave the Ghostty tab by hand, so
+# shows the most urgent one. Focusing the tab selects the pane that most needs
+# you and turns only that one back to idle, so the tab keeps its next most urgent
+# state until each pane has been seen. With none left it selects the pane whose
+# banner you were sent (@omo_jump, set by omo-notify). It also clears any title you gave the Ghostty tab by hand, so
 # tabs always show their tmux session's name.
 #
 # Herdr: omo inside tmux cannot report its state through tmux, so a tmux client
@@ -264,7 +265,9 @@ forget() {
 # message, to the Herdr clients showing the session when it changed. A pane back
 # at its shell prompt no longer runs omo, so its state goes.
 show_most_urgent() {
-  local session=$1 pane cmd state msg path window task name best="" best_msg="" label="" body last pid tty term herdr=() old_label
+  local session=$1 pane cmd state msg path window task name best="" best_msg="" best_raw="" best_project="" label="" body last pid tty term herdr=() old_label
+  local urgent needing=0 what="" prefix="" rest agent
+  urgent=$(most_urgent_pane "$session")
   while IFS=$'\x1f' read -r pane cmd state msg path window task name; do
     [[ -n $state ]] || continue
     case $cmd in
@@ -273,8 +276,9 @@ show_most_urgent() {
         continue
         ;;
     esac
-    if (($(rank "$state") > $(rank "$best"))); then
-      best=$state best_msg=${msg:+${path##*/}: $msg}
+    case $state in input | error | done) needing=$((needing + 1)) ;; esac
+    if (($(rank "$state") > $(rank "$best"))) || [[ $pane == "$urgent" ]]; then
+      best=$state best_msg=${msg:+${path##*/}: $msg} best_raw=$msg best_project=${path##*/}
       [[ $state == background ]] && best_msg=$msg
       # The label: a window named for the work (an owt title), else omo's name for the
       # session, else the task (the last prompt's first line), else the folder.
@@ -286,6 +290,18 @@ show_most_urgent() {
     fi
   done < <(tmux list-panes -s -t "$session" -F $'#{pane_id}\x1f#{pane_current_command}\x1f#{@omo_state}\x1f#{@omo_msg}\x1f#{pane_current_path}\x1f#{window_name}\x1f#{@omo_task}\x1f#{@omo_name}')
   ((${#label} > 40)) && label="${label:0:39}…"
+  # Herdr's agents list names the pane a click lands on and how many more wait behind it.
+  case $best in
+    input) what="needs you" prefix="Needs your input: " ;;
+    error) what="failed" prefix="Failed: " ;;
+    done) what="finished" prefix="Finished: " ;;
+  esac
+  if [[ -n $what ]]; then
+    agent=${label:-$best_project} rest=${best_raw#"$prefix"}
+    # The label is often the task itself, which needs saying only once.
+    if [[ $agent == "$rest" || ($agent == *… && $rest == "${agent%…}"*) ]]; then best_msg="$what · $rest"; else best_msg="$what · $agent: $rest"; fi
+    ((needing > 1)) && best_msg+=" (+$((needing - 1)) more)"
+  fi
   if [[ -n $(icon "$best") ]]; then
     tmux set-option -t "$session" @omo_status "$(icon "$best")"
   else
@@ -314,6 +330,51 @@ show_most_urgent() {
   else
     tmux set-option -u -t "$session" @omo_herdr
   fi
+}
+
+# The pane in a session that most needs you, by the rank its tab shows: a failure,
+# a question, then a finished turn, the longest waiting first. Nothing when none does.
+most_urgent_pane() {
+  tmux list-panes -s -t "$1" -F $'#{pane_id}\t#{@omo_state}\t#{@omo_since}\t#{pane_current_command}' | awk -F'\t' '
+    $4 ~ /^-?(zsh|bash|fish|sh|dash)$/ { next }
+    $2 == "error" { print 3 "\t" ($3 == "" ? 0 : $3) "\t" $1 }
+    $2 == "input" { print 2 "\t" ($3 == "" ? 0 : $3) "\t" $1 }
+    $2 == "done" { print 1 "\t" ($3 == "" ? 0 : $3) "\t" $1 }' |
+    sort -t$'\t' -k1,1nr -k2,2n | head -n 1 | cut -f3
+}
+
+# Goes to the pane that most needs you in a session, else <fallback>, and marks only
+# that one seen: the others hold the session's status until you get to them.
+visit_session() {
+  local session=$1 pane
+  pane=$(most_urgent_pane "$session")
+  [[ -n $pane ]] || pane=${2:-}
+  if [[ -n $pane ]]; then
+    tmux select-window -t "$pane" \; select-pane -t "$pane" 2>/dev/null
+    case $(tmux show-option -pqv -t "$pane" @omo_state) in
+      input | done | error) tmux set-option -p -t "$pane" @omo_state idle \; set-option -p -u -t "$pane" @omo_msg ;;
+    esac
+  fi
+  show_most_urgent "$session"
+}
+
+# Herdr sends tmux no focus events (its clients always read as focused), so going to
+# a session there shows up here as a change of Herdr's focused terminal. It counts as
+# focusing the tab, unless omo-status moved the focus itself and already chose the pane.
+herdr_arrival() {
+  local now last shown target machine=""
+  now=$(herdr-app status 2>/dev/null | jq -r '.agent // "none"')
+  [[ -n $now ]] || return 0
+  last=$(tmux show-option -gqv @omo_herdr_focus)
+  [[ $now == "$last" ]] && return 0
+  tmux set-option -g @omo_herdr_focus "$now"
+  [[ -n $last && $now != none ]] || return 0
+  shown=$(tmux show-option -gqv @omo_herdr_shown)
+  (($(date +%s) - ${shown:-0} < 5)) && return 0
+  target=$(herdr_attached "$(herdr-app ls 2>/dev/null)" | awk -F'\t' -v t="$now" '$2 == t { print $1; exit }')
+  [[ -n $target ]] || return 0
+  [[ $target == */* ]] && machine=${target%%/*} target=${target#*/}
+  at "$machine" arrive "$target" >/dev/null 2>&1
 }
 
 # You are looking at a pane when its tab has focus and its window is showing.
@@ -393,16 +454,8 @@ case ${1:-} in
     session=$(tmux list-clients -F '#{client_name} #{session_id}' | awk -v c="$client" '$1 == c { print $2 }')
     [[ -n $session ]] || exit 0
     jump=$(tmux show-option -qv -t "$session" @omo_jump)
-    if [[ -n $jump ]]; then
-      tmux set-option -u -t "$session" @omo_jump
-      tmux select-window -t "$jump" \; select-pane -t "$jump" 2>/dev/null
-    fi
-    while read -r pane state; do
-      case $state in
-        input | done | error) tmux set-option -p -t "$pane" @omo_state idle \; set-option -p -u -t "$pane" @omo_msg ;;
-      esac
-    done < <(tmux list-panes -s -t "$session" -F '#{pane_id} #{@omo_state}')
-    show_most_urgent "$session"
+    [[ -n $jump ]] && tmux set-option -u -t "$session" @omo_jump
+    visit_session "$session" "$jump"
     reset_tab_title "$(tmux display-message -p -t "$session" '#{session_name}')"
     ;;
   sync)
@@ -417,7 +470,13 @@ case ${1:-} in
       send_report "$tty" "$(tmux show-option -qv -t "$session" @omo_report)"
     fi
     ;;
+  arrive)
+    session=$(tmux display-message -p -t "=${2:?session required}:" '#{session_id}' 2>/dev/null)
+    [[ -n $session ]] || exit 0
+    visit_session "$session"
+    ;;
   list | panes)
+    [[ $1 == list ]] && herdr_arrival
     "$0" "$1-here"
     for machine in $(machines); do
       at "$machine" "$1-here" 2>/dev/null | prefixed "$machine"
@@ -492,6 +551,14 @@ case ${1:-} in
     # the terminal empty when no Herdr terminal shows the session.
     pane=${2:?pane id required} terminal=""
     session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 1
+    # A click on a pane that needs nothing goes to the one in its session that does.
+    case $(tmux show-option -pqv -t "$pane" @omo_state) in
+      input | done | error) ;;
+      *)
+        urgent=$(most_urgent_pane "$session")
+        [[ -n $urgent ]] && pane=$urgent
+        ;;
+    esac
     tmux select-window -t "$pane" \; select-pane -t "$pane"
     # Going to a pane is looking at it. A Herdr client gets no focus-in hook for it
     # (tmux already counts it focused), so a finished or waiting pane clears here.
@@ -509,12 +576,14 @@ case ${1:-} in
   show)
     pane=${2:?pane id required} machine=""
     [[ $pane == */* ]] && machine=${pane%%/*} pane=${pane#*/}
+    tmux set-option -g @omo_herdr_shown "$(date +%s)"
     IFS=$'\x1f' read -r terminal session folder < <(at "$machine" locate "$pane") || exit 1
     if [[ -n $terminal ]]; then
       herdr-app "do" pane.focus --terminal "${machine:+$machine/}$terminal" >/dev/null
     else
       open_space "$session" "$folder" "$pane" "$machine"
     fi
+    tmux set-option -g @omo_herdr_shown "$(date +%s)"
     ;;
   open)
     target=${2:?tmux target required} host=${3:-} machine=""
