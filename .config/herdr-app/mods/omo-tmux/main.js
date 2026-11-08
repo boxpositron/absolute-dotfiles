@@ -218,6 +218,9 @@ export default class OmoTmux extends View {
     const label = GENERIC.has(p.window) || p.window === p.project ? p.project : `${p.project} \u00b7 ${p.window}`;
     const quiet = p.state === "idle";
     const wake = p.resumeAt && p.state !== "working";
+    // A goal's wait reads as a sentence: "goal continues in 3:34 · waiting on CI".
+    const goalWait = wake && /^goal (continues|retries|resumes)/.test(p.msg);
+    const msg = goalWait ? p.msg.replace(/^goal \w+/, (m) => `${m} ${countdown(p.resumeAt - now)}`) : p.msg;
     const flash = this.flash.get(p.pane);
     return h_flex()
       .id(`omo-${p.pane}`)
@@ -235,8 +238,8 @@ export default class OmoTmux extends View {
         .opacity(flash.lit ? 1 : 0).transition("opacity", { duration: 1500, easing: "ease-out" })))
       .child(v_flex().flex_1().min_w(0).gap(1)
         .child(div().truncate().text_color(quiet ? t.muted : t.foreground).child(label))
-        .when(Boolean(p.msg), (el) => el.child(div().truncate().text_size(11.5).text_color(t.dim).child(p.msg))))
-      .when(Boolean(wake), (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi5).child(countdown(p.resumeAt - now))))
+        .when(Boolean(p.msg), (el) => el.child(div().truncate().text_size(11.5).text_color(t.dim).child(msg))))
+      .when(Boolean(wake) && !goalWait, (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi5).child(countdown(p.resumeAt - now))))
       .when(!wake && !quiet && Boolean(p.since), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - p.since))))
       .child(this.status(t, p.state));
   }

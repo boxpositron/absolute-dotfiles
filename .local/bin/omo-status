@@ -79,7 +79,6 @@ background_work='
       else $what end)'
 
 # Each session's soonest scheduled wake-up: "<session id>\t<epoch seconds>\t<prompt's first line>".
-# A goal's own timer isn't readable, so scheduled prompts are the only exact wake-up times.
 scheduled_wakeups() {
   set -- "$HOME/.omo/agent/schedule/pending"/*.json
   [[ -e $1 ]] || return 0
@@ -122,6 +121,22 @@ message_for() {
   esac
 }
 
+# A parked goal's wait, from the footer omo draws every second (it is stored nowhere else):
+# "<continues|retries|resumes> <seconds left>". Nothing while the footer shows no wait.
+goal_wait() {
+  tmux capture-pane -p -t "$1" | awk '
+    match($0, /(▰|▱) (provider unavailable · )?goal (continues|retries|resumes) in [0-9hms ]+/) {
+      n = split(substr($0, RSTART, RLENGTH), w, " ")
+      for (i = 1; i <= n; i++) if (w[i] == "goal") kind = w[i + 1]
+      left = 0
+      for (i = n; i >= 1 && w[i] ~ /^[0-9]+[hms]$/; i--) {
+        unit = substr(w[i], length(w[i]))
+        left += (w[i] + 0) * (unit == "h" ? 3600 : unit == "m" ? 60 : 1)
+      }
+    }
+    END { if (kind != "") print kind, left }'
+}
+
 # An OSC 7501 report body. No state clears the terminal's records.
 report_body() {
   local state=$1 msg=$2 title=$3 body
@@ -129,7 +144,8 @@ report_body() {
     "") echo "state=clear" && return ;;
     input) body="state=blocked:kind=question:app=omo" ;;
     background) # OSC 7501 has no background state, and Herdr should not count this work as busy
-      body="state=idle:app=omo" msg="◐ background · $msg"
+      body="state=idle:app=omo"
+      case $msg in "goal "*) msg="◐ $msg" ;; *) msg="◐ background · $msg" ;; esac
       ;;
     *) body="state=$state:app=omo" ;;
   esac
@@ -262,17 +278,19 @@ open_space() {
 
 forget() {
   tmux set-option -p -u -t "$1" @omo_state \; set-option -p -u -t "$1" @omo_msg \; set-option -p -u -t "$1" @omo_task \
-    \; set-option -p -u -t "$1" @omo_since \; set-option -p -u -t "$1" @omo_name \; set-option -p -u -t "$1" @omo_lifecycle_seen \; set-option -p -u -t "$1" @omo_resume
+    \; set-option -p -u -t "$1" @omo_since \; set-option -p -u -t "$1" @omo_name \; set-option -p -u -t "$1" @omo_lifecycle_seen \; set-option -p -u -t "$1" @omo_resume \
+    \; set-option -p -u -t "$1" @omo_goal \; set-option -p -u -t "$1" @omo_goal_mins
 }
 
 # Puts the session's most urgent state in its tab marker and reports it, with its
 # message, to the Herdr clients showing the session when it changed. A pane back
 # at its shell prompt no longer runs omo, so its state goes.
 show_most_urgent() {
-  local session=$1 pane cmd state msg path window task name best="" best_msg="" best_raw="" best_project="" label="" body last pid tty term herdr=() old_label
+  local session=$1 pane cmd state msg path window task name best="" best_msg="" best_raw="" best_project="" best_resume="" label="" body last pid tty term herdr=() old_label
   local urgent needing=0 what="" prefix="" rest agent
   urgent=$(most_urgent_pane "$session")
-  while IFS=$'\x1f' read -r pane cmd state msg path window task name; do
+  local resume left
+  while IFS=$'\x1f' read -r pane cmd state msg path window task name resume; do
     [[ -n $state ]] || continue
     case $cmd in
       zsh | bash | fish | sh | dash | -zsh | -bash)
@@ -282,7 +300,7 @@ show_most_urgent() {
     esac
     case $state in input | error | done) needing=$((needing + 1)) ;; esac
     if (($(rank "$state") > $(rank "$best"))) || [[ $pane == "$urgent" ]]; then
-      best=$state best_msg=${msg:+${path##*/}: $msg} best_raw=$msg best_project=${path##*/}
+      best=$state best_msg=${msg:+${path##*/}: $msg} best_raw=$msg best_project=${path##*/} best_resume=$resume
       [[ $state == background ]] && best_msg=$msg
       # The label: a window named for the work (an owt title), else omo's name for the
       # session, else the task (the last prompt's first line), else the folder.
@@ -292,7 +310,7 @@ show_most_urgent() {
         *) label=$window ;;
       esac
     fi
-  done < <(tmux list-panes -s -t "$session" -F $'#{pane_id}\x1f#{pane_current_command}\x1f#{@omo_state}\x1f#{@omo_msg}\x1f#{pane_current_path}\x1f#{window_name}\x1f#{@omo_task}\x1f#{@omo_name}')
+  done < <(tmux list-panes -s -t "$session" -F $'#{pane_id}\x1f#{pane_current_command}\x1f#{@omo_state}\x1f#{@omo_msg}\x1f#{pane_current_path}\x1f#{window_name}\x1f#{@omo_task}\x1f#{@omo_name}\x1f#{@omo_resume}')
   ((${#label} > 40)) && label="${label:0:39}…"
   # Herdr's agents list names the pane a click lands on and how many more wait behind it.
   case $best in
@@ -305,6 +323,12 @@ show_most_urgent() {
     # The label is often the task itself, which needs saying only once.
     if [[ $agent == "$rest" || ($agent == *… && $rest == "${agent%…}"*) ]]; then best_msg="$what · $rest"; else best_msg="$what · $agent: $rest"; fi
     ((needing > 1)) && best_msg+=" (+$((needing - 1)) more)"
+  fi
+  # Herdr's list can't count down, so a goal's wait is given in minutes and changes once a minute.
+  if [[ $best == background && -n $best_resume && $best_raw =~ ^goal\ (continues|retries|resumes)(.*)$ ]]; then
+    best_msg="goal ${BASH_REMATCH[1]} in" rest=${BASH_REMATCH[2]} left=$((best_resume - $(date +%s)))
+    if ((left < 60)); then best_msg+=" <1m"; elif ((left < 3600)); then best_msg+=" $((left / 60))m"; else best_msg+=" $((left / 3600))h $((left % 3600 / 60))m"; fi
+    best_msg+=$rest
   fi
   if [[ -n $(icon "$best") ]]; then
     tmux set-option -t "$session" @omo_status "$(icon "$best")"
@@ -497,33 +521,57 @@ case ${1:-} in
     # a detached eval cell, a child session. omo holds its Stop hook meanwhile, so the
     # pane would stay "working". The transcript's last session-lifecycle entry says what
     # it waits on. It is read only when the transcript grew, the pane's state moved, or
-    # the session's scheduled wake-up changed.
+    # its next wake-up changed. A pane with an active goal also has its footer read on
+    # every pass, for the time the goal continues.
     jobs=$(scheduled_wakeups)
-    while IFS=$'\x1f' read -r pane transcript state seen old_resume; do
+    now=$(date +%s)
+    while IFS=$'\x1f' read -r pane transcript state seen old_resume goal old_mins; do
       [[ -r $transcript ]] || continue
-      sid=${transcript##*_} sid=${sid%.jsonl} resume="" label=""
+      sid=${transcript##*_} sid=${sid%.jsonl} resume="" label="" kind="" left="" mins=""
       [[ -n $jobs ]] && IFS=$'\t' read -r _ resume label < <(grep -F "$sid"$'\t' <<<"$jobs")
+      [[ $goal == 1 ]] && read -r kind left < <(goal_wait "$pane")
+      if [[ -n $left ]]; then
+        mins=$((left / 60))
+        # Whole seconds, read a moment apart: within a few of the last reading is the same wake-up.
+        at=$((now + left))
+        [[ -n $old_resume ]] && ((at - old_resume < 4 && old_resume - at < 4)) && at=$old_resume
+        [[ -z $resume ]] || ((at < resume)) && resume=$at
+      fi
       size=$(($(wc -c <"$transcript")))
-      [[ "$size $state $resume" == "$seen" ]] && continue
-      if [[ -n $resume ]]; then
-        tmux set-option -p -t "$pane" @omo_resume "$resume"
-      elif [[ -n $old_resume ]]; then
-        tmux set-option -p -u -t "$pane" @omo_resume
+      if [[ "$size $state $resume $goal" != "$seen" ]]; then
+        if [[ -n $resume ]]; then
+          tmux set-option -p -t "$pane" @omo_resume "$resume"
+        elif [[ -n $old_resume ]]; then
+          tmux set-option -p -u -t "$pane" @omo_resume
+        fi
+        goal=0
+        grep -Eq '"status": *"active"' "${transcript%/*}/extensions/goal/$sid.json" 2>/dev/null && goal=1
+        IFS=$'\x1f' read -r lifecycle work < <(tail -c 300000 "$transcript" | grep '"customType":"session-lifecycle"' | tail -n 1 | jq -r "$background_work" 2>/dev/null)
+        if [[ -n $kind ]]; then
+          case $work in
+            "goal · "*) work="goal $kind · ${work#goal · }" ;;
+            "") work="goal $kind" ;;
+            *) work="goal $kind · $work" ;;
+          esac
+        fi
+        if [[ -z $lifecycle ]]; then
+          : # no entry in the part of the transcript read: leave the pane as it is
+        elif [[ $lifecycle != running && -n $work ]]; then
+          "$0" set "$pane" background "$work" >/dev/null
+        elif [[ $lifecycle != running && -n $resume ]]; then
+          "$0" set "$pane" background "Scheduled: $label" >/dev/null
+        elif [[ $state == background && $lifecycle == running ]]; then
+          "$0" set "$pane" working >/dev/null
+        elif [[ $state == background || ($state == working && $lifecycle == waiting_*) ]]; then
+          "$0" set "$pane" idle >/dev/null
+        fi
+        tmux set-option -p -t "$pane" @omo_goal "$goal" \; set-option -p -t "$pane" @omo_lifecycle_seen "$size $(tmux show-option -pqv -t "$pane" @omo_state) $resume $goal"
       fi
-      IFS=$'\x1f' read -r lifecycle work < <(tail -c 300000 "$transcript" | grep '"customType":"session-lifecycle"' | tail -n 1 | jq -r "$background_work" 2>/dev/null)
-      if [[ -z $lifecycle ]]; then
-        : # no entry in the part of the transcript read: leave the pane as it is
-      elif [[ $lifecycle != running && -n $work ]]; then
-        "$0" set "$pane" background "$work" >/dev/null
-      elif [[ $lifecycle != running && -n $resume ]]; then
-        "$0" set "$pane" background "Scheduled: $label" >/dev/null
-      elif [[ $state == background && $lifecycle == running ]]; then
-        "$0" set "$pane" working >/dev/null
-      elif [[ $state == background || ($state == working && $lifecycle == waiting_*) ]]; then
-        "$0" set "$pane" idle >/dev/null
+      if [[ $mins != "$old_mins" ]]; then
+        if [[ -n $mins ]]; then tmux set-option -p -t "$pane" @omo_goal_mins "$mins"; else tmux set-option -p -u -t "$pane" @omo_goal_mins; fi
+        show_most_urgent "$(tmux display-message -p -t "$pane" '#{session_id}')"
       fi
-      tmux set-option -p -t "$pane" @omo_lifecycle_seen "$size $(tmux show-option -pqv -t "$pane" @omo_state) $resume"
-    done < <(tmux list-panes -a -F $'#{pane_id}\x1f#{@omo_transcript}\x1f#{@omo_state}\x1f#{@omo_lifecycle_seen}\x1f#{@omo_resume}' |
+    done < <(tmux list-panes -a -F $'#{pane_id}\x1f#{@omo_transcript}\x1f#{@omo_state}\x1f#{@omo_lifecycle_seen}\x1f#{@omo_resume}\x1f#{@omo_goal}\x1f#{@omo_goal_mins}' |
       awk -F$'\x1f' '$2 != "" && ($3 == "working" || $3 == "background" || $3 == "idle")')
     # omo is bun running senpi's CLI (or omo's launcher) on the pane's terminal. A
     # pane omo's hooks haven't reached yet is idle; a pane connected to a server
