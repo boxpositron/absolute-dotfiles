@@ -52,7 +52,7 @@ The cloned picker, sidebar chrome and layout don't get Herdr's later changes to 
 A tmux session can have a Herdr space of its own, named after it and running a tmux client attached to it. Its terminal is then an agent in Herdr's Agents list with the session's omo status, and the space shows in the sidebar like any project.
 
 - `omo-status show <pane>` (the panel and search use it) focuses the Herdr tab already on the pane's session. Without one, it opens a tab attached to the session in the space named after it, or makes that space in the pane's folder. It never moves a tmux client you have open to another session.
-- `omo-status spaces`, or the layers button in the panel's header, makes a space for every tmux session running omo that no Herdr tab shows, closes the spaces it made for sessions that have ended, and puts you back where you were. The spaces it made are listed in `~/.local/state/omo-status/spaces`.
+- `omo-status spaces`, or the layers button in the panel's header, makes a space for every tmux session running omo that no Herdr tab shows, closes the spaces it made for sessions that have ended, and puts you back where you were. The spaces it made are listed in `~/.local/state/omo-status/spaces`. It asks Herdr which tmux session each terminal is attached to, finds a space by its saved id before its name (so a renamed space is still found), and opens nothing if it can't read what Herdr already shows.
 - In Herdr outside tmux, `owt` opens each workspace as a space of its own, named after its title. Herdr's sidebar nests it under the repo's space when that is open.
 
 A session attached in Ghostty and in Herdr at once is sized to whichever client you used last (tmux's default `window-size latest`).

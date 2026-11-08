@@ -167,6 +167,34 @@ herdr_sessions() {
   done < <(tmux list-clients -F '#{client_pid} #{session_name}')
 }
 
+# Herdr's own record of what its terminals are attached to, one
+# "<[machine/]session>\t<terminal>" line each. Fails if Herdr or any terminal can't be
+# read, so a caller never mistakes "couldn't tell" for "nothing is open".
+herdr_attached() {
+  local layout=$1 term info pid machine clients="" asked=$'\n' list session
+  [[ -n $layout ]] || return 1
+  for term in $(jq -r '.spaces[].tabs[].terminals[].terminal' <<<"$layout"); do
+    info=$(hc get "$term" --json 2>/dev/null) && [[ -n $info ]] || return 1
+    # The client's pid, because the session it was started on may not be the one it shows now.
+    pid=$(jq -r '.foreground // {} | select(.argv[0:2] == ["tmux", "attach-session"]) | .pid // empty' <<<"$info")
+    [[ -n $pid ]] || continue
+    machine=""
+    [[ $term == */* ]] && machine=${term%%/*}
+    if [[ $asked != *$'\n'"$machine"$'\n'* ]]; then
+      asked+="$machine"$'\n'
+      if [[ -n $machine ]]; then
+        list=$(hc exec --on "$machine" --timeout 5 tmux list-clients -F '#{client_pid} #{session_name}') || return 1
+      else
+        list=$(tmux list-clients -F '#{client_pid} #{session_name}') || return 1
+      fi
+      clients+=$(sed "s|^|$machine/|" <<<"$list")$'\n'
+    fi
+    session=$(grep -m 1 "^$machine/$pid " <<<"$clients" | cut -d' ' -f2-)
+    [[ -n $session ]] || return 1
+    printf '%s\t%s\n' "${machine:+$machine/}$session" "$term"
+  done
+}
+
 # Herdr machines herdr-core is connected to. Only where the Herdr app runs: on a
 # machine itself this finds none, so it never reaches further.
 machines() {
@@ -193,14 +221,29 @@ prefixed() {
   done
 }
 
-# A tab attached to a tmux session, in the Herdr space named after it, else in a
-# new space for it in <folder>, on <machine> when the session lives on one. A
-# space this makes goes in $spaces_file.
+# A tab attached to a tmux session, in its saved Herdr space, else the space named
+# after it, else a new space for it in <folder>, on <machine> when the session lives
+# on one. A terminal already on the session is shown instead of opening a second
+# one. A space this makes goes in $spaces_file.
 open_space() {
-  local session=$1 folder=$2 target=$3 machine=${4:-} argv space made
+  local session=$1 folder=$2 target=$3 machine=${4:-} key=${4:+$4/}$1 argv space="" made layout terminal saved id
+  layout=$(herdr-app ls 2>/dev/null)
+  terminal=$(herdr_attached "$layout" | awk -F'\t' -v key="$key" '$1 == key { print $2; exit }')
+  if [[ -n $terminal ]]; then
+    herdr-app "do" pane.focus --terminal "$terminal" >/dev/null
+    return
+  fi
   argv=$(jq -cn --arg t "$target" '["tmux", "attach-session", "-t", $t]')
-  space=$(herdr-app ls 2>/dev/null | jq -r --arg n "$session" --arg m "$machine" \
-    'first(.spaces[] | select(.name == $n and (.machine // "") == $m) | .id) // empty')
+  # The saved id first: it survives a rename of the space.
+  if [[ -f $spaces_file ]]; then
+    while IFS=$'\t' read -r saved id; do
+      if [[ $saved == "$key" && -z $space ]] && jq -e --arg id "$id" 'any(.spaces[]; .id == $id)' <<<"$layout" >/dev/null; then
+        space=$id
+      fi
+    done <"$spaces_file"
+  fi
+  [[ -n $space ]] || space=$(jq -r --arg n "$session" --arg m "$machine" \
+    'first(.spaces[] | select(.name == $n and (.machine // "") == $m) | .id) // empty' <<<"$layout")
   if [[ -n $space ]]; then
     herdr-app "do" tab.new --space "$space" --name "$session" --argv "$argv" >/dev/null
     return
@@ -232,6 +275,7 @@ show_most_urgent() {
     esac
     if (($(rank "$state") > $(rank "$best"))); then
       best=$state best_msg=${msg:+${path##*/}: $msg}
+      [[ $state == background ]] && best_msg=$msg
       # The label: a window named for the work (an owt title), else omo's name for the
       # session, else the task (the last prompt's first line), else the folder.
       case $window in
@@ -275,7 +319,6 @@ show_most_urgent() {
 # You are looking at a pane when its tab has focus and its window is showing.
 # tmux marks a client in a Herdr terminal focused even while its space is hidden
 # (Herdr sends it no focus-out), so only other clients count; for Herdr, its
-      [[ $state == background ]] && best_msg=$msg
 # focus-in hook (omo-status focus) clears the pane when you go there.
 looking_at() {
   local pane=$1 session=$2 pid flags
@@ -395,6 +438,8 @@ case ${1:-} in
     jobs=$(scheduled_wakeups)
     while IFS=$'\x1f' read -r pane transcript state seen old_resume; do
       [[ -r $transcript ]] || continue
+      sid=${transcript##*_} sid=${sid%.jsonl} resume="" label=""
+      [[ -n $jobs ]] && IFS=$'\t' read -r _ resume label < <(grep -F "$sid"$'\t' <<<"$jobs")
       size=$(($(wc -c <"$transcript")))
       [[ "$size $state $resume" == "$seen" ]] && continue
       if [[ -n $resume ]]; then
@@ -407,6 +452,8 @@ case ${1:-} in
         : # no entry in the part of the transcript read: leave the pane as it is
       elif [[ $lifecycle != running && -n $work ]]; then
         "$0" set "$pane" background "$work" >/dev/null
+      elif [[ $lifecycle != running && -n $resume ]]; then
+        "$0" set "$pane" background "Scheduled: $label" >/dev/null
       elif [[ $state == background && $lifecycle == running ]]; then
         "$0" set "$pane" working >/dev/null
       elif [[ $state == background || ($state == working && $lifecycle == waiting_*) ]]; then
@@ -443,8 +490,6 @@ case ${1:-} in
   locate)
     # Selects the pane and prints "<Herdr terminal on its session>\x1f<session>\x1f<folder>",
     # the terminal empty when no Herdr terminal shows the session.
-      sid=${transcript##*_} sid=${sid%.jsonl} resume="" label=""
-      [[ -n $jobs ]] && IFS=$'\t' read -r _ resume label < <(grep -F "$sid"$'\t' <<<"$jobs")
     pane=${2:?pane id required} terminal=""
     session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 1
     tmux select-window -t "$pane" \; select-pane -t "$pane"
@@ -452,8 +497,6 @@ case ${1:-} in
     # (tmux already counts it focused), so a finished or waiting pane clears here.
     case $(tmux show-option -pqv -t "$pane" @omo_state) in
       input | done | error) "$0" set "$pane" idle >/dev/null ;;
-      elif [[ $lifecycle != running && -n $resume ]]; then
-        "$0" set "$pane" background "Scheduled: $label" >/dev/null
     esac
     while read -r pid client_session; do
       [[ $client_session == "$session" ]] || continue
@@ -497,7 +540,14 @@ case ${1:-} in
     trap 'rmdir "$lock"' EXIT
     here=$(herdr-app status 2>/dev/null | jq -r '.space // empty')
     connected=$(machines)
-    shown=$'\n'"$(herdr_sessions)"$'\n'
+    # What Herdr already shows, from its own terminals and from the tmux clients in
+    # them. If that can't be read, stop: a wrong "nothing is shown" opens every session.
+    layout=$(herdr-app ls 2>/dev/null)
+    if ! attached=$(herdr_attached "$layout"); then
+      echo "omo-status spaces: couldn't read Herdr's terminals, so nothing was opened" >&2
+      exit 0
+    fi
+    shown=$'\n'"$(cut -f1 <<<"$attached")"$'\n'"$(herdr_sessions)"$'\n'
     # --local (omo's start hook, tmux's session-closed hook): a server's session
     # gets a Herdr client, which resizes it under your mosh client, only on request.
     rows=list
@@ -508,6 +558,16 @@ case ${1:-} in
         shown+="$(at "$machine" herdr-sessions 2>/dev/null | sed "s|^|$machine/|")"$'\n'
       done
     fi
+    # A machine's saved spaces still have tabs, yet nothing was found attached there: the same failure.
+    for machine in "" $connected; do
+      attached_here='^[^/]+$'
+      [[ -n $machine ]] && attached_here="^$machine/"
+      if ! grep -Eq "$attached_here" <<<"$shown" && [[ -f $spaces_file ]] &&
+        cut -f2 "$spaces_file" | grep -Fxq -f <(jq -r --arg m "$machine" '.spaces[] | select((.machine // "") == $m and (.tabs | length) > 0) | .id' <<<"$layout"); then
+        echo "omo-status spaces: found no attached terminal in spaces that have tabs, so nothing was opened" >&2
+        exit 0
+      fi
+    done
     opened=0 closed=0
     while IFS= read -r line; do
       pane=${line%%"|^|"*} rest=${line#*"|^|"}
@@ -520,7 +580,7 @@ case ${1:-} in
       open_space "$session" "$folder" "$pane" "$machine" && opened=$((opened + 1))
     done < <("$0" "$rows")
     if [[ -f $spaces_file ]]; then
-      kept=""
+      kept="" open=$'\n'$(herdr-app ls 2>/dev/null | jq -r '.spaces[].id')$'\n'
       while IFS=$'\t' read -r session space; do
         machine="" name=$session alive=1
         [[ $session == */* ]] && machine=${session%%/*} name=${session#*/}
@@ -529,10 +589,15 @@ case ${1:-} in
         elif [[ $'\n'$connected$'\n' == *$'\n'"$machine"$'\n'* ]]; then
           hc exec --on "$machine" --timeout 5 tmux has-session -t "=$name" >/dev/null 2>&1 || alive=""
         fi # a machine that is away keeps its spaces: its sessions may well live on
-        if [[ -n $alive ]]; then
-          kept+="$session"$'\t'"$space"$'\n'
-        else
+        if [[ -z $alive ]]; then
           herdr-app "do" space.close --id "$space" --confirmed true >/dev/null 2>&1 && closed=$((closed + 1))
+          continue
+        fi
+        # One line per session, for a space that is still open. An away machine's lines stay.
+        [[ $'\n'$kept == *$'\n'"$session"$'\t'* ]] && continue
+        if [[ -z ${open//$'\n'/} || $open == *$'\n'"$space"$'\n'* ||
+          (-n $machine && $'\n'$connected$'\n' != *$'\n'"$machine"$'\n'*) ]]; then
+          kept+="$session"$'\t'"$space"$'\n'
         fi
       done <"$spaces_file"
       printf '%s' "$kept" >"$spaces_file"
