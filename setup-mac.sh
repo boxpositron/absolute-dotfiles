@@ -6,13 +6,13 @@
 #   ./setup-mac.sh links shell     run only the named steps
 #   ./setup-mac.sh --dry-run       show what would change without changing it
 #
-# Steps: xcode homebrew brew links shell runtimes ai apps
+# Steps: xcode homebrew brew links shell runtimes ai apps macos
 # Packages live in Brewfile (CLI tools, fonts, terminals) and Brewfile.apps
 # (GUI and App Store apps). Written for the bash 3.2 that ships with macOS.
 
 set -uo pipefail
 
-STEPS="xcode homebrew brew links shell runtimes ai apps"
+STEPS="xcode homebrew brew links shell runtimes ai apps macos"
 DOTFILES=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
 NVM_DIR=$HOME/.config/nvm
 NODE_VERSION=22
@@ -105,6 +105,7 @@ describe() {
         runtimes) echo "Node, Rust, Python and Flutter" ;;
         ai) echo "AI coding tools and their configs" ;;
         apps) echo "GUI and App Store apps (Brewfile.apps)" ;;
+        macos) echo "macOS settings (screenshots)" ;;
     esac
 }
 
@@ -404,6 +405,24 @@ step_apps() {
         info "skipping casks for apps installed outside Homebrew: $skip"
     fi
     HOMEBREW_BUNDLE_CASK_SKIP=$skip bundle "$DOTFILES/Brewfile.apps"
+}
+
+# Saves screenshots straight to ~/Desktop/Screenshots, with no floating
+# thumbnail. Dragging the thumbnail into a terminal hands over a path in the
+# screenshot tool's protected temporary folder, which agents cannot read and
+# which is gone once the thumbnail closes.
+step_macos() {
+    local shots=$HOME/Desktop/Screenshots
+    if [[ $(defaults read com.apple.screencapture location 2>/dev/null) == "$shots" &&
+        $(defaults read com.apple.screencapture show-thumbnail 2>/dev/null) == 0 ]]; then
+        info "screenshot settings already in place"
+        return 0
+    fi
+    run mkdir -p "$shots"
+    run defaults write com.apple.screencapture location -string "$shots"
+    run defaults write com.apple.screencapture show-thumbnail -bool false
+    # The screenshot tool reads its settings when SystemUIServer starts.
+    run killall SystemUIServer
 }
 
 usage() {

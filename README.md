@@ -68,6 +68,7 @@ The script is safe to rerun: each step checks what is already in place and only 
 | `runtimes` | Node with nvm and the global npm packages, Rust, Python with pyenv, poetry, and Flutter with fvm |
 | `ai` | Installs omo, Claude Code and Codex, then runs `link-ai-configs.sh` |
 | `apps` | Installs the GUI and App Store apps in `Brewfile.apps` |
+| `macos` | Saves screenshots straight to `~/Desktop/Screenshots` without the floating thumbnail, so a screenshot dragged into a terminal is a path agents can read |
 
 `brew` and `apps` never upgrade packages that are already installed. `apps` skips apps already in `/Applications` that Homebrew did not install, and its App Store entries need you signed in to the App Store first. To list what is installed but missing from `Brewfile`, run `brew bundle dump --file=- | diff Brewfile -`.
 
