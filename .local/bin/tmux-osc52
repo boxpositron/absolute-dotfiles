@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# tmux-osc52: tmux's copy-command on servers reached over mosh. tmux 3.6 sends
+# copies as OSC 52 with a blank clipboard name (ESC]52;;...), which mosh 1.4
+# drops; this writes the copied text (stdin) to every client terminal of the
+# tmux server as ESC]52;c;...BEL, the form mosh, Herdr and Ghostty all accept.
+#
+# Usage: printf %s text | tmux-osc52   (set by .tmux-server.conf as copy-command)
+
+data=$(base64 | tr -d '\n')
+[[ -n $data ]] || exit 0
+while read -r tty; do
+  [[ -w $tty ]] && printf '\033]52;c;%s\a' "$data" >"$tty"
+done < <(tmux list-clients -F '#{client_tty}' 2>/dev/null)
+exit 0
