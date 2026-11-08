@@ -4,7 +4,8 @@
 //   question, a finished background task, a monitor, a goal continuation);
 // - omo's own name for the session labels the pane, sent when it is set or changes;
 // - shutdown clears the pane, since no hook fires when omo exits, and the last state and name
-//   would otherwise stay on the tab.
+//   would otherwise stay on the tab. A reload keeps them: it rebuilds this runtime in the same
+//   session, and no hook would set the state again.
 // Best effort, like omo-notify: a failed update must never disturb the session, so errors are ignored.
 import type { ExtensionAPI } from "@code-yeongyu/senpi";
 import { execFile } from "node:child_process";
@@ -42,6 +43,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_settled", () => sendName(pi.getSessionName()));
 	pi.on("session_shutdown", async (event) => {
 		sentName = undefined;
+		if (event.reason === "reload") return;
 		await omoStatus(["set", pane, "clear"], event.signal);
 	});
 }
