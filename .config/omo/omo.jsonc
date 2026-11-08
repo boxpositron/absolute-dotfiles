@@ -70,8 +70,10 @@
         ]
       },
       "deep-high": {
-        "model": "chatgpt-subscription/gpt-6-astra",
-        "reasoning": "high"
+        "models": [
+          { "model": "chatgpt-subscription/gpt-6-astra", "reasoning": "high" },
+          { "model": "anthropic-subscription/claude-opus-5-5", "reasoning": "high" }
+        ]
       },
       "quick": {
         "models": [
@@ -86,12 +88,16 @@
         ]
       },
       "ultrabrain": {
-        "model": "chatgpt-subscription/gpt-6-astra",
-        "reasoning": "max"
+        "models": [
+          { "model": "chatgpt-subscription/gpt-6-astra", "reasoning": "max" },
+          { "model": "anthropic-subscription/claude-opus-5-5", "reasoning": "max" }
+        ]
       },
       "unspecified-high": {
-        "model": "chatgpt-subscription/gpt-6-astra",
-        "reasoning": "high"
+        "models": [
+          { "model": "chatgpt-subscription/gpt-6-astra", "reasoning": "high" },
+          { "model": "anthropic-subscription/claude-opus-5-5", "reasoning": "high" }
+        ]
       },
       "unspecified-low": {
         "models": [
@@ -106,8 +112,10 @@
         ]
       },
       "visual-engineering": {
-        "model": "chatgpt-subscription/gpt-6-astra",
-        "reasoning": "high",
+        "models": [
+          { "model": "chatgpt-subscription/gpt-6-astra", "reasoning": "high" },
+          { "model": "anthropic-subscription/claude-opus-5-5", "reasoning": "high" }
+        ],
         "prompt_append": "Before substantive UI work, load frontend-workflow. Follow the product's design context, keep one writer per file set, inspect actual desktop and mobile screenshots, exercise the primary interaction, and report verification evidence. Stop when acceptance criteria pass."
       },
       // impeccable critique. A = design-director review (taste, heuristics): Opus 5.5 has the top Design Arena
