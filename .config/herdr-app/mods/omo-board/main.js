@@ -1,6 +1,7 @@
 // The board: every omo session on every machine the omo board knows, from
 // agent-state (the board's session tracker, 127.0.0.1:4747 through the board
-// tunnel), in four columns: Needs you, Working, Done (finished in the last day)
+// tunnel), in five columns: Needs you, Working, Background (the turn is over but
+// a build, watcher or child session still runs), Done (finished in the last day)
 // and Idle. A card has the session's title, where it runs, its question or last
 // report, its to-do progress and how recently it was active: hot under an hour,
 // warm under a day, cold after that. A click shows the session in Herdr with
@@ -19,6 +20,7 @@ const DAY = 24 * HOUR;
 const COLUMNS = [
   ["needs", "Needs you"],
   ["working", "Working"],
+  ["background", "Background"],
   ["done", "Done"],
   ["idle", "Idle"],
 ];
@@ -26,6 +28,7 @@ const COLUMNS = [
 function column(s, now) {
   if (s.lifecycle === "blocked") return "needs";
   if (s.lifecycle === "active") return "working";
+  if (s.lifecycle === "background") return "background";
   if (s.lifecycle === "done" && now - (s.lifecycleSince ?? s.lastActivity ?? 0) < DAY) return "done";
   return "idle";
 }
@@ -151,7 +154,7 @@ export default class Board extends View {
     for (const s of this.sessions) groups[column(s, now)].push(s);
     const by = (field, dir) => (a, b) => dir * ((a[field] ?? 0) - (b[field] ?? 0));
     groups.needs.sort(by("lifecycleSince", 1));
-    for (const key of ["working", "done", "idle"]) groups[key].sort(by("lastActivity", -1));
+    for (const key of ["working", "background", "done", "idle"]) groups[key].sort(by("lastActivity", -1));
 
     const col = ([key, title]) => {
       const list = groups[key];

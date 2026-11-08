@@ -6,7 +6,8 @@
 // else in a new space for it. The header's button gives every session running
 // omo a space of its own (`omo-status spaces`).
 //
-// An inbox: panes that need you, failed, finished or are working; idle ones fold
+// An inbox: panes that need you, failed, finished, working or with work still
+// running in the background (a slower, purple spinner); idle ones fold
 // into one row that opens them.
 //
 // Motion, as herdr-t3-inbox does it: within a session the panes that need you
@@ -19,7 +20,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { exec, home, layout, nextCommand, run, theme } from "herdr";
 
 const SEP = "|^|";
-const RANK = { error: 5, input: 4, done: 3, working: 2, idle: 1 };
+const RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
 // Window names tmux picks by itself say nothing about the work.
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
 /** @type {import("gpui-shell").TransitionPolicy} */
@@ -177,6 +178,7 @@ export default class OmoTmux extends View {
 
   status(t, state) {
     if (state === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
+    if (state === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.ansi5).spin(2400);
     if (state === "input" || state === "error") {
       const color = state === "error" ? t.ansi1 : t.blocked;
       return div().flex_none().px(6).h(18).rounded(5).bg(color + "26").text_size(10.5).font_semibold().text_color(color)

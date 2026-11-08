@@ -38,8 +38,8 @@ function spaceColors() {
 // when Herdr runs it, so fields split on text.
 const SEP = "|^|";
 // omo-status's states in Herdr's words.
-const OMO = { working: "working", input: "blocked", error: "blocked", done: "done", idle: "idle" };
-const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
+const OMO = { working: "working", background: "background", input: "blocked", error: "blocked", done: "done", idle: "idle" };
+const RANK = { blocked: 5, done: 4, working: 3, background: 2, idle: 1 };
 const PICK = new Set(["ctx", "new", "space", "tsession", "tpane"]);
 
 // tmux sessions in tmux's order, each with its panes and the pane it shows.
@@ -173,6 +173,7 @@ export default class Picker extends View {
 
   glyph(t, st) {
     if (st === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
+    if (st === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.ansi5).spin(2400);
     return div().w(12).flex_none().text_color(t[st] ?? t.dim)
       .when(st === "blocked", (el) => el.loop("opacity", { from: 0.45, to: 1, period: 1600 }))
       .child(st === "idle" ? "○" : st ? "●" : "·");

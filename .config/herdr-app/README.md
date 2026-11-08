@@ -25,6 +25,7 @@ Herdr knows an agent's state only when the program reports it with OSC 7501 (the
 | omo | Herdr |
 | --- | --- |
 | working on a prompt | working |
+| turn over, a build, watcher or child session still running | working, with that work as the message (the protocol has no background state) |
 | asked you something | blocked (question) |
 | finished | done |
 | stopped with an error | error |
@@ -38,7 +39,7 @@ Herdr sees a tmux client as one terminal, so its agents list has one row per tmu
 
 `omo-status list` finds omo by its process (bun running senpi's CLI) on each pane's terminal, so a pane shows as soon as omo runs in it, idle until omo's hooks report for it, and goes when omo exits. A pane running mosh or ssh shows the remote session's state, which its terminal title brought.
 
-Inside each session the panes that need you come first, then finished, working and idle ones. Each row shows how long the pane has been in its state (`@omo_since`, which `omo-status` sets on every change). The panel moves the way herdr-t3-inbox does: a row whose place changes slides there, a new one fades in from above, one that goes fades out where it was, all over 150ms ease-out. "Needs you" and "Failed" pulse, and a pane that has just finished flashes green once and fades over 1.5s.
+Inside each session the panes that need you come first, then finished, working, background and idle ones. A pane whose turn is over but whose work still runs shows a slower, purple spinner and what it is running (`Watching: staging deploy`, `Running: gh pr checks 13 (+1 more)`). Each row shows how long the pane has been in its state (`@omo_since`, which `omo-status` sets on every change). The panel moves the way herdr-t3-inbox does: a row whose place changes slides there, a new one fades in from above, one that goes fades out where it was, all over 150ms ease-out. "Needs you" and "Failed" pulse, and a pane that has just finished flashes green once and fades over 1.5s.
 
 ## Search
 
@@ -58,16 +59,16 @@ A session attached in Ghostty and in Herdr at once is sized to whichever client 
 
 ## Attention
 
-- The panel is an inbox: panes that need you, failed, finished or are working, with idle ones folded into an "N idle" row that opens them.
+- The panel is an inbox: panes that need you, failed, finished, working or running something in the background, with idle ones folded into an "N idle" row that opens them.
 - Cmd+J in the `tmux` layout (`omo-tmux.next` in `keys.json`, `omo-status next` from a shell) shows the pane that most needs you: a question or a failure, then a finished turn, the longest waiting first. Looking at it clears it, so pressing again moves on.
 - Herdr's agents list reads "<space> · <work>": `omo-status` names a session's Herdr tab after its most urgent pane's window (an `owt` title) or task, and sends it as the report's OSC 7501 `title`. Only tabs still called by their number, or by the label it set, change.
-- omo sends no Stop hook while a background task (a terminal monitor, a child session) is live, so a finished turn could stay "working". `omo-notify` records each pane's transcript (`@omo_transcript`), and `omo-status list` turns a working pane idle when the transcript's last `session-lifecycle` state is `waiting_*`.
+- omo sends no Stop hook while a background task (a terminal monitor, a child session) is live, so a finished turn could stay "working". `omo-notify` records each pane's transcript (`@omo_transcript`), and `omo-status list` reads the transcript's last `session-lifecycle` entry. A pane with terminal monitors, background commands, detached eval cells or child sessions still live goes to `background` (a purple dot on its tab); one waiting on nothing real goes to idle. omo's own plumbing in that entry (queued deliveries, goal timers, open questions) doesn't count.
 - Spaces sync by themselves: omo's start hook runs `omo-status spaces --local` when Herdr is running, and tmux's `session-closed` hook closes the space of a session that ended. `--local` opens spaces only for this Mac's sessions; the layers button opens them for every machine's. A lock keeps two syncs from overlapping.
 - tmux marks a client in a Herdr terminal focused even while its space is hidden, since Herdr sends it no focus-out, so `omo-status` doesn't count Herdr clients as looking at a pane. Going to a pane through the panel, search or Cmd+J clears it instead.
 
 ## Board
 
-Cmd+Shift+B in the `tmux` layout, or the screen button in the "omo in tmux" panel's header, opens the board (`mods/omo-board`): every omo session on every machine the omo board knows, read every five seconds from agent-state (`127.0.0.1:4747`, through the omo board's tunnel). Sessions sit in four columns: Needs you (an open question or a blocked goal, oldest first), Working, Done (finished in the last day) and Idle. A card shows the session's title, its machine, project and tmux target, the question waiting or the "For you" part of its last report, its to-do progress, and a dot for how recently it was active: hot under an hour, warm under a day, dim after that. A click runs `omo-status open`, which shows the session in its Herdr space, or a new one, server sessions included. Sessions not in tmux can't be shown from here.
+Cmd+Shift+B in the `tmux` layout, or the screen button in the "omo in tmux" panel's header, opens the board (`mods/omo-board`): every omo session on every machine the omo board knows, read every five seconds from agent-state (`127.0.0.1:4747`, through the omo board's tunnel). Sessions sit in five columns: Needs you (an open question or a blocked goal, oldest first), Working, Background (the turn is over but a build, watcher or child session still runs), Done (finished in the last day) and Idle. A card shows the session's title, its machine, project and tmux target, the question waiting or the "For you" part of its last report, its to-do progress, and a dot for how recently it was active: hot under an hour, warm under a day, dim after that. A click runs `omo-status open`, which shows the session in its Herdr space, or a new one, server sessions included. Sessions not in tmux can't be shown from here.
 
 Telegram's "Open on Mac" button (omo-assistant) runs the same `omo-status open` on the Mac through the board, and brings Herdr forward. `omo-presence` tells omo-assistant whether you are at the Mac (Herdr in front, screen unlocked, keyboard or mouse used in the last five minutes); while you are, it keeps a session's questions and errors off Telegram, since Herdr alerts you.
 
