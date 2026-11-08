@@ -315,8 +315,11 @@ case ${1:-} in
       awk -v c="$client" '$1 == c { print $2, $3, $4 }')
     [[ -n $session ]] || exit 0
     show_most_urgent "$session"
-    # A client that just arrived holds the report of where it was before, or none.
-    [[ -n $(herdr_terminal "$pid") ]] && send_report "$tty" "$(tmux show-option -qv -t "$session" @omo_report)"
+    # A client that just arrived holds the report of where it was before, or none. An if, not &&: a client
+    # outside Herdr (Ghostty) must still exit 0, or tmux prints "... returned 1" in the pane.
+    if [[ -n $(herdr_terminal "$pid") ]]; then
+      send_report "$tty" "$(tmux show-option -qv -t "$session" @omo_report)"
+    fi
     ;;
   list | panes)
     "$0" "$1-here"
