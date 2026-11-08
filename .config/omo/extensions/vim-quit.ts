@@ -4,7 +4,9 @@
 //
 // :sq (or /sq) runs the /sq checklist (.config/omo/prompts/sq.md) as a turn: trackers, logged time, git and
 // memory brought up to date, then a handoff that ends in `SQ: ready` or `SQ: hold <reason>`. On ready the
-// session is filed in the session library (`omo-sessions file`) and quits; on hold it stays open.
+// session is filed in the session library (`omo-sessions file`) and quits; on hold it stays open. In an owt
+// workspace that is committed and merged, ready runs /owt-done instead, which removes the workspace and ends the
+// session. A workspace that can't be finished yet stays, and the session closes as usual.
 //
 // `omo-sessions` asks a session to quit (park, nightly idle close), to quit so it can be restarted
 // (reboot), or to take a task handed over from another session, by writing requests/<session id>.json
@@ -20,12 +22,24 @@ const QUIT_COMMANDS = new Set([":q", ":q!", ":qa", ":wq"]);
 const STATE = process.env.OMO_SESSIONS_DIR ?? join(homedir(), ".local/state/omo-sessions");
 const REQUESTS = join(STATE, "requests");
 const OMO_SESSIONS = join(homedir(), ".local/bin/omo-sessions");
+const OWT = join(homedir(), ".local/bin/owt");
 
 type Request = { action: "quit" | "reboot" | "message"; text?: string; handoff?: string; from?: string };
 
 function omoSessions(args: string[]): Promise<void> {
 	return new Promise((resolve) => {
 		execFile(OMO_SESSIONS, args, { timeout: 20_000 }, () => resolve());
+	});
+}
+
+// `owt done --check` from the session's folder: "finishable" for a committed, merged workspace, "kept" for a
+// workspace that isn't, and nothing outside one.
+function owtWorkspace(cwd: string): Promise<"finishable" | "kept" | undefined> {
+	return new Promise((resolve) => {
+		execFile(OWT, ["done", "--check"], { cwd, timeout: 60_000 }, (error, stdout) => {
+			if (!error) resolve("finishable");
+			else resolve(stdout.includes("workspace=") ? "kept" : undefined);
+		});
 	});
 }
 
@@ -134,6 +148,14 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`Safe quit is holding: ${result.reason || "see the last message"}`, "warning");
 			return;
 		}
+		const workspace = await owtWorkspace(ctx.cwd);
+		if (workspace === "finishable") {
+			// It removes the worktree and closes this window, so the session is not filed for reopening.
+			ctx.ui.notify("Safe quit is ready: finishing this workspace", "info");
+			pi.sendUserMessage("/owt-done", { expandPromptTemplates: true });
+			return;
+		}
+		if (workspace === "kept") ctx.ui.notify("This workspace can't be finished yet, so it stays", "info");
 		const sid = ctx.sessionManager.getSessionId();
 		const file = ctx.sessionManager.getSessionFile();
 		if (sid) await omoSessions(["file", sid, "--reason", "sq", "--cwd", ctx.cwd, ...(file ? ["--session-file", file] : [])]);

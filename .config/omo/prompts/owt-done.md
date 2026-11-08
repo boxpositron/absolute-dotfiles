@@ -5,6 +5,8 @@ requires-arguments: false
 ---
 Close out the owt workspace this session is running in. This is /sq (safe quit, `~/.omo/agent/prompts/sq.md`) for a workspace whose work is done: everything the session did is synced, then the workspace is removed and the session ends. Do the steps in order.
 
+If your previous message in this session ended with `SQ: ready`, this runs straight after a safe quit and I may have stepped away. Skip step 4, which that safe quit already did, and do not ask me anything: in step 2, if no existing issue matches, continue without Linear and say so in the handoff, and if the check in step 1 exits 1, change nothing and say what stopped it.
+
 1. Run `owt done --check`. It prints `key=value` lines: workspace, path, branch, base, uncommitted, merged, pr_state, pr_url, remote_branch. It exits 1 when finishing would lose work. If it says this is not an owt workspace, stop and tell me.
 
 2. Work out which Linear issues this workspace covered: the keys in the branch name (`feature/pra-107-108-...` means PRA-107 and PRA-108) plus any issues named earlier in this session. Read each with the Linear tools. If you find none, search Linear for an open issue that matches the work this session did (its PRs, branch and subject) and use it if one does. If nothing matches, the work still needs a record: draft a new issue with a title, a short description of what was done and its PR links, and the team the repository's other issues use, show it to me, and create it only after I confirm. Treat a created issue like the others in step 5. If I decline, continue without Linear.
