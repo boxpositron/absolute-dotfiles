@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+# omo-sessions: the library of omo sessions closed on purpose, reopening them or starting
+# fresh from their handoff, and handing a task from one session to another.
+#
+# agent-state's collector reads library.json and handoffs.jsonl from this machine's state
+# folder. vim-quit.ts (the omo extension) calls `file`, `unfile` and `taken`, and acts on
+# the requests written here. A handoff to another machine is recorded here, reaches that
+# machine through agent-state and is delivered by its collector with `deliver`.
+set -u
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$HOME/.bun/bin:$PATH"
+
+# Run outside tmux with no UTF-8 locale, tmux prints control characters as "_".
+tmux() { command tmux -u "$@"; }
+
+state=${OMO_SESSIONS_DIR:-$HOME/.local/state/omo-sessions}
+library=$state/library.json
+handoffs=$state/handoffs.jsonl
+requests=$state/requests
+transcripts=${OMO_AGENT_DIR:-$HOME/.omo/agent}/sessions
+
+die() {
+  printf 'omo-sessions: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+omo-sessions: closed sessions, and work passed between sessions
+
+  list                         The library, newest first
+  park <session> | --all       File a session and close it (--all: every idle or finished pane)
+  resume <session> | --all     Reopen a parked session; it leaves the library when it starts
+  fresh <session>              Start a new session from a parked or live session's handoff
+  open <machine> <session> [--fresh]
+                               Reopen (or start fresh) on a machine and show it in Herdr
+  handoff [--on <machine>] [--cwd <dir>] <session|new> <task...>
+                               Give a task to a running session, or to a new one
+
+A session is an id, an id prefix or a tmux target. Machines are agent-state's names (mac, flowstate).
+Called by other tools: file, unfile, taken, deliver.
+EOF
+}
+
+# The machine's name in agent-state.
+self_machine() {
+  if [[ -n ${OMO_MACHINE:-} ]]; then
+    printf '%s\n' "$OMO_MACHINE"
+  elif [[ $(uname) == Darwin ]]; then
+    echo mac
+  else
+    echo flowstate
+  fi
+}
+
+now_ms() { echo "$(($(date +%s) * 1000))"; }
+
+lock() {
+  local tries=0
+  mkdir -p "$state"
+  until mkdir "$state/.lock" 2>/dev/null; do
+    # Nothing holds the lock this long: a killed run left it.
+    [[ -n $(find "$state/.lock" -maxdepth 0 -mmin +1 2>/dev/null) ]] && rmdir "$state/.lock" 2>/dev/null
+    tries=$((tries + 1))
+    ((tries > 100)) && die "the library is locked ($state/.lock)"
+    sleep 0.1
+  done
+  trap 'rmdir "$state/.lock" 2>/dev/null' EXIT
+}
+
+unlock() {
+  rmdir "$state/.lock" 2>/dev/null
+  trap - EXIT
+}
+
+# Applies a jq program to the library. A library jq can't read is left as it is.
+update_library() {
+  local tmp="$library.$$"
+  if [[ -f $library ]]; then
+    jq "$@" "$library" >"$tmp" || {
+      rm -f "$tmp"
+      die "couldn't update $library"
+    }
+  else
+    jq -n '{version: 1, sessions: []}' | jq "$@" >"$tmp"
+  fi
+  mv "$tmp" "$library"
+}
+
+append_handoff() {
+  lock
+  printf '%s\n' "$1" >>"$handoffs"
+  unlock
+}
+
+# The transcript of a session id, id prefix or tmux target.
+session_file() {
+  local spec=$1 matches
+  if [[ $spec == *:* || $spec == %* ]]; then
+    spec=$(tmux display-message -p -t "$spec" '#{@omo_transcript}' 2>/dev/null)
+    [[ -r $spec ]] || return 1
+    printf '%s\n' "$spec"
+    return
+  fi
+  matches=("$transcripts"/*/*_"$spec"*.jsonl)
+  [[ ${#matches[@]} -eq 1 && -r ${matches[0]} ]] || return 1
+  printf '%s\n' "${matches[0]}"
+}
+
+sid_of() {
+  local name=${1##*_}
+  printf '%s\n' "${name%.jsonl}"
+}
+
+session_name() { grep '"type":"session_info"' "$1" | tail -n 1 | jq -r '.name // empty' 2>/dev/null; }
+session_cwd() { head -n 1 "$1" | jq -r '.cwd // empty' 2>/dev/null; }
+
+# The session's latest handoff block, from its "Ask:" line on.
+handoff_text() {
+  grep '"role":"assistant"' "$1" | grep -E '(\\n|")Ask:' | tail -n 1 |
+    jq -r '.message.content | if type == "array" then map(select(.type == "text") | .text) | join("\n") else . end' 2>/dev/null |
+    sed -n '/^Ask:/,$p'
+}
+
+pane_of() {
+  tmux list-panes -a -F '#{pane_id} #{@omo_transcript}' 2>/dev/null |
+    awk -v tail="_$1.jsonl" 'index($0, tail) { print $1; exit }'
+}
+
+is_live() {
+  local holder pid
+  for holder in "$transcripts"/*/session-holders/"$1"/*.json; do
+    [[ -r $holder ]] || continue
+    pid=$(jq -r '.pid // empty' "$holder" 2>/dev/null)
+    [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+library_entry() {
+  [[ -f $library ]] && jq -c --arg sid "$1" '.sessions[] | select(.sid == $sid)' "$library"
+}
+
+write_request() {
+  mkdir -p "$requests"
+  printf '%s\n' "$2" >"$requests/.$1.tmp" && mv "$requests/.$1.tmp" "$requests/$1.json"
+}
+
+# A new tmux window running omo, left in the background. Prints its pane.
+launch() {
+  local cwd=$1 session=$2 window=$3 id=$4 command=omo arg shell=${SHELL:-/bin/sh}
+  shift 4
+  for arg in "$@"; do command+=" $(printf '%q' "$arg")"; done
+  [[ -n $session ]] || session=$(basename "$cwd" | tr '.:' '--')
+  window=${window:0:30}
+  if tmux has-session -t "=$session" 2>/dev/null; then
+    tmux new-window -d -P -F '#{pane_id}' -t "=$session:" -c "$cwd" -n "$window" ${id:+-e "OMO_HANDOFF_ID=$id"} -- "$shell" -lic "$command; exec $shell -l"
+  else
+    tmux new-session -d -P -F '#{pane_id}' -s "$session" -c "$cwd" -n "$window" ${id:+-e "OMO_HANDOFF_ID=$id"} -- "$shell" -lic "$command; exec $shell -l"
+  fi
+}
+
+cmd_file() {
+  local sid=${1:?session id required} reason=sq cwd="" file="" pane place="" tmux_session="" name entry
+  shift
+  while (($#)); do
+    case $1 in
+      --reason) reason=$2 ;;
+      --cwd) cwd=$2 ;;
+      --session-file) file=$2 ;;
+      *) die "unknown option $1" ;;
+    esac
+    shift 2
+  done
+  [[ -n $file ]] || file=$(session_file "$sid") || die "no transcript for $sid"
+  [[ -n $cwd ]] || cwd=$(session_cwd "$file")
+  name=$(session_name "$file")
+  pane=$(pane_of "$sid")
+  pane=${pane:-${TMUX_PANE:-}}
+  if [[ -n $pane ]]; then
+    place=$(tmux display-message -p -t "$pane" '#{session_name}:#{window_index}' 2>/dev/null)
+    tmux_session=${place%:*}
+  fi
+  entry=$(jq -cn --arg sid "$sid" --argjson at "$(now_ms)" --arg reason "$reason" --arg cwd "$cwd" --arg name "$name" \
+    --arg tmux "$place" --arg session "$tmux_session" --arg file "$file" --arg resume "cd $(printf '%q' "$cwd") && omo --session $sid" \
+    '{sid: $sid, parkedAt: $at, reason: $reason, cwd: $cwd, name: $name, tmux: $tmux, tmuxSession: $session, sessionFile: $file, resume: $resume}
+     | with_entries(select(.value != ""))')
+  lock
+  update_library --argjson entry "$entry" '.sessions = ([.sessions[] | select(.sid != $entry.sid)] + [$entry])'
+  unlock
+}
+
+cmd_unfile() {
+  local sid=${1:?session id required}
+  # Every session starting calls this, and nearly all of them aren't in the library.
+  [[ -f $library ]] && grep -Fq "\"$sid\"" "$library" || return 0
+  lock
+  update_library --arg sid "$sid" '.sessions |= map(select(.sid != $sid))'
+  unlock
+}
+
+cmd_taken() {
+  local id=${1:?handoff id required} sid=${2:?session id required} latest
+  latest=$(grep -F "\"id\":\"$id\"" "$handoffs" 2>/dev/null | tail -n 1)
+  [[ -n $latest ]] || die "no handoff $id on this machine"
+  append_handoff "$(jq -c --arg machine "$(self_machine)" --arg sid "$sid" --argjson now "$(now_ms)" \
+    '.status = "taken" | .takenBy = {machine: $machine, sid: $sid} | .updatedAt = $now' <<<"$latest")"
+}
+
+cmd_list() {
+  [[ -f $library ]] || return 0
+  jq -r '.sessions | sort_by(-.parkedAt)[] | [.sid[0:8], .reason, (.parkedAt / 1000 | strftime("%F %H:%M")), (.tmux // "-"), (.name // .cwd // "")] | @tsv' "$library"
+}
+
+cmd_park() {
+  # The panes parked are not this one, so this pane says nothing about where they ran.
+  unset TMUX_PANE
+  if [[ ${1:-} == --all ]]; then
+    local line
+    tmux list-panes -a -F '#{@omo_state} #{@omo_transcript}' | awk '($1 == "idle" || $1 == "done") && NF == 2 { print $2 }' |
+      while read -r line; do cmd_park "$(sid_of "$line")"; done
+    return
+  fi
+  local file sid
+  file=$(session_file "${1:?session required}") || die "no session matches $1"
+  sid=$(sid_of "$file")
+  cmd_file "$sid" --reason park --session-file "$file"
+  write_request "$sid" '{"action":"quit"}'
+  echo "parked $sid"
+}
+
+cmd_resume() {
+  if [[ ${1:-} == --all ]]; then
+    [[ -f $library ]] || return 0
+    local each
+    jq -r '.sessions[].sid' "$library" | while read -r each; do cmd_resume "$each"; done
+    return
+  fi
+  local file sid entry cwd
+  file=$(session_file "${1:?session required}") || die "no session matches $1"
+  sid=$(sid_of "$file")
+  if is_live "$sid"; then
+    pane_of "$sid"
+    return
+  fi
+  # A request it never picked up would act on the reopened session.
+  rm -f "$requests/$sid.json"
+  entry=$(library_entry "$sid")
+  cwd=$(jq -r '.cwd // empty' <<<"$entry")
+  [[ -n $cwd ]] || cwd=$(session_cwd "$file")
+  [[ -d $cwd ]] || cwd=$HOME
+  launch "$cwd" "$(jq -r '.tmuxSession // empty' <<<"$entry")" "$(session_name "$file")" "" --session "$sid"
+}
+
+new_id() { printf 'h%x%04x\n' "$(date +%s)" "$RANDOM"; }
+
+cmd_fresh() {
+  local file sid name cwd text id machine prompt entry
+  file=$(session_file "${1:?session required}") || die "no session matches $1"
+  sid=$(sid_of "$file")
+  name=$(session_name "$file")
+  cwd=$(session_cwd "$file")
+  [[ -d $cwd ]] || cwd=$HOME
+  text=$(handoff_text "$file")
+  entry=$(library_entry "$sid")
+  id=$(new_id)
+  machine=$(self_machine)
+  prompt="Continue the work of an earlier omo session (${name:-unnamed}, $sid). Its full transcript is at $file: read it when you need more detail than this. That session stays as it is."
+  if [[ -n $text ]]; then prompt+=$'\n\nIts latest handoff:\n\n'"$text"; else prompt+=$'\n\nIt left no handoff, so start from the end of the transcript.'; fi
+  append_handoff "$(jq -cn --arg id "$id" --argjson now "$(now_ms)" --arg machine "$machine" --arg sid "$sid" --arg name "$name" --arg cwd "$cwd" \
+    '{id: $id, at: $now, updatedAt: $now, from: {machine: $machine, sid: $sid, name: $name}, to: {machine: $machine, cwd: $cwd, mode: "fresh"}, task: ("Start fresh from " + (if $name == "" then $sid else $name end)), status: "delivered"}')"
+  launch "$cwd" "$(jq -r '.tmuxSession // empty' <<<"$entry")" "fresh ${name:-omo}" "$id" --name "${name:-omo} (fresh)" -- "$prompt"
+}
+
+# Carries out a handoff on the machine it is for. Safe to repeat: agent-state hands the
+# same record back until this machine's own update reaches it.
+cmd_deliver() {
+  local record=${1:?handoff record required} id mode spec task from file sid cwd status=delivered detail=""
+  id=$(jq -r '.id' <<<"$record") || die "not a handoff record"
+  if [[ -f $handoffs ]] && grep -F "\"id\":\"$id\"" "$handoffs" | grep -Eq '"status":"(delivered|taken|failed)"'; then return 0; fi
+  mode=$(jq -r '.to.mode' <<<"$record")
+  spec=$(jq -r '.to.sid // empty' <<<"$record")
+  task=$(jq -r '.task' <<<"$record")
+  from=$(jq -r '(.from.name // .from.sid // "another session") + " on " + (.from.machine // "another machine")' <<<"$record")
+  if [[ $mode == session ]]; then
+    if file=$(session_file "$spec"); then
+      sid=$(sid_of "$file")
+      write_request "$sid" "$(jq -cn --arg text "$task" --arg id "$id" --arg from "$from" '{action: "message", text: $text, handoff: $id, from: $from}')"
+      record=$(jq -c --arg sid "$sid" '.to.sid = $sid' <<<"$record")
+    else
+      status=failed detail="no session matches $spec on $(self_machine)"
+    fi
+  else
+    cwd=$(jq -r '.to.cwd // empty' <<<"$record")
+    cwd=${cwd:-$HOME}
+    if [[ ! -d $cwd ]]; then
+      status=failed detail="no folder $cwd on $(self_machine)"
+    elif ! launch "$cwd" "" handoff "$id" -- "[Handoff $id from $from] $task" >/dev/null; then
+      status=failed detail="couldn't open a tmux window on $(self_machine)"
+    fi
+  fi
+  append_handoff "$(jq -c --arg status "$status" --arg detail "$detail" --argjson now "$(now_ms)" \
+    '.status = $status | .updatedAt = $now | if $detail == "" then . else .detail = $detail end' <<<"$record")"
+  [[ $status == delivered ]] || die "$detail"
+}
+
+cmd_handoff() {
+  local on="" cwd="" target="" task machine id from_file="" from_sid="" from_name="" to
+  # Options may come before or after the target; everything after them is the task.
+  while (($#)); do
+    case $1 in
+      --on) on=$2; shift 2 ;;
+      --cwd) cwd=$2; shift 2 ;;
+      *)
+        [[ -z $target ]] || break
+        target=$1
+        shift
+        ;;
+    esac
+  done
+  [[ -n $target ]] || die "who takes it? a session or new"
+  task="$*"
+  [[ -n $task ]] || die "no task given"
+  machine=$(self_machine)
+  on=${on:-$machine}
+  id=$(new_id)
+  if [[ -n ${TMUX_PANE:-} ]]; then from_file=$(tmux display-message -p -t "$TMUX_PANE" '#{@omo_transcript}' 2>/dev/null); fi
+  if [[ -r $from_file ]]; then
+    from_sid=$(sid_of "$from_file")
+    from_name=$(session_name "$from_file")
+  fi
+  if [[ $target == new ]]; then
+    [[ -n $cwd || $on != "$machine" ]] || cwd=$PWD
+    to=$(jq -cn --arg machine "$on" --arg cwd "$cwd" '{machine: $machine, mode: "new"} + (if $cwd == "" then {} else {cwd: $cwd} end)')
+  else
+    to=$(jq -cn --arg machine "$on" --arg sid "$target" '{machine: $machine, sid: $sid, mode: "session"}')
+  fi
+  local record
+  record=$(jq -cn --arg id "$id" --argjson now "$(now_ms)" --arg machine "$machine" --arg sid "$from_sid" --arg name "$from_name" --argjson to "$to" --arg task "$task" \
+    '{id: $id, at: $now, updatedAt: $now, from: ({machine: $machine, sid: $sid, name: $name} | with_entries(select(.value != ""))), to: $to, task: $task, status: "sent"}')
+  append_handoff "$record"
+  if [[ $on == "$machine" ]]; then
+    cmd_deliver "$record" || exit 1
+    echo "handed off as $id"
+  else
+    echo "handed off as $id; $on's collector delivers it within a minute"
+  fi
+}
+
+# Shows the session in Herdr: only where the Herdr app runs, which is what clicks a board card.
+cmd_open() {
+  local machine=${1:?machine required} sid=${2:?session required} action=resume remote="" pane
+  [[ ${3:-} == --fresh ]] && action=fresh
+  if [[ $machine == "$(self_machine)" ]]; then
+    pane=$("$0" "$action" "$sid") || exit 1
+  else
+    remote=$(hc machine ls --json | jq -r --arg m "$machine" 'first(.machines[] | select(.state == "connected" and (.name == $m or (.name | startswith($m + "-")))) | .name) // empty')
+    [[ -n $remote ]] || die "$machine isn't connected"
+    pane=$(hc exec --on "$remote" --timeout 25 sh -c 'exec "$HOME/.local/bin/omo-sessions" "$@"' omo-sessions "$action" "$sid") || exit 1
+  fi
+  [[ -n $pane ]] || die "no pane for $sid"
+  "$HOME/.local/bin/omo-status" show "${remote:+$remote/}$pane" || exit 1
+  # `show` goes to the pane in its session that most needs you, and this is the one asked for.
+  if [[ -n $remote ]]; then
+    hc exec --on "$remote" --timeout 5 sh -c 'tmux select-window -t "$1" \; select-pane -t "$1"' omo-sessions "$pane"
+  else
+    tmux select-window -t "$pane" \; select-pane -t "$pane"
+  fi
+}
+
+command=${1:-help}
+[[ $# -gt 0 ]] && shift
+case $command in
+  file) cmd_file "$@" ;;
+  unfile) cmd_unfile "$@" ;;
+  taken) cmd_taken "$@" ;;
+  list) cmd_list ;;
+  park) cmd_park "$@" ;;
+  resume) cmd_resume "$@" ;;
+  fresh) cmd_fresh "$@" ;;
+  open) cmd_open "$@" ;;
+  handoff) cmd_handoff "$@" ;;
+  deliver) cmd_deliver "$@" ;;
+  help | -h | --help) usage ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac

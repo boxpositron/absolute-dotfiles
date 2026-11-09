@@ -119,6 +119,12 @@ export default function (pi: ExtensionAPI) {
 
 		if (!sid) return;
 		void omoSessions(["unfile", sid]);
+		// A session started to take over a handoff says so once. Removed so sessions it starts don't claim it too.
+		const handoff = process.env.OMO_HANDOFF_ID;
+		if (handoff) {
+			delete process.env.OMO_HANDOFF_ID;
+			void omoSessions(["taken", handoff, sid]);
+		}
 		mkdirSync(REQUESTS, { recursive: true });
 		watcher?.close();
 		watcher = watch(REQUESTS, (_type, name) => {

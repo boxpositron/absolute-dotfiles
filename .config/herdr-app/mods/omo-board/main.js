@@ -1,8 +1,9 @@
 // The board: every omo session on every machine the omo board knows, from
 // agent-state (the board's session tracker, 127.0.0.1:4747 through the board
-// tunnel), in five columns: Needs you, Working, Background (the turn is over but
-// a build, watcher or child session still runs), Done (finished in the last day)
-// and Idle. A card has the session's title, where it runs, its question or last
+// tunnel), in six columns: Needs you, Working, Background (the turn is over but
+// a build, watcher or child session still runs), Done (finished in the last day),
+// Idle and Parked (closed on purpose, from the session library: a click reopens
+// one, and "Start fresh" starts a new session from its handoff). A card has the session's title, where it runs, its question or last
 // report, its to-do progress and how recently it was active: hot under an hour,
 // warm under a day, cold after that. A click shows the session in Herdr with
 // `omo-status open` (its space, or a new one; other machines' sessions too). Cmd+Shift+B
@@ -14,6 +15,7 @@ import { exec, home, theme, props, closeOverlay } from "herdr";
 
 // Live sessions only, compact (no transcripts): about 12 KB where the full list is about 700 KB.
 const SESSIONS = "http://127.0.0.1:4747/api/sessions?alive=1&compact=1";
+const LIBRARY = "http://127.0.0.1:4747/api/library?compact=1";
 const CACHE = "sessions";
 const HOUR = 3600000;
 const DAY = 24 * HOUR;
@@ -23,6 +25,7 @@ const COLUMNS = [
   ["background", "Background"],
   ["done", "Done"],
   ["idle", "Idle"],
+  ["parked", "Parked"],
 ];
 
 function column(s, now) {
@@ -63,6 +66,8 @@ export default class Board extends View {
       cached = JSON.parse(localStorage.getItem(CACHE) ?? "null");
     } catch {}
     this.sessions = cached?.sessions ?? [];
+    this.parked = [];
+    this.parkedBody = "";
     this.etag = cached?.etag ?? null;
     this.fetchedAt = cached?.at ?? 0;
     this.loaded = Boolean(cached);
@@ -97,6 +102,16 @@ export default class Board extends View {
         } else {
           throw new Error(`agent-state answered ${status}`);
         }
+        // The parked sessions are a short list, read whole each time.
+        const library = await exec("curl", ["-s", "-m", "5", LIBRARY]);
+        if (library.code === 0 && library.stdout !== this.parkedBody) {
+          const parked = JSON.parse(library.stdout);
+          if (Array.isArray(parked)) {
+            this.parked = parked;
+            this.parkedBody = library.stdout;
+            changed = true;
+          }
+        }
         if (this.problem) changed = true;
         this.problem = null;
       } catch (e) {
@@ -124,6 +139,53 @@ export default class Board extends View {
         this.close();
       }
     });
+  }
+
+  // Reopens a parked session, or starts a new one from its handoff, and shows it.
+  reopen(s, fresh, cx) {
+    cx.spawn(async () => {
+      try {
+        await exec(`${home()}/.local/bin/omo-sessions`, ["open", s.machine, s.sid, ...(fresh ? ["--fresh"] : [])]);
+      } finally {
+        this.close();
+      }
+    });
+  }
+
+  parkedCard(t, s, now) {
+    const where = [s.machine !== "mac" ? s.machine : null, s.project, s.tmux].filter(Boolean).join(" · ");
+    const next = s.handoff?.next;
+    return v_flex()
+      .id(`parked-${s.machine}-${s.sid}`)
+      .flex_none()
+      .p(10)
+      .gap(4)
+      .rounded(9)
+      .bg(t.background)
+      .border_1()
+      .border_color(t.border)
+      .cursor_pointer()
+      .hover((st) => st.bg(t.hover))
+      .tooltip("Reopen this session")
+      .on_click((_e, cx) => this.reopen(s, false, cx))
+      .child(div().truncate().font_semibold().text_color(t.foreground).child(s.name || s.project || "omo session"))
+      .child(div().truncate().text_size(11).text_color(t.dim).child(where))
+      .when(Boolean(s.excerpt), (el) => el.child(div().text_size(11.5).line_height(1.4).max_h(48).overflow_hidden()
+        .text_color(t.muted).child(s.excerpt)))
+      .when(Boolean(next), (el) => el.child(div().truncate().text_size(11.5).text_color(t.muted).child(`Next: ${next}`)))
+      .child(h_flex().pt(2).gap(8).items_center().text_size(11).text_color(t.dim)
+        .child(ago(now - s.parkedAt))
+        .child(div().flex_1())
+        .child(div()
+          .id(`fresh-${s.machine}-${s.sid}`)
+          .cursor_pointer()
+          .text_color(t.foreground)
+          .tooltip("Start a new session from this handoff")
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            this.reopen(s, true, cx);
+          })
+          .child("Start fresh")));
   }
 
   card(t, s, key, now) {
@@ -164,6 +226,7 @@ export default class Board extends View {
     const old = this.fetchedAt && now - this.fetchedAt > 60000 ? ` · updated ${ago(now - this.fetchedAt)} ago` : "";
     const groups = Object.fromEntries(COLUMNS.map(([key]) => [key, []]));
     for (const s of this.sessions) groups[column(s, now)].push(s);
+    groups.parked = this.parked;
     const by = (field, dir) => (a, b) => dir * ((a[field] ?? 0) - (b[field] ?? 0));
     groups.needs.sort(by("lifecycleSince", 1));
     for (const key of ["working", "background", "done", "idle"]) groups[key].sort(by("lastActivity", -1));
@@ -183,7 +246,7 @@ export default class Board extends View {
           .child(div().font_normal().child(String(list.length))))
         .child(v_flex().id(`col-${key}`).flex_1().min_h(0).gap(8).overflow_y_scrollbar()
           .when(list.length === 0, (el) => el.child(div().px(2).text_size(12).text_color(t.dim).child(this.loaded ? "None" : "…")))
-          .children(list.map((s) => this.card(t, s, key, now))));
+          .children(list.map((s) => (key === "parked" ? this.parkedCard(t, s, now) : this.card(t, s, key, now)))));
     };
 
     return v_flex()
