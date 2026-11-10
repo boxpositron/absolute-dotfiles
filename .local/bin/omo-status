@@ -442,6 +442,12 @@ case ${1:-} in
     # Control characters would end the report early.
     message=$(tr -d '\000-\037\177' <<<"${4:-}")
     session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 0
+    # A question asked without holding the turn is still open when the turn's Stop comes,
+    # so "finished" must not hide it. Answering it, or a new prompt, sets working.
+    if [[ $state == "done" && $(tmux show-option -pqv -t "$pane" @omo_state) == input ]]; then
+      tmux show-option -pqv -t "$pane" @omo_msg
+      exit 0
+    fi
     task=$(tmux show-option -pqv -t "$pane" @omo_task)
     if [[ $state == working && -n $message ]]; then
       task=$message
