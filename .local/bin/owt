@@ -68,7 +68,9 @@ Usage (run from anywhere inside the repo):
   owt done [name] [--check] [--force] [--detach]
         Finish a workspace (default: the one you are in). Refuses unless the
         work is committed and merged (into the default branch, or via a merged
-        Gitea PR found with tea). Then deletes the remote branch, removes the
+        Gitea PR found with tea). Then stops what still runs in it (every process
+        working in the worktree, such as dev servers and watchers, and docker
+        compose containers started from it), deletes the remote branch, removes the
         worktree and local branch, and closes tmux windows and Herdr tabs and spaces open in it.
         --check   print the workspace state as key=value lines; exit 1 if unsafe
         --force   finish anyway, discarding unmerged work (remote branch kept)
@@ -215,6 +217,68 @@ ws_windows() {
   tmux list-panes -a -F '#{window_id} #{pane_current_path}' | while read -r win path; do
     if [[ "$path" == "$real_dir" || "$path" == "$real_dir"/* ]]; then printf '%s\n' "$win"; fi
   done | sort -u
+}
+
+# Processes working in a workspace (their working folder is in it), as "<pid>\t<name>"
+# lines: dev servers, watchers and shells started there, however they were started.
+# Leaves out this script, what started it, and tmux and Herdr themselves.
+ws_procs() {
+  local real_dir keep=" " p pids
+  real_dir="$(cd "$1" && pwd -P)"
+  p=$$
+  while [[ -n "$p" && "$p" -gt 1 ]]; do
+    keep+="$p "
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+  done
+  pids="$(
+    if [[ -d /proc/self ]]; then
+      for p in /proc/[0-9]*; do printf '%s\t%s\n' "${p#/proc/}" "$(readlink "$p/cwd" 2>/dev/null || true)"; done
+    else
+      lsof -nP -a -u "$(id -u)" -d cwd -Fpn 2>/dev/null | awk '/^p/ { pid = substr($0, 2) } /^n/ { print pid "\t" substr($0, 2) }' || true
+    fi | awk -F'\t' -v d="$real_dir" -v keep="$keep" '
+      ($2 == d || index($2, d "/") == 1) && index(keep, " " $1 " ") == 0 { printf "%s%s", (n++ ? "," : ""), $1 }'
+  )"
+  [[ -n "$pids" ]] || return 0
+  ps -o pid=,comm= -p "$pids" 2>/dev/null | awk '
+    { pid = $1; sub(/^ *[0-9]+ +/, ""); n = split($0, part, "/"); name = part[n] }
+    name !~ /^(tmux|herdr|herdr-app|herdr-core|hc)$/ { print pid "\t" name }' || true
+}
+
+# Running docker compose containers started from a workspace, one id per line.
+ws_containers() {
+  local real_dir
+  command -v docker >/dev/null || return 0
+  real_dir="$(cd "$1" && pwd -P)"
+  docker ps --format '{{.ID}}\t{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null |
+    awk -F'\t' -v d="$real_dir" -v e="$1" '
+      $2 != "" && ($2 == d || $2 == e || index($2, d "/") == 1 || index($2, e "/") == 1) { print $1 }' || true
+}
+
+# Stops what still runs in a workspace before it goes: its processes get TERM, and KILL
+# if still there 5 seconds later; its docker compose containers are stopped.
+stop_ws() {
+  local dir="$1" pid name pids=() names=() left=() still=() containers=() c i
+  while IFS=$'\t' read -r pid name; do pids+=("$pid"); names+=("$name"); done < <(ws_procs "$dir")
+  if [[ ${#pids[@]} -gt 0 ]]; then
+    kill -TERM "${pids[@]}" 2>/dev/null || true
+    left=("${pids[@]}")
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      still=()
+      for pid in "${left[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then still+=("$pid"); fi
+      done
+      left=("${still[@]+"${still[@]}"}")
+      [[ ${#left[@]} -gt 0 ]] || break
+      sleep 0.5
+    done
+    if [[ ${#left[@]} -gt 0 ]]; then kill -KILL "${left[@]}" 2>/dev/null || true; fi
+    say "stopped ${#pids[@]} process(es) running in $dir: $(printf '%s\n' "${names[@]}" | sort | uniq -c | awk '{ printf "%s%s%s", (NR > 1 ? ", " : ""), $2, ($1 > 1 ? " x" $1 : "") }')"
+  fi
+  while read -r c; do containers+=("$c"); done < <(ws_containers "$dir")
+  if [[ ${#containers[@]} -gt 0 ]]; then
+    docker stop "${containers[@]}" >/dev/null 2>&1 || true
+    say "stopped ${#containers[@]} docker container(s) started from $dir"
+  fi
 }
 
 name_taken() {
@@ -754,6 +818,10 @@ cmd_done() {
   local windows=() win tabs=() tab
   while read -r win; do windows+=("$win"); done < <(ws_windows "$dir")
   while read -r tab; do tabs+=("$tab"); done < <(ws_tabs "$dir")
+
+  # Nothing started in the workspace keeps running once its folder is gone.
+  cd "$root"
+  stop_ws "$dir"
 
   if [[ $merged == yes && $remote_branch == yes ]]; then
     git -C "$root" push --quiet origin --delete "$branch" && say "deleted remote branch $branch"

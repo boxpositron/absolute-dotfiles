@@ -22,4 +22,4 @@ If your previous message in this session ended with `SQ: ready`, this runs strai
 
 6. End with a handoff block (Ask, For you, Now, Next), as /sq does, so the record of this session says what happened: issues updated or created and their new status, the PR link, what was synced to Studio and memory, anything not synced and why, and what cleanup will remove.
 
-7. As your very last action, run `owt done --detach`, adding `--force` only if I approved discarding work in step 3. About 5 seconds later it deletes the merged remote branch, removes the worktree and local branch, and closes this tmux window, which ends this session. Run nothing after it.
+7. As your very last action, run `owt done --detach`, adding `--force` only if I approved discarding work in step 3. About 5 seconds later it stops every process still running in the workspace (dev servers, watchers, this session) and the docker compose containers started from it, deletes the merged remote branch, removes the worktree and local branch, and closes this tmux window. Run nothing after it.
