@@ -28,6 +28,8 @@
 #        omo-status tty <tty> <state> [message]   (omo outside tmux, in Herdr)
 #        omo-status focus <client>   (run by the tmux client-focus-in hook)
 #        omo-status sync <client>    (run when a client attaches or switches session)
+#        omo-status refresh          (run when a pane or window closes: each session still
+#                                     reporting an agent works its state out again)
 #        omo-status show <pane>      (shows the pane in Herdr: the tab already on its session,
 #                                     else a tab in the space named after the session, else a
 #                                     new space for the session)
@@ -497,6 +499,15 @@ case ${1:-} in
     if [[ -n $(herdr_terminal "$pid") ]]; then
       send_report "$tty" "$(tmux show-option -qv -t "$session" @omo_report)"
     fi
+    ;;
+  refresh)
+    # A pane that closes without omo saying so (owt done kills its window, a crash) leaves
+    # its session reporting it. Closing a pane only ever lowers a session's state, so a
+    # session already reporting nothing is left alone.
+    while IFS=$'\x1f' read -r session report; do
+      if [[ -n $report && $report != state=clear ]]; then show_most_urgent "$session"; fi
+    done < <(tmux list-sessions -F $'#{session_id}\x1f#{@omo_report}')
+    exit 0
     ;;
   arrive)
     session=$(tmux display-message -p -t "=${2:?session required}:" '#{session_id}' 2>/dev/null)
