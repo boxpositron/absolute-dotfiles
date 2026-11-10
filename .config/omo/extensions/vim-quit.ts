@@ -3,10 +3,12 @@
 // so a quit typed mid-turn happens after it.
 //
 // :sq (or /sq) runs the /sq checklist (.config/omo/prompts/sq.md) as a turn: trackers, logged time, git and
-// memory brought up to date, then a handoff that ends in `SQ: ready` or `SQ: hold <reason>`. On ready the
-// session is filed in the session library (`omo-sessions file`) and quits; on hold it stays open. In an owt
-// workspace that is committed and merged, ready runs /owt-done instead, which removes the workspace and ends the
-// session. A workspace that can't be finished yet stays, and the session closes as usual.
+// memory brought up to date, then a handoff that ends in `SQ: done`, `SQ: park <open items>` or `SQ: hold <reason>`.
+// Done means nothing is left: in an owt workspace that is committed and merged it runs /owt-done, which stops what
+// still runs in the workspace (dev servers, watchers, containers), removes it and ends the session; outside a
+// workspace the session just closes. Park means work is left: the session is filed in the session library
+// (`omo-sessions file`) and quits, as is a done in a workspace that can't be finished yet. On hold it stays open.
+// `SQ: ready`, from before done and park, still finishes a merged workspace and parks anything else.
 //
 // `omo-sessions` asks a session to quit (park, nightly idle close), to quit so it can be restarted
 // (reboot), or to take a task handed over from another session, by writing requests/<session id>.json
@@ -58,11 +60,13 @@ function lastAssistantText(messages: unknown): string {
 	return "";
 }
 
-// The checklist's verdict: its last non-empty line, `SQ: ready` or `SQ: hold <reason>`.
-function verdict(text: string): { ready: boolean; reason: string } | undefined {
+type Verdict = { kind: "done" | "park" | "hold" | "ready"; reason: string };
+
+// The checklist's verdict: its last non-empty line, `SQ: done`, `SQ: park <open items>` or `SQ: hold <reason>`.
+function verdict(text: string): Verdict | undefined {
 	const last = text.trim().split("\n").at(-1)?.trim() ?? "";
-	const match = /^`?SQ:\s*(ready|hold)\b\s*(.*?)`?$/i.exec(last);
-	return match ? { ready: match[1].toLowerCase() === "ready", reason: match[2] } : undefined;
+	const match = /^`?SQ:\s*(done|park|hold|ready)\b\s*(.*?)`?$/i.exec(last);
+	return match ? { kind: match[1].toLowerCase() as Verdict["kind"], reason: match[2] } : undefined;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -150,18 +154,25 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify("Safe quit stopped before it finished; the session stays open", "warning");
 			return;
 		}
-		if (!result.ready) {
+		if (result.kind === "hold") {
 			ctx.ui.notify(`Safe quit is holding: ${result.reason || "see the last message"}`, "warning");
 			return;
 		}
 		const workspace = await owtWorkspace(ctx.cwd);
-		if (workspace === "finishable") {
-			// It removes the worktree and closes this window, so the session is not filed for reopening.
-			ctx.ui.notify("Safe quit is ready: finishing this workspace", "info");
+		if (result.kind !== "park" && workspace === "finishable") {
+			// It stops what runs in the workspace, removes it and closes this window, so the session is not filed.
+			ctx.ui.notify("Safe quit is done: cleaning up and finishing this workspace", "info");
 			pi.sendUserMessage("/owt-done", { expandPromptTemplates: true });
 			return;
 		}
-		if (workspace === "kept") ctx.ui.notify("This workspace can't be finished yet, so it stays", "info");
+		if (result.kind === "done" && workspace === undefined) {
+			// Nothing to come back to, so it stays out of the library.
+			ctx.ui.notify("Safe quit is done: closing this session", "info");
+			ctx.shutdown();
+			return;
+		}
+		if (result.kind === "park") ctx.ui.notify(`Safe quit is parking this session: ${result.reason || "work is left"}`, "info");
+		else if (workspace === "kept") ctx.ui.notify("This workspace can't be finished yet, so the session is parked", "info");
 		const sid = ctx.sessionManager.getSessionId();
 		const file = ctx.sessionManager.getSessionFile();
 		if (sid) await omoSessions(["file", sid, "--reason", "sq", "--cwd", ctx.cwd, ...(file ? ["--session-file", file] : [])]);
