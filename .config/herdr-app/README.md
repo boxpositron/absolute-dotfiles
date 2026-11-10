@@ -25,7 +25,7 @@ Herdr knows an agent's state only when the program reports it with OSC 7501 (the
 | omo | Herdr |
 | --- | --- |
 | working on a prompt | working |
-| turn over, a build, watcher or child session still running, or a wake-up scheduled | idle, with `◐ background · <what is running>` as the message (the protocol has no background state, and this work shouldn't count as busy) |
+| turn over, a build, watcher or child session still running, or a wake-up scheduled | working, with `◐ background · <what is running>` as the message (the protocol has no background state, and Herdr shows a terminal that goes from working to idle while you aren't looking as done) |
 | asked you something | blocked (question) |
 | finished | done |
 | stopped with an error | error |

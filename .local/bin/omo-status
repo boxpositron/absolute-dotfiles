@@ -145,8 +145,9 @@ report_body() {
   case $state in
     "") echo "state=clear" && return ;;
     input) body="state=blocked:kind=question:app=omo" ;;
-    background) # OSC 7501 has no background state, and Herdr should not count this work as busy
-      body="state=idle:app=omo"
+    background) # OSC 7501 has no background state. Not idle: Herdr shows a terminal that goes
+      # from working to idle while you aren't looking as done, and this work isn't done yet.
+      body="state=working:app=omo"
       case $msg in "goal "*) msg="◐ $msg" ;; *) msg="◐ background · $msg" ;; esac
       ;;
     *) body="state=$state:app=omo" ;;
