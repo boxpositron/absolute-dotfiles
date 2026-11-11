@@ -10,10 +10,12 @@ function location() {
   const space = spaces().find(s => s.active), f = focused();
   const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  const where = f?.terminal ? shared("tmux.where") : null;
+  // A mod pane (a preview opened beside a tmux client) keeps the folder its tab's client showed.
+  const where = shared("tmux.where");
+  const mine = f?.terminal ? where?.terminal === f.terminal : Boolean(f?.tab) && where?.tab === f.tab;
   // Until tmux-context has looked at this terminal, nothing: not the client's folder for a moment.
-  if (f?.terminal && where?.terminal !== f.terminal) return { cwd: null, on, space: space?.id, pending: true };
-  if (where?.tmux) return { cwd: where.cwd, on, space: space?.id };
+  if (f?.terminal && !mine) return { cwd: null, on, space: space?.id, pending: true };
+  if (mine && where.tmux) return { cwd: where.cwd, on: where.on ?? on, space: space?.id };
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 const key = () => JSON.stringify(location());

@@ -168,22 +168,35 @@ export default class TmuxContext extends View {
     return pane?.cwd || f?.cwd || space?.folder || null;
   }
 
+  // The resolved tmux pane that applies to what has focus: the focused terminal's or, for a mod pane
+  // (a preview opened beside a tmux client), the one its tab showed last.
+  current() {
+    const f = focused(), w = this.where;
+    if (!w) return null;
+    return f?.terminal ? (w.terminal === f.terminal ? w : null) : f?.tab && w.tab === f.tab ? w : null;
+  }
+
   folder() {
-    const terminal = focused()?.terminal ?? null;
-    if (!terminal) return this.herdrFolder();
-    if (this.where?.terminal !== terminal) return null;
-    return this.where.tmux ? this.where.cwd : this.herdrFolder();
+    const terminal = focused()?.terminal ?? null, w = this.current();
+    if (terminal && !w) return null;
+    return w?.tmux ? w.cwd : this.herdrFolder();
   }
 
   ctxKey() {
-    return JSON.stringify([machineOf(focused()?.terminal), this.folder()]);
+    return JSON.stringify([this.current()?.on ?? machineOf(focused()?.terminal), this.folder()]);
   }
 
   resolve(cx) {
     if (this.resolving) { this.again = true; return; }
     const terminal = focused()?.terminal ?? null;
     this.terminal = terminal;
-    if (!terminal) { this.where = null; this.loadContext(cx); cx.notify(); return; }
+    if (!terminal) {
+      if (this.where?.tab !== focused()?.tab) this.where = null;
+      this.loadContext(cx);
+      cx.notify();
+      return;
+    }
+    const tab = focused()?.tab ?? null;
     this.resolving = true;
     cx.spawn(async (cx) => {
       let found = null;
@@ -195,11 +208,11 @@ export default class TmuxContext extends View {
       if ((focused()?.terminal ?? null) !== terminal || this.again) { this.again = false; this.resolve(cx); return; }
       const on = machineOf(terminal), pins = shared("tmux.pins") ?? {};
       this.pinSeen = pins[terminal] ?? null;
-      if (!found) this.where = { terminal, tmux: false, on };
+      if (!found) this.where = { terminal, tab, tmux: false, on };
       else {
         const pinned = found.panes.find((p) => p.pane === pins[terminal]);
         const shown = pinned ?? found.panes.find((p) => p.pane === found.client) ?? found.panes.find((p) => p.active);
-        this.where = { terminal, tmux: true, on, cwd: shown?.path ?? null, pane: shown?.pane ?? null, pinned: Boolean(pinned), session: found.session, panes: found.panes };
+        this.where = { terminal, tab, tmux: true, on, cwd: shown?.path ?? null, pane: shown?.pane ?? null, pinned: Boolean(pinned), session: found.session, panes: found.panes };
       }
       this.publish();
       this.resolveOthers(cx, terminal);
@@ -212,7 +225,7 @@ export default class TmuxContext extends View {
     const w = this.where;
     if (!w) return;
     const g = this.ctx?.key === this.ctxKey() ? this.ctx.git : null;
-    const published = { terminal: w.terminal, tmux: w.tmux, on: w.on, cwd: w.cwd ?? null, pane: w.pane ?? null, pinned: w.pinned ?? false, branch: g ? g.branch || g.head || null : null };
+    const published = { terminal: w.terminal, tab: w.tab ?? null, tmux: w.tmux, on: w.on, cwd: w.cwd ?? null, pane: w.pane ?? null, pinned: w.pinned ?? false, branch: g ? g.branch || g.head || null : null };
     if (JSON.stringify(shared("tmux.where")) !== JSON.stringify(published)) setShared("tmux.where", published);
   }
 
@@ -235,7 +248,7 @@ export default class TmuxContext extends View {
   }
 
   loadContext(cx) {
-    const key = this.ctxKey(), folder = this.folder(), on = machineOf(focused()?.terminal);
+    const key = this.ctxKey(), folder = this.folder(), on = this.current()?.on ?? machineOf(focused()?.terminal);
     if (!folder) return;
     if (this.ctx?.key === key && Date.now() - this.ctx.at < GIT_EVERY) return this.loadPr(cx);
     if (this.ctxLoading === key) return;
@@ -441,7 +454,7 @@ export default class TmuxContext extends View {
     if (props()?.picker) return this.picker(t);
     const terminal = focused()?.terminal ?? null, pins = shared("tmux.pins") ?? {};
     if (terminal !== this.terminal || (terminal && (pins[terminal] ?? null) !== (this.pinSeen ?? null))) this.resolve(cx);
-    const w = this.where?.terminal === terminal ? this.where : null;
+    const w = this.current();
     const folder = this.folder();
     const ctx = this.ctx?.key === this.ctxKey() ? this.ctx : null;
     const g = ctx?.git ?? null;

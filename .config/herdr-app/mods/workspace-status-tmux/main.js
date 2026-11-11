@@ -23,8 +23,10 @@ export default class WorkspaceStatus extends View {
     const list = agents();
     const needs = list.filter(a => a.status === "blocked").length;
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
-    const terminal = focused()?.terminal, where = shared("tmux.where");
-    const branch = terminal && where?.terminal === terminal && where.tmux ? where.branch : space?.branch;
+    const f = focused(), where = shared("tmux.where");
+    // A mod pane (a preview beside a tmux client) keeps the branch its tab's client showed.
+    const mine = f?.terminal ? where?.terminal === f.terminal : Boolean(f?.tab) && where?.tab === f.tab;
+    const branch = mine && where.tmux ? where.branch : space?.branch;
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
       .when(Boolean(branch), el => el.child(label("branch", branch)))
