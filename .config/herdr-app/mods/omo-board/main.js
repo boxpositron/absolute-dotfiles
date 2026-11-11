@@ -7,11 +7,15 @@
 // report, its to-do progress and how recently it was active: hot under an hour,
 // warm under a day, cold after that. A click shows the session in Herdr with
 // `omo-status open` (its space, or a new one; other machines' sessions too). Cmd+Shift+B
-// opens it in the netrunner layout, as does the "omo in tmux" panel's board button.
+// opens it in the netrunner layout, as does the screen button in the Agents list's header.
+//
+// It opens as a dialog (mod.json): centered, over a dimmed window, drawn in the netrunner colours
+// with its own neon frame (`frame: "none"`). It takes the keyboard when it opens, so Esc closes it;
+// a popup doesn't, and Esc used to go to the terminal underneath.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, home, theme, props, closeOverlay } from "herdr";
+import { exec, home, theme, props, settings, closeOverlay } from "herdr";
 
 // Live sessions only, compact (no transcripts): about 12 KB where the full list is about 700 KB.
 const SESSIONS = "http://127.0.0.1:4747/api/sessions?alive=1&compact=1";
@@ -27,6 +31,7 @@ const COLUMNS = [
   ["idle", "Idle"],
   ["parked", "Parked"],
 ];
+const TONE = { needs: "blocked", working: "working", background: "ansi5", done: "done", idle: "idle", parked: "accent" };
 
 function column(s, now) {
   if (s.lifecycle === "blocked") return "needs";
@@ -57,6 +62,15 @@ function ago(ms) {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
+const mono = () => settings().font_family ?? "JetBrains Mono";
+
+// Element backgrounds take one colour, so a gradient is drawn as steps between two #rrggbb colours.
+function mix(a, b, f) {
+  const at = (c, i) => parseInt(c.slice(1 + i * 2, 3 + i * 2), 16);
+  return "#" + [0, 1, 2].map((i) => Math.round(at(a, i) + (at(b, i) - at(a, i)) * f).toString(16).padStart(2, "0")).join("");
+}
+const steps = (a, b, n) => Array.from({ length: n }, (_, i) => div().flex_1().h_full().bg(mix(a, b, i / (n - 1))));
+
 export default class Board extends View {
   // The last answer, kept in localStorage, shows at once; a fresh one follows. curl rather than fetch, because
   // the ETag header is how agent-state says "unchanged" (a 304 with no body) and fetch doesn't expose headers.
@@ -74,6 +88,8 @@ export default class Board extends View {
     this.problem = null;
     this.paintedAt = 0;
     this.handle = cx.focus_handle();
+    // The keyboard, once the board has drawn: Esc then reaches it.
+    cx.timer.after(60, () => this.handle.focus());
     this.refresh(cx);
     cx.timer.every(5000, (cx) => this.refresh(cx));
     // Scheduled wake-ups count down here, between fetches.
@@ -130,7 +146,7 @@ export default class Board extends View {
     closeOverlay(props().overlay);
   }
 
-  // The popup closes once the session shows: closing first would cancel the task.
+  // The board closes once the session shows: closing first would cancel the task.
   open(s, cx) {
     cx.spawn(async () => {
       try {
@@ -152,100 +168,84 @@ export default class Board extends View {
     });
   }
 
+  shell(t, id, tone, body) {
+    return h_flex().id(id).items_stretch().flex_none().rounded(4).overflow_hidden().bg(t.chrome).border_1().border_color(t.border)
+      .hover((st) => st.bg(t.hover).border_color(tone + "b3"))
+      .child(div().w(3).flex_none().bg(tone))
+      .child(v_flex().flex_1().min_w(0).px(11).py(9).gap(4).child(body));
+  }
+
+  where(s) {
+    return [s.machine !== "mac" ? s.machine : null, s.project, s.tmux].filter(Boolean).join(" · ");
+  }
+
   parkedCard(t, s, now) {
-    const where = [s.machine !== "mac" ? s.machine : null, s.project, s.tmux].filter(Boolean).join(" · ");
-    const next = s.handoff?.next;
-    return v_flex()
-      .id(`parked-${s.machine}-${s.sid}`)
-      .flex_none()
-      .p(10)
-      .gap(4)
-      .rounded(9)
-      .bg(t.background)
-      .border_1()
-      .border_color(t.border)
-      .cursor_pointer()
-      .hover((st) => st.bg(t.hover))
-      .tooltip("Reopen this session")
-      .on_click((_e, cx) => this.reopen(s, false, cx))
+    const tone = t[TONE.parked], next = s.handoff?.next;
+    return this.shell(t, `parked-${s.machine}-${s.sid}`, tone, v_flex().gap(4)
       .child(div().truncate().font_semibold().text_color(t.foreground).child(s.name || s.project || "omo session"))
-      .child(div().truncate().text_size(11).text_color(t.dim).child(where))
-      .when(Boolean(s.excerpt), (el) => el.child(div().text_size(11.5).line_height(1.4).max_h(48).overflow_hidden()
-        .text_color(t.muted).child(s.excerpt)))
+      .child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(this.where(s)))
+      .when(Boolean(s.excerpt), (el) => el.child(div().text_size(11.5).line_height(1.4).max_h(48).overflow_hidden().text_color(t.muted).child(s.excerpt)))
       .when(Boolean(next), (el) => el.child(div().truncate().text_size(11.5).text_color(t.muted).child(`Next: ${next}`)))
-      .child(h_flex().pt(2).gap(8).items_center().text_size(11).text_color(t.dim)
+      .child(h_flex().pt(3).gap(8).items_center().font_family(mono()).text_size(10.5).text_color(t.dim)
         .child(ago(now - s.parkedAt))
         .child(div().flex_1())
-        .child(div()
-          .id(`fresh-${s.machine}-${s.sid}`)
-          .cursor_pointer()
-          .text_color(t.foreground)
-          .tooltip("Start a new session from this handoff")
-          .on_click((_e, cx) => {
-            cx.stop_propagation();
-            this.reopen(s, true, cx);
-          })
-          .child("Start fresh")));
+        .child(div().id(`fresh-${s.machine}-${s.sid}`).px(6).h(20).flex().items_center().rounded(3).border_1().border_color(tone + "66")
+          .text_color(tone).cursor_pointer().hover((st) => st.bg(tone + "1f")).tooltip("Start a new session from this handoff")
+          .on_click((_e, cx) => { cx.stop_propagation(); this.reopen(s, true, cx); })
+          .child("START FRESH"))))
+      .cursor_pointer().tooltip("Reopen this session").on_click((_e, cx) => this.reopen(s, false, cx));
   }
 
   card(t, s, key, now) {
+    const tone = t[TONE[key]] ?? t.dim;
     const age = now - (s.lastActivity ?? s.startedAt ?? now);
     const heat = age < HOUR ? t.working : age < DAY ? t.blocked : t.dim;
-    const where = [s.machine !== "mac" ? s.machine : null, s.project, s.tmux].filter(Boolean).join(" · ");
     const text = s.excerpt ?? "";
     const done = progress(s);
     const canOpen = Boolean(s.tmux);
-    return v_flex()
-      .id(`card-${s.machine}-${s.sid}`)
-      .flex_none()
-      .p(10)
-      .gap(4)
-      .rounded(9)
-      .bg(t.background)
-      .border_1()
-      .border_color(t.border)
-      .when(canOpen, (el) => el.cursor_pointer().hover((st) => st.bg(t.hover)).on_click((_e, cx) => this.open(s, cx)))
-      .when(!canOpen, (el) => el.tooltip("Not in tmux, so it can't be shown from here"))
+    return this.shell(t, `card-${s.machine}-${s.sid}`, tone, v_flex().gap(4)
       .child(div().truncate().font_semibold().text_color(t.foreground).child(s.name || s.project || "omo session"))
-      .child(div().truncate().text_size(11).text_color(t.dim).child(where))
+      .child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(this.where(s)))
       .when(Boolean(text), (el) => el.child(div().text_size(11.5).line_height(1.4).max_h(48).overflow_hidden()
         .text_color(key === "needs" ? t.foreground : t.muted).child(text)))
-      .child(h_flex().pt(2).gap(8).items_center().text_size(11).text_color(t.dim)
-        .child(div().size(7).flex_none().rounded(4).bg(heat))
+      .child(h_flex().pt(3).gap(8).items_center().font_family(mono()).text_size(10.5).text_color(t.dim)
+        .child(div().size(6).flex_none().rounded(3).bg(heat))
         .child(ago(age))
         .when(Boolean(s.resumeAt), (el) => el.child(div().text_color(t.ansi5).child(`resumes ${countdown(s.resumeAt - now)}`)))
         .when(Boolean(done), (el) => el.child(h_flex().gap(4).items_center()
           .child(svg("mods/workspace-chrome/circle-check.svg").size(11))
-          .child(done))));
+          .child(done)))))
+      .when(canOpen, (el) => el.cursor_pointer().on_click((_e, cx) => this.open(s, cx)))
+      .when(!canOpen, (el) => el.tooltip("Not in tmux, so it can't be shown from here"));
   }
 
   render() {
     const t = theme();
     const now = Date.now();
     this.paintedAt = now;
-    const old = this.fetchedAt && now - this.fetchedAt > 60000 ? ` · updated ${ago(now - this.fetchedAt)} ago` : "";
     const groups = Object.fromEntries(COLUMNS.map(([key]) => [key, []]));
     for (const s of this.sessions) groups[column(s, now)].push(s);
     groups.parked = this.parked;
     const by = (field, dir) => (a, b) => dir * ((a[field] ?? 0) - (b[field] ?? 0));
     groups.needs.sort(by("lifecycleSince", 1));
     for (const key of ["working", "background", "done", "idle"]) groups[key].sort(by("lastActivity", -1));
+    const machines = new Set(this.sessions.map((s) => s.machine)).size;
+    const stale = !this.fetchedAt || now - this.fetchedAt > 60000;
+    const live = this.problem ? t.ansi1 : stale ? t.blocked : t.working;
 
     const col = ([key, title]) => {
-      const list = groups[key];
-      return v_flex()
-        .flex_1()
-        .min_w(0)
-        .h_full()
-        .gap(8)
-        .child(h_flex().px(2).gap(6).items_center().text_size(12).font_semibold()
-          .text_color(key === "needs" && list.length ? t.blocked : t.dim)
-          .when(key === "needs" && list.length > 0, (el) => el.child(div().size(7).rounded(4).bg(t.blocked)
-            .loop("opacity", { from: 0.35, to: 1, period: 1600 })))
-          .child(title)
-          .child(div().font_normal().child(String(list.length))))
+      const list = groups[key], tone = t[TONE[key]] ?? t.dim, lit = list.length > 0;
+      return v_flex().flex_1().min_w(0).h_full().gap(10)
+        .child(v_flex().flex_none().gap(7)
+          .child(h_flex().h(20).gap(8).items_center()
+            .when(key === "needs" && lit, (el) => el.child(div().size(7).flex_none().rounded(4).bg(tone).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
+            .child(div().font_family(mono()).text_size(11.5).font_bold().text_color(lit ? tone : t.dim).child(title.toUpperCase()))
+            .child(div().flex_1())
+            .child(div().px(6).h(18).flex().items_center().rounded(3).border_1().border_color(lit ? tone + "73" : t.border)
+              .font_family(mono()).text_size(10.5).text_color(lit ? tone : t.dim).child(String(list.length).padStart(2, "0"))))
+          .child(h_flex().h(2).flex_none().child(div().w(48).h_full().bg(lit ? tone : t.border)).child(div().flex_1().h_full().bg(lit ? tone + "2e" : t.border))))
         .child(v_flex().id(`col-${key}`).flex_1().min_h(0).gap(8).overflow_y_scrollbar()
-          .when(list.length === 0, (el) => el.child(div().px(2).text_size(12).text_color(t.dim).child(this.loaded ? "None" : "…")))
+          .when(!lit, (el) => el.child(div().px(2).py(4).font_family(mono()).text_size(11).text_color(t.dim).child(this.loaded ? "// empty" : "// loading")))
           .children(list.map((s) => (key === "parked" ? this.parkedCard(t, s, now) : this.card(t, s, key, now)))));
     };
 
@@ -254,21 +254,42 @@ export default class Board extends View {
       .track_focus(this.handle)
       .size_full()
       .min_h(0)
-      .p(18)
-      .gap(12)
-      .bg(t.popover)
+      .rounded(6)
+      .overflow_hidden()
+      .bg(t.background)
+      .border_1()
+      .border_color(t.accent + "d9")
+      .shadow_2xl()
       .text_size(13)
+      .text_color(t.foreground)
       .on_key_down((e, cx) => {
-        if (e.key !== "escape") return;
+        if (e.keystroke !== "escape" && e.key !== "escape") return;
         cx.stop_propagation();
         this.close();
       })
-      .child(h_flex().items_center().gap(10)
-        .child(div().text_size(15).font_semibold().text_color(t.foreground).child("Board"))
-        .child(div().flex_1().text_size(11.5).text_color(t.dim)
-          .child(this.problem ?? `${this.sessions.length} omo sessions across your machines${old}`))
-        .child(div().text_size(11).text_color(t.dim).child("Esc")))
-      // The popup takes its content's height, so the columns get theirs.
-      .child(h_flex().h(640).gap(12).items_start().children(COLUMNS.map(col)));
+      .child(h_flex().h(3).flex_none().children(steps(t.accent.slice(0, 7), t.working.slice(0, 7), 24)))
+      .child(h_flex().h(62).flex_none().px(22).gap(14).items_center().border_b(1).border_color(t.border)
+        .child(h_flex().h(30).gap(3).flex_none().items_end().child(div().w(4).h(30).bg(t.accent)).child(div().w(4).h(18).bg(t.working)))
+        .child(v_flex().gap(3)
+          .child(h_flex().gap(10).items_center()
+            .child(div().font_family(mono()).text_size(16).font_bold().text_color(t.foreground).child("OMO // BOARD"))
+            .child(h_flex().px(6).h(18).gap(5).items_center().rounded(3).border_1().border_color(live + "66")
+              .child(div().size(6).rounded(3).bg(live).when(!this.problem && !stale, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1800 })))
+              .child(div().font_family(mono()).text_size(10).font_bold().text_color(live)
+                .child(this.problem ? "OFFLINE" : stale ? `STALE ${ago(now - this.fetchedAt)}` : "LIVE"))))
+          .child(div().font_family(mono()).text_size(11).text_color(this.problem ? t.ansi1 : t.dim)
+            .child(this.problem ?? `${this.sessions.length} sessions · ${machines} machine${machines === 1 ? "" : "s"} · ${this.parked.length} parked`)))
+        .child(div().flex_1())
+        .child(div().id("board-esc").px(8).h(26).flex().items_center().rounded(3).border_1().border_color(t.working + "80")
+          .font_family(mono()).text_size(11).font_bold().text_color(t.working).cursor_pointer()
+          .hover((st) => st.bg(t.working + "1f")).tooltip("Close (Esc)").on_click(() => this.close())
+          .child("ESC")))
+      .child(h_flex().flex_1().min_h(0).px(20).pt(16).pb(14).gap(14).children(COLUMNS.map(col)))
+      .child(h_flex().h(28).flex_none().px(22).gap(8).items_center().border_t(1).border_color(t.border)
+        .font_family(mono()).text_size(10.5).text_color(t.dim)
+        .child(div().text_color(t.accent).child(">"))
+        .child("click a card to show it in Herdr · a parked card reopens it")
+        .child(div().flex_1())
+        .child(`agent-state · ${this.fetchedAt ? `read ${ago(now - this.fetchedAt)} ago` : "not read yet"}`));
   }
 }
