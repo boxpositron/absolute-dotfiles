@@ -40,7 +40,8 @@ const SEP = "|^|";
 // omo-status's states in Herdr's words.
 const OMO = { working: "working", background: "background", input: "blocked", error: "blocked", done: "done", idle: "idle" };
 const RANK = { blocked: 5, done: 4, working: 3, background: 2, idle: 1 };
-const PICK = new Set(["ctx", "new", "space", "tsession", "tpane"]);
+// Everything but the titles: the folds toggle when picked, as Herdr's "earlier" does.
+const PICK = new Set(["ctx", "new", "space", "tsession", "tpane", "earlier", "tmuxfold"]);
 
 // tmux sessions in tmux's order, each with its panes and the pane it shows.
 function tmuxSessions(stdout) {
@@ -69,7 +70,11 @@ export default class Picker extends View {
   init(_props, cx) {
     this.filter = "";
     this.input = InputState.new({ placeholder: "Go to a tab, space, agent or tmux session…" });
-    this.input.on("change", (_e, cx) => { this.filter = this.input.value(); this.at = 0; cx.notify(); });
+    this.input.on("change", (_e, cx) => {
+      this.filter = this.input.value();
+      this.at = this.filter ? Math.max(0, this.rows().filter((r) => PICK.has(r.kind)).findIndex((r) => r.kind === "ctx")) : 0;
+      cx.notify();
+    });
     this.input.on("submit", (_e, cx) => this.go(this.rows().filter((r) => PICK.has(r.kind))[this.at], cx));
     this.input.focus();
     cx.timer.after(600, () => this.input.focus());
@@ -154,6 +159,14 @@ export default class Picker extends View {
   go(r, cx) {
     if (!r) return;
     if (r.kind === "tsession" || r.kind === "tpane") return this.goTmux(r.kind === "tpane" ? r.p : r.s.current, cx);
+    if (r.kind === "earlier" || r.kind === "tmuxfold") {
+      this.at = this.rows().filter((x) => PICK.has(x.kind)).findIndex((x) => x.kind === r.kind);
+      if (r.kind === "earlier") this.showEarlier = !this.showEarlier;
+      else this.showTmux = !this.showTmux;
+      this.input.focus();
+      cx.notify();
+      return;
+    }
     this.close();
     if (r.kind === "ctx") run("tab.select", { id: r.ctx.id });
     else if (r.kind === "new") run("tab.new");
@@ -248,11 +261,9 @@ export default class Picker extends View {
           .text_size(12)
           .text_color(t.dim)
           .cursor_pointer()
-          .hover((s) => s.text_color(t.foreground))
-          .on_click((_e, cx) => {
-            this.showEarlier = !this.showEarlier;
-            cx.notify();
-          })
+          .when(r === sel, (el) => el.bg(t.hover).text_color(t.foreground))
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => this.go(r, cx))
           .child(`earlier: ${r.count} quiet space${r.count > 1 ? "s" : ""} ${this.showEarlier ? "▴" : "▾"}`);
       }
       if (r.kind === "tmuxfold") {
@@ -266,11 +277,9 @@ export default class Picker extends View {
           .text_size(12)
           .text_color(t.dim)
           .cursor_pointer()
-          .hover((s) => s.text_color(t.foreground))
-          .on_click((_e, cx) => {
-            this.showTmux = !this.showTmux;
-            cx.notify();
-          })
+          .when(r === sel, (el) => el.bg(t.hover).text_color(t.foreground))
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => this.go(r, cx))
           .child(`tmux: ${r.count} session${r.count > 1 ? "s" : ""} ${this.showTmux ? "▴" : "▾"}`);
       }
       if (r.kind === "tmuxhead") {
@@ -364,7 +373,7 @@ export default class Picker extends View {
         cx.stop_propagation();
         cx.notify();
       })
-      .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().text_color(t.foreground).child("Go to…")).child(div().text_size(11).text_color(t.dim).child("Esc")))
+      .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().text_color(t.foreground).child("Go to…")).child(div().id("picker-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("Esc")))
       .child(
         h_flex().h(36).flex_none().px(10).gap(8).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
           .child(svg("mods/workspace-chrome/search.svg").size(15).text_color(t.dim))
