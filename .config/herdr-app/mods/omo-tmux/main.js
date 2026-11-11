@@ -17,13 +17,17 @@
 //
 // It is a view of the netrunner layout's side panel (panel-body "omo"), opened and closed by the
 // status bar's omo chip. Herdr starts a block only once it shows and gives keys to shown copies only,
-// and the panel is often closed, so a hidden copy beside the status bar (props {headless: true}) runs
-// `omo-status list` and Cmd+J: it publishes the list in shared "omo.list" for this panel and the
-// counts in "omo.tmux" for the chip. The panel only draws.
+// and the panel is often closed, so a hidden copy beside the status bar (props {headless: true}) reads
+// the list and takes Cmd+J: it publishes the list in shared "omo.list" for this panel and the counts
+// in "omo.tmux" for the chip. The panel only draws. It reads this Mac's panes (`omo-status
+// list-local`) the moment omo's state changes (omo-status set touches the list tick) or Herdr's
+// focus moves, else every 5 s; the other machines' (`list-remote`, about a second each) every 15 s.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, home, nextCommand, run, theme, shared, setShared, props } from "herdr";
+import { exec, home, nextCommand, run, theme, shared, setShared, props, focused, watchFolder } from "herdr";
+
+const listTick = () => `${home()}/.local/state/omo-status/list`;
 
 const SEP = "|^|";
 const RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
@@ -84,8 +88,19 @@ export default class OmoTmux extends View {
     this.flash = new Map();
     this.motion = null;
     if (this.headless) {
+      this.local = "";
+      this.remote = "";
       this.refresh(cx);
-      cx.timer.every(2000, (cx) => this.refresh(cx));
+      this.refreshRemote(cx);
+      cx.timer.every(5000, (cx) => this.refresh(cx));
+      cx.timer.every(15000, (cx) => this.refreshRemote(cx));
+      cx.spawn(async (cx) => {
+        await exec("mkdir", ["-p", listTick()]).catch(() => null);
+        for (;;) {
+          try { await watchFolder(listTick()); } catch { return; }
+          this.refresh(cx);
+        }
+      });
       // keys.json binds "omo-tmux.next" (Cmd+J in the netrunner layout): the pane that most needs you.
       cx.spawn(async (cx) => {
         for (;;) {
@@ -104,28 +119,53 @@ export default class OmoTmux extends View {
     cx.timer.every(1000, (cx) => { if (this.panes.some((p) => p.resumeAt)) cx.notify(); });
   }
 
+  // A change while a read runs reads again in the same task: a task started by one that is ending is dropped.
   refresh(cx) {
-    if (!this.headless || this.busy) return;
+    if (!this.headless) return;
+    if (this.busy) { this.again = true; return; }
     this.busy = true;
-    cx.spawn(async (cx) => {
-      let out = "";
-      let problem = null;
-      try {
-        const r = await exec(`${home()}/.local/bin/omo-status`, ["list"]);
-        if (/no server running/.test(r.stderr)) problem = "tmux isn't running.";
-        else if (r.code === 0) out = r.stdout;
-        else problem = r.stderr.trim() || `omo-status list failed (${r.code})`;
-      } catch (e) {
-        problem = `omo-status didn't start: ${e?.message ?? e}`;
-      }
+    cx.spawn(async () => {
+      do {
+        this.again = false;
+        let out = "";
+        let problem = null;
+        try {
+          const r = await exec(`${home()}/.local/bin/omo-status`, ["list-local"]);
+          if (/no server running/.test(r.stderr)) problem = "tmux isn't running.";
+          else if (r.code === 0) out = r.stdout;
+          else problem = r.stderr.trim() || `omo-status list failed (${r.code})`;
+        } catch (e) {
+          problem = `omo-status didn't start: ${e?.message ?? e}`;
+        }
+        this.local = out;
+        this.problem = problem;
+        this.share();
+      } while (this.again);
       this.busy = false;
-      if (out === this.last && problem === this.problem) return;
-      this.last = out;
-      this.problem = problem;
-      this.panes = parse(out);
-      setShared("omo.list", { out, problem });
-      this.publish();
     });
+  }
+
+  refreshRemote(cx) {
+    if (this.remoteBusy) return;
+    this.remoteBusy = true;
+    cx.spawn(async () => {
+      try {
+        const r = await exec(`${home()}/.local/bin/omo-status`, ["list-remote"]);
+        if (r.code === 0) this.remote = r.stdout;
+      } catch { /* keeps the last answer */ }
+      this.remoteBusy = false;
+      this.share();
+    });
+  }
+
+  share() {
+    const out = this.local + this.remote;
+    if (out === this.last && this.problem === this.sharedProblem) return;
+    this.last = out;
+    this.sharedProblem = this.problem;
+    this.panes = parse(out);
+    setShared("omo.list", { out, problem: this.problem });
+    this.publish();
   }
 
   publish() {
@@ -257,7 +297,12 @@ export default class OmoTmux extends View {
   }
 
   render(cx) {
-    if (this.headless) return div();
+    if (this.headless) {
+      // Going to a session in Herdr counts as looking at it (list-local notes it), so read at once.
+      const terminal = focused()?.terminal ?? null;
+      if (terminal !== this.focusSeen) { this.focusSeen = terminal; this.refresh(cx); }
+      return div();
+    }
     const list = shared("omo.list");
     if (list && (list.out !== this.last || list.problem !== this.problem)) {
       this.last = list.out;

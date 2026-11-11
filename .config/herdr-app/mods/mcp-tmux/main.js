@@ -7,6 +7,8 @@
 // Herdr starts a block only once it shows, and the side panel is often closed, so a hidden copy beside
 // the status bar (props {headless: true}) does the reading: it publishes shared "omo.mcp.data" for
 // this panel and a summary in "omo.mcp" for workspace-status-tmux's MCP chip. The panel only draws.
+// It reads once the focus has stayed on a pane for SETTLE ms, so passing through panes reads none of
+// them, and again every two minutes.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar } from "gpui-base";
 import { exec, home, shared, setShared, theme, nextCommand, props } from "herdr";
@@ -16,6 +18,8 @@ function target() {
   return w?.tmux && w.pane ? { pane: w.pane, on: w.on ?? null, terminal: w.terminal } : null;
 }
 const keyOf = (t) => (t ? `${t.on ?? ""}|${t.pane}` : null);
+const SETTLE = 800;
+const REREAD = 120000;
 
 function ago(iso) {
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
@@ -42,7 +46,7 @@ export default class Mcp extends View {
       return;
     }
     this.refresh(cx);
-    cx.timer.every(30000, (cx) => this.refresh(cx, true));
+    cx.timer.every(REREAD, (cx) => this.refresh(cx, true));
     cx.spawn(async (cx) => {
       for (;;) if ((await nextCommand()) === "refresh") this.refresh(cx, true);
     });
@@ -127,8 +131,16 @@ export default class Mcp extends View {
   render(cx) {
     if (this.headless) {
       const ask = shared("omo.mcp.refresh") ?? null;
+      const key = keyOf(target());
       if (ask !== this.asked) { this.asked = ask; this.refresh(cx, true); }
-      else if (!this.loading && keyOf(target()) !== this.key) this.refresh(cx);
+      else if (key !== this.key && key !== this.waiting) {
+        this.waiting = key;
+        cx.timer.after(SETTLE, (cx) => {
+          if (this.waiting !== key) return;
+          this.waiting = null;
+          if (keyOf(target()) === key) this.refresh(cx);
+        });
+      }
       return div();
     }
     const s = shared("omo.mcp.data"), key = keyOf(target()), mine = s?.key === key;
