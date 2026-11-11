@@ -45,6 +45,10 @@
 #        omo-status list             (every pane running omo, for Herdr's "omo in tmux" panel:
 #                                     pane, session, window, folder, state, since, scheduled wake-up, message)
 #        omo-status panes            (every tmux pane, for Herdr's search)
+#        omo-status where <terminal> (the tmux pane a Herdr terminal's tmux client shows, for
+#                                     Herdr's Files and Changes panels: a "client|^|<pane>" line,
+#                                     then one "pane|^|..." line per pane in its session; nothing
+#                                     when the terminal runs no tmux client)
 #
 # list, panes, show, next and spaces also cover the tmux of each Herdr machine
 # herdr-core is connected to (`hc machine ls`): there this script runs, through
@@ -217,6 +221,31 @@ herdr_attached() {
     [[ -n $session ]] || return 1
     printf '%s\t%s\n' "${machine:+$machine/}$session" "$term"
   done
+}
+
+# The session a tmux client with pid <pid> shows: "client|^|<its pane>|^|<session name>", then for each pane
+# in the session "pane|^|<omo>|^|<pane>|^|<window index>|^|<window name>|^|<window active>|^|
+# <pane active>|^|<program>|^|<folder>|^|<omo state>|^|<omo name>|^|<omo message>", <omo>
+# being "omo" when omo runs on the pane's terminal (found as list-here finds it). Nothing
+# when no client has that pid. It uses nothing else in this file but the tmux wrapper, so
+# `where` can send it to a Herdr machine with declare -f.
+where_here() {
+  local pid=$1 session pane name panes line ttys=() omo=""
+  IFS=$'\t' read -r session pane name < <(tmux list-clients -F $'#{client_pid}\t#{session_id}\t#{pane_id}\t#{session_name}' |
+    awk -F'\t' -v p="$pid" '$1 == p { print $2 "\t" $3 "\t" $4; exit }')
+  [[ -n $session ]] || return 0
+  printf 'client|^|%s|^|%s\n' "$pane" "$name"
+  panes=$(tmux list-panes -s -t "$session" -F '#{pane_tty}|^|#{pane_id}|^|#{window_index}|^|#{window_name}|^|#{window_active}|^|#{pane_active}|^|#{pane_current_command}|^|#{pane_current_path}|^|#{@omo_state}|^|#{@omo_name}|^|#{@omo_msg}')
+  # Only the session's terminals: ps -A takes ten times as long, and the panels ask every few seconds.
+  while IFS= read -r line; do
+    line=${line%%"|^|"*}
+    [[ -n $line ]] && ttys+=(-t "${line#/dev/}")
+  done <<<"$panes"
+  ((${#ttys[@]})) && omo=$(ps -o tty=,args= "${ttys[@]}" 2>/dev/null |
+    awk '/\/senpi\/dist\/bundle\/cli\.js|\/omo-ai\/bin\/omo\.js/ { print "/dev/" $1 }' | sort -u)
+  OMO_TTYS=$omo awk '
+      BEGIN { n = split(ENVIRON["OMO_TTYS"], t, "\n"); for (i = 1; i <= n; i++) omo[t[i]] = 1 }
+      { i = index($0, "|^|"); print "pane|^|" ((substr($0, 1, i - 1) in omo) ? "omo" : "") substr($0, i) }' <<<"$panes"
 }
 
 # Herdr machines herdr-core is connected to. Only where the Herdr app runs: on a
@@ -530,6 +559,21 @@ case ${1:-} in
     for machine in $(machines); do
       at "$machine" "$1-here" 2>/dev/null | prefixed "$machine"
     done
+    ;;
+  where)
+    # Herdr knows a terminal's folder only from its process, and a tmux client's is wherever
+    # it was started, so its Files and Changes panels ask this for the pane the client shows.
+    terminal=${2:?Herdr terminal required} machine=""
+    [[ $terminal == */* ]] && machine=${terminal%%/*}
+    info=$(hc get "$terminal" --json 2>/dev/null) && [[ -n $info ]] || exit 1
+    pid=$(jq -r '.foreground // {} | select((.argv[0] // "") | test("(^|/)tmux$")) | .pid // empty' <<<"$info")
+    [[ -n $pid ]] || exit 0
+    if [[ -z $machine ]]; then
+      where_here "$pid"
+    else
+      # The machine's own omo-status may be older than this one, so the function goes along.
+      hc exec --on "$machine" --timeout 5 bash -c "$(declare -f tmux where_here)"'; where_here "$1"' where "$pid"
+    fi
     ;;
   panes-here)
     tmux -u list-panes -a -F '#{pane_id}|^|#{session_name}|^|#{session_attached}|^|#{window_index}|^|#{window_name}|^|#{window_active}|^|#{pane_index}|^|#{pane_active}|^|#{pane_current_command}|^|#{pane_current_path}|^|#{@omo_state}|^|#{@omo_msg}'
