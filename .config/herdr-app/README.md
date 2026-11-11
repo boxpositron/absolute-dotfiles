@@ -12,6 +12,7 @@ Herdr's desktop app (`herdr-app`, with herdr-core as `hc`) as the window around 
 - `programs.json`: omo with its own name and icon, and in the + menu to start it in a pane of its own.
 - `layouts/netrunner.json`: Herdr's main layout, cloned from 0.1.13 (called `tmux` until 2026-11-11), with the "omo in tmux" panel under the agents list and the sidebar from `workspace-chrome-tmux`, in the `netrunner` theme with near-square pane corners, a purple sidebar gradient and a cyan divider. Herdr no longer updates a cloned layout, so changes to `main` in later releases don't reach it. Switch layouts with Cmd+Shift+L.
 - `mods/omo-tmux/`: the "omo in tmux" panel.
+- `mods/agents-tmux/`: Herdr's Agents list, cloned from `agents` in 0.1.15. Agents on another machine (flowstate-remote) get a faint wash of the Cyberpunk yellow of the server's tmux bar, yellow hover and selection, and a yellow machine label, so a remote session stands out when you scan the list.
 - `mods/picker-tmux/`: Herdr's search ("Go to…") with tmux sessions and panes added, cloned from Herdr's `picker` in 0.1.13.
 - `mods/workspace-chrome-tmux/`: Herdr's sidebar header and footer, cloned from `workspace-chrome` in 0.1.13, whose search button opens `picker-tmux`. It uses the shipped mod's icons, since Herdr loads no images through the link.
 - `mods/omo-board/`: the board view (see Board).
@@ -99,7 +100,7 @@ Watch out:
 
 ## Herdr updates
 
-`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
+`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux`, `agents-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
 
 ## flowstate-remote
 
