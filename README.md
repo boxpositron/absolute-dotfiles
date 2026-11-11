@@ -314,8 +314,8 @@ A lightweight tmux configuration (`.tmux-server.conf`) is available for remote s
 |---------|---------|--------|
 | Status bar | Top | Bottom |
 | Prefix key | `Ctrl+b` | `Ctrl+/` |
-| Plugins | Full (TPM, catppuccin, etc.) | None |
-| Theme | Catppuccin | Simple minimal |
+| Plugins | Full (TPM, sessionx, floax, etc.) | None |
+| Theme | Netrunner (dark cyberpunk, matches Herdr) | Simple minimal |
 
 ### Quick Setup on Remote Server
 
