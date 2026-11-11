@@ -1,6 +1,7 @@
-// :q quits omo, and :sq quits safely. Enter is caught before the editor submits, where omo handles /quit,
-// so these never fire prompt hooks such as UserPromptSubmit. ctx.shutdown() waits for the agent to go idle,
-// so a quit typed mid-turn happens after it.
+// :q quits omo, and :sq quits safely, in any case (:Q, :SQ). Enter is caught before the editor submits, where omo
+// handles /quit, so :q never fires prompt hooks such as UserPromptSubmit. ctx.shutdown() waits for the agent to go
+// idle, so a quit typed mid-turn happens after it. :sq is swapped for /sq and submitted as if typed: a person's
+// input resumes a paused session, where a message sent by the extension would be held until someone resumes it.
 //
 // :sq (or /sq) runs the /sq checklist (.config/omo/prompts/sq.md) as a turn: trackers, logged time, git and
 // memory brought up to date, then a handoff that ends in `SQ: done`, `SQ: park <open items>` or `SQ: hold <reason>`.
@@ -78,12 +79,6 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		const sid = ctx.sessionManager.getSessionId();
 
-		const startSafeQuit = () => {
-			safeQuit = true;
-			ctx.ui.notify("Safe quit: syncing this session, then closing it", "info");
-			pi.sendUserMessage("/sq", ctx.isIdle() ? { expandPromptTemplates: true } : { expandPromptTemplates: true, deliverAs: "followUp" });
-		};
-
 		const takeRequest = () => {
 			if (!sid) return;
 			const file = join(REQUESTS, `${sid}.json`);
@@ -107,16 +102,17 @@ export default function (pi: ExtensionAPI) {
 		unsubscribe?.();
 		unsubscribe = ctx.ui.onTerminalInput((data) => {
 			if (!matchesKey(data, Key.enter)) return undefined;
-			const text = ctx.ui.getEditorText().trim();
+			const text = ctx.ui.getEditorText().trim().toLowerCase();
 			if (QUIT_COMMANDS.has(text)) {
 				ctx.ui.setEditorText("");
 				ctx.shutdown();
 				return { consume: true };
 			}
 			if (text === ":sq") {
-				ctx.ui.setEditorText("");
-				startSafeQuit();
-				return { consume: true };
+				// The Enter goes on to the editor, which submits /sq; the input handler below marks the safe quit.
+				ctx.ui.setEditorText("/sq");
+				ctx.ui.notify("Safe quit: syncing this session, then closing it", "info");
+				return undefined;
 			}
 			return undefined;
 		});
