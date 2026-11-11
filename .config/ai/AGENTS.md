@@ -16,11 +16,12 @@ Do not use em dashes or en dashes in prose written for the user, including email
 
 ## File paths and links
 
-Every file path or link you show must open as written: the user Ctrl+clicks paths and links in terminal sessions to open them, and follows links in rendered Markdown. This covers chat replies, code spans, and links in documents you write.
+Every file path or link you show must open as written: the user clicks paths and links in terminal sessions to open them (Option+click in Herdr, Ctrl+click elsewhere), and follows links in rendered Markdown. This covers chat replies, code spans, and links in documents you write.
 
 - In chat replies, write paths as absolute paths (a leading `~/` is fine) or relative to the session's working directory. Never write them relative to another folder, such as a repository root the session is not running in.
 - In Markdown files, write links relative to the file's own folder, or as absolute paths.
 - In chat replies, link a local file as `[label](path)` or show the bare path. Do not use image syntax (`![alt](path)`) there: the terminal shows only the alt text, so the path is lost.
+- In chat replies, put a bare file or folder path in backticks (`~/Desktop/Screenshot 2026-11-11 at 16.29.10.png`), so a click anywhere on it opens the whole path, spaces and all.
 
 ## Client work
 

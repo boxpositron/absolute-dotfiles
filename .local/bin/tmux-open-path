@@ -1,40 +1,59 @@
 #!/usr/bin/env zsh
-# Open the file path under the mouse in a tmux pane, routed by type:
+# Open the file path or web link under the mouse in a tmux pane. A web link (http, https)
+# opens in the default browser. In a Herdr terminal showing the netrunner layout, a folder opens
+# in the side panel's Files list and any other file in its preview (the hidden tmux-context copy
+# reads the request this leaves in ~/.local/state/omo-status/open). Elsewhere, by type:
 #   markdown        -> Markdown Preview (GUI)
 #   images, pdf, dirs -> yazi in a split pane (image preview via passthrough)
 #   anything else   -> nvim in a split pane, jumping to :line when present
 # When the clicking tmux client runs in a Herdr terminal, markdown, images, pdf
 # and documents open in Herdr's preview beside it instead (~/.local/bin/herdr-preview).
 #
-# A click anywhere on a Markdown link or image, [label](target) or ![alt](target),
-# opens its target. omo draws a link as "label (target)", so a click on a label that
-# is no file opens the target in the parentheses after it.
+# What the click names, first match wins:
+#   1. an OSC 8 hyperlink under it (tmux keeps them; read from the pane's line with escapes)
+#   2. a Markdown link or image around it, [label](target) or ![alt](target)
+#   3. the text inside the nearest quotes or backticks around it, '...', "..." or `...`
+#   4. the run of text drawn in one style around it: omo draws inline code that way,
+#      without its backticks
+#   5. the words around it, as many as name a real path, longest first: a path with
+#      spaces, or with \-escaped spaces
+#   6. omo's "label (target)": the target in the parentheses after a clicked label
+# Except for web links, a candidate counts only when it names a real file or folder.
 #
 # Called from a tmux mouse binding:
-#   tmux-open-path <pane_id> <pane_current_path> <mouse_x> <mouse_line> [<client_pid>]
+#   tmux-open-path <pane_id> <pane_current_path> <mouse_x> <mouse_line> [<client_pid> [<mouse_y>]]
 
 emulate -L zsh
 setopt extendedglob
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# Columns and characters line up only in a UTF-8 locale; tmux's run-shell may have none.
+[[ ${LC_ALL:-${LC_CTYPE:-${LANG:-}}} == *(#i)utf(-|)8* ]] || export LC_CTYPE=en_US.UTF-8
 
-pane=$1 cwd=$2 x=$3 line=$4 client=${5:-}
+pane=$1 cwd=$2 x=$3 line=$4 client=${5:-} y=${6:-}
 
 fail() { tmux display-message -d 2000 "open-path: $1"; exit 1 }
+is_url() { [[ $1 == (#i)http(s|)://?* ]] }
+open_url() { open -- ${1%%[.,;:!?]##}; exit }
 
 [[ -n $pane && -n $cwd && $x == <-> ]] || fail "usage: tmux-open-path PANE CWD X LINE"
 
 (( i = x + 1 ))   # mouse_x is 0-based, zsh strings are 1-based
 (( i <= ${#line} )) || fail "nothing under cursor"
 
-# Normalise a token (file:// URLs, @mentions, trailing punctuation, :line[:col], #Lnn),
-# then resolve it against the pane's directory and the enclosing git root.
-# Sets file (absolute) and lnum; returns 1 when no such file exists.
-# (not "path": zsh ties that name to $PATH)
+# A relative path is looked for in the pane's directory, then in its git root.
+roots=($cwd)
+top=$(git -C $cwd rev-parse --show-toplevel 2>/dev/null) && [[ -n $top && $top != $cwd ]] && roots+=($top)
+
+# Normalise a candidate (file:// URLs, @mentions, \-escaped spaces, trailing punctuation,
+# :line[:col], #Lnn), then resolve it against the roots. Sets file (absolute) and lnum;
+# returns 1 when no such file exists. (not "path": zsh ties that name to $PATH)
 file= lnum=
 resolve() {
     local t=$1 base
     file= lnum=
     t=${t#file://}
     t=${t#@}
+    t=${t//\\ / }
     t=${t%%[.,;:!?]##}
     if [[ $t == (#b)(*)\#L(<->)* ]]; then
         t=$match[1] lnum=$match[2]
@@ -46,11 +65,102 @@ resolve() {
     if [[ $t == /* ]]; then
         [[ -e $t ]] && file=$t
     else
-        for base in $cwd $(git -C $cwd rev-parse --show-toplevel 2>/dev/null); do
+        for base in $roots; do
             [[ -e $base/$t ]] && { file=$base/$t; break }
         done
     fi
     [[ -n $file ]] && file=${file:A}
+}
+
+# A candidate: a web link (no spaces in it) opens at once; anything else must name a real
+# file or folder.
+try() {
+    [[ -n $1 ]] || return 1
+    if is_url $1; then
+        [[ $1 == *[[:space:]]* ]] && return 1
+        open_url $1
+    fi
+    resolve $1
+}
+
+# The pane's line under the click with its escapes: the OSC 8 hyperlink under the click (link),
+# and the run of text between two escapes around it (styled). Neither counts when the line
+# isn't the one tmux reported (copy mode, or a redraw since the click).
+link= styled=
+scan() {
+    local raw rest uri= col=0 plain= seg= ch w hit=0
+    raw=$(tmux capture-pane -p -e -t $pane -S $y -E $y 2>/dev/null) || return
+    rest=$raw
+    while [[ -n $rest ]]; do
+        if [[ $rest == $'\e'* ]]; then
+            (( hit == 1 )) && { styled=$seg; hit=2 }
+            seg=
+            if [[ $rest == $'\e]8;'* ]]; then
+                # ESC ] 8 ; params ; URI, ended by ESC \ or BEL. An empty URI ends the link.
+                rest=${rest#$'\e]8;'}
+                rest=${rest#*;}
+                uri=${rest%%[$'\e\a']*}
+                rest=${rest:${#uri}}
+                rest=${rest#$'\a'}
+                rest=${rest#$'\e\\'}
+            elif [[ $rest == (#b)($'\e['[0-?]#[\ -/]#[@-~])(*) ]]; then
+                rest=$match[2]
+            else
+                rest=${rest:2}
+            fi
+        else
+            ch=${rest[1]} w=${(m)#rest[1]}
+            (( hit == 0 && x >= col && x < col + (w > 0 ? w : 1) )) && { hit=1; link=$uri }
+            seg+=$ch plain+=$ch
+            (( col += w ))
+            rest=${rest:1}
+        fi
+    done
+    (( hit == 1 )) && styled=$seg
+    [[ ${plain%%[[:space:]]##} == ${line%%[[:space:]]##} ]] || { link= styled= }
+}
+[[ $y == <-> ]] && scan
+
+# The text inside the nearest quotes or backticks around the click, whole.
+quoted() {
+    local q left right
+    for q in "'" '"' '`'; do
+        [[ ${line[i]} == $q ]] && continue
+        left=${line[1,i-1]%$q*}
+        [[ $left == ${line[1,i-1]} ]] && continue
+        right=${line[i+1,-1]%%$q*}
+        [[ $right == ${line[i+1,-1]} ]] && continue
+        try ${line[${#left}+2,i+${#right}]} && return
+    done
+    return 1
+}
+
+# The words around the click, as many as name a real path, widest first. Words are split at
+# spaces within the run of path characters and spaces around the click, at most 8 each way.
+joined() {
+    local stop=$'\t"\'`()[]{}<>|│┃║─━' s e k a b starts=() ends=()
+    (( s = i )); k=0
+    while (( s > 1 )) && [[ $stop != *${line[s-1]}* ]]; do
+        [[ ${line[s-1]} == ' ' ]] && (( ++k > 8 )) && break
+        (( s-- ))
+    done
+    (( e = i )); k=0
+    while (( e < ${#line} )) && [[ $stop != *${line[e+1]}* ]]; do
+        [[ ${line[e+1]} == ' ' ]] && (( ++k > 8 )) && break
+        (( e++ ))
+    done
+    for (( k = s; k <= i; k++ )); do
+        [[ ${line[k]} != ' ' ]] && { (( k == s )) || [[ ${line[k-1]} == ' ' ]] } && starts+=($k)
+    done
+    for (( k = e; k >= i; k-- )); do
+        [[ ${line[k]} != ' ' ]] && { (( k == e )) || [[ ${line[k+1]} == ' ' ]] } && ends+=($k)
+    done
+    for a in $starts; do
+        for b in $ends; do
+            (( b >= a )) && try ${line[a,b]} && return
+        done
+    done
+    return 1
 }
 
 # A Markdown link or image around the click opens its target, without <>, a #anchor
@@ -64,29 +174,48 @@ while [[ $rest =~ '!?\[[^]]*]\((<[^>]*>|[^)[:space:]]+)([[:space:]]+"[^"]*")?\)'
     (( off += MEND ))
     rest=${line[off+1,-1]}
 done
-if [[ -n $target ]]; then
+if [[ -n $link ]]; then
+    is_url $link && open_url $link
+    if [[ $link == (#i)file://* ]]; then
+        t=${link#(#i)file://} && t=/${t#*/}   # without the host
+        [[ $t == *%[[:xdigit:]][[:xdigit:]]* ]] && t=${(g::)t//\%/\\x}
+        resolve $t || fail "no such file: $t"
+    else
+        open -- $link
+        exit
+    fi
+elif [[ -n $target ]]; then
+    is_url $target && open_url $target
     [[ $target == (#b)(*)\#(*) && $match[2] != L<->* ]] && target=$match[1]
     [[ $target == *%[[:xdigit:]][[:xdigit:]]* ]] && target=${(g::)target//\%/\\x}
     resolve $target || fail "no such file: $target"
 else
-    # The run of path-like characters around the clicked column. Whitespace,
-    # quotes, brackets and box-drawing borders end a token.
+    # The run of path-like characters around the clicked column, for the messages and omo's
+    # "label (target)". Whitespace, quotes, brackets and box-drawing borders end it.
     local stop=$' \t"\'`()[]{}<>|│┃║─━'
-    [[ $stop == *${line[i]}* ]] && fail "nothing under cursor"
     (( s = i )); while (( s > 1 )) && [[ $stop != *${line[s-1]}* ]]; do (( s-- )); done
     (( e = i )); while (( e < ${#line} )) && [[ $stop != *${line[e+1]}* ]]; do (( e++ )); done
     token=${line[s,e]}
-    if ! resolve $token; then
-        # omo's "label (target)": the first parenthesised path after the label.
-        [[ ${line[e+1,-1]} == (#b)[^\(\)]#\(([^\(\)[:space:]]##)\)* ]] && resolve $match[1] ||
-            fail "no such file: $token"
-    fi
+    quoted || try ${${styled##[[:space:]]##}%%[[:space:]]##} || joined || {
+        # omo's "label (target)": the first parenthesised path or link after the label.
+        [[ ${line[e+1,-1]} == (#b)[^\(\)]#\(([^\(\)[:space:]]##)\)* ]] && try $match[1]
+    } || {
+        [[ $stop == *${line[i]}* ]] && fail "nothing under cursor"
+        fail "no such file: $token"
+    }
 fi
 
 # Herdr gives the programs in its terminals HC_TERMINAL_ID, and a tmux client keeps
 # the environment it started with.
 herdr=
 [[ $client == <-> ]] && herdr=$(ps eww -o command= -p $client 2>/dev/null | tr ' ' '\n' | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1)
+if [[ -n $herdr && $(jq -r '.layout // empty' ~/.config/herdr-app/shared.json 2>/dev/null) == netrunner ]]; then
+    req=${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/open kind=file
+    [[ -d $file ]] && kind=dir
+    mkdir -p $req && jq -n --arg kind $kind --arg path $file --arg terminal $herdr \
+        '{kind: $kind, path: $path, terminal: $terminal, at: (now * 1000 | floor)}' >$req/.request.json &&
+        mv -f $req/.request.json $req/request.json && exit
+fi
 if [[ -n $herdr && -x ~/.local/bin/herdr-preview ]]; then
     case ${file:e:l} in
         md|markdown|mdx|mdown|mkd|mkdn|png|jpg|jpeg|gif|webp|svg|bmp|tif|tiff|heic|ico|pdf|docx|doc|rtf|odt|pages|pptx|xlsx|key|numbers)

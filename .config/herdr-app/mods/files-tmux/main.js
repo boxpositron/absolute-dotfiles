@@ -21,7 +21,13 @@ function location() {
   const mine = f?.terminal && !editor ? where?.terminal === f.terminal : Boolean(f?.tab) && where?.tab === f.tab;
   // Until tmux-context has looked at this terminal, nothing: not the client's folder for a moment.
   if (f?.terminal && !editor && !mine) return { cwd: null, on, space: space?.id, pending: true };
-  if (mine && where.tmux) return { cwd: where.cwd, on: where.on ?? on, space: space?.id };
+  if (mine && where.tmux) {
+    // A folder ctrl-clicked in this terminal (tmux-open-path, through tmux-context) shows instead,
+    // until its pane moves to another folder or the header's button goes back.
+    const pick = shared("files.root");
+    if (pick?.terminal === f.terminal && !where.on && (pick.base == null || pick.base === where.cwd)) return { cwd: pick.dir, on: null, space: space?.id, picked: where.cwd };
+    return { cwd: where.cwd, on: where.on ?? on, space: space?.id };
+  }
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 const key = () => JSON.stringify(location());
@@ -97,7 +103,9 @@ export default class Files extends View {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
       // Somewhere else now: the tree again, not the last folder's preview (an open nvim keeps running).
-      if (this.context && find(layout(), "files")?.active !== "files-tree") run("layout.select", { stack: "files", child: "files-tree" });
+      // A file just ctrl-clicked keeps its preview: the click moved the focus here too.
+      const opened = Date.now() - (shared("files.open")?.at ?? 0) < 3000;
+      if (this.context && !opened && find(layout(), "files")?.active !== "files-tree") run("layout.select", { stack: "files", child: "files-tree" });
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
@@ -197,12 +205,18 @@ export default class Files extends View {
 
   render(cx) {
     if (key() !== this.context?.key) this.refresh(cx);
-    const t = theme();
+    const t = theme(), picked = location().picked;
+    const button = (id, icon, tip, onClick) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).tooltip(tip).on_click(onClick).child(svg(icon).size(14).text_color(t.muted));
     return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
         .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
         .child(div().font_semibold().child("Files"))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? "")))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+        .when(Boolean(picked) && !this.file, el => el.child(button("files-pane-folder", "mods/workspace-chrome/chevron-left.svg",
+          `Back to the pane's folder (${picked.split("/").pop()})`, () => setShared("files.root", null))))
+        .when(!this.on && Boolean(this.root) && !this.file, el => el.child(button("files-finder", "mods/workspace-chrome/folder.svg",
+          "Open in Finder", () => exec("open", [this.root]).catch(() => {})))))
       .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
         .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : location().pending ? "Finding the tmux pane…" : "No folder"))))
         .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))

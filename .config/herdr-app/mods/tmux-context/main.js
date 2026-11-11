@@ -22,13 +22,15 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, home, appHome, focused, panes, spaces, terminals, readTextFile, watchFolder, shared, setShared, theme, props, openOverlay, closeOverlay, notify, nextCommand } from "herdr";
+import { exec, home, appHome, focused, panes, spaces, terminals, readTextFile, watchFolder, shared, setShared, theme, props, openOverlay, closeOverlay, notify, nextCommand, run } from "herdr";
 
 const SEP = "|^|";
 const RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
 // Window names tmux picks by itself say nothing about the work.
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
-const POLL = 3000;
+// A safety net: tmux's hooks and omo's state changes (the two tick folders) and Herdr's focus
+// already start a read the moment something changes.
+const POLL = 15000;
 const GIT_EVERY = 10000;
 const PR_FOR = 60000;
 const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
@@ -36,6 +38,8 @@ const ICON = (name) => `mods/workspace-chrome/${name}.svg`;
 const REMOTE = "#fcee0a";
 
 const tickDir = () => `${home()}/.local/state/omo-status/where`;
+const listTick = () => `${home()}/.local/state/omo-status/list`;
+const openDir = () => `${home()}/.local/state/omo-status/open`;
 const machineOf = (terminal) => (terminal?.includes("/") ? terminal.split("/")[0] : null);
 const base = (path) => (path ?? "").split("/").filter(Boolean).pop() ?? "";
 const tilde = (path) => (path ?? "").replace(/^\/(Users|home)\/[^/]+(?=\/|$)/, "~");
@@ -135,6 +139,7 @@ export default class TmuxContext extends View {
     // publish tmux.where for the pane headers, the status bar and the panels. A hidden copy beside the
     // status bar (props {headless: true}) follows tmux and publishes it, takes the keys (they reach
     // shown copies only, and one picker is enough), and skips what only the strip draws (PRs, Linear).
+    // The strip draws what that copy shares in "tmux.context" and loads only PRs and Linear itself.
     this.headless = Boolean(props()?.headless);
     this.terminal = undefined;
     this.where = null;
@@ -144,21 +149,50 @@ export default class TmuxContext extends View {
     if (!this.headless) {
       this.loadLinear(cx);
       cx.timer.every(300000, (cx) => this.loadLinear(cx));
+      return;
     }
     this.resolve(cx);
     cx.timer.every(POLL, (cx) => this.resolve(cx));
     // `tmux-context.pick` (a key in keys.json, or `herdr-app do tmux-context.pick`) opens the folder list.
-    if (this.headless) cx.spawn(async () => {
+    cx.spawn(async () => {
       for (;;) if ((await nextCommand()) === "pick") this.openPicker();
     });
-    // tmux's hooks touch the tick file when a client changes pane, window or session.
-    cx.spawn(async (cx) => {
-      await exec("mkdir", ["-p", tickDir()]).catch(() => null);
+    // tmux's hooks touch the where tick when a client changes pane, window or session; omo-status set
+    // touches the list tick when a pane's omo state changes (the strip shows each pane's).
+    for (const dir of [tickDir(), listTick()]) cx.spawn(async (cx) => {
+      await exec("mkdir", ["-p", dir]).catch(() => null);
       for (;;) {
-        try { await watchFolder(tickDir()); } catch { return; }
+        try { await watchFolder(dir); } catch { return; }
         this.resolve(cx);
       }
     });
+    // tmux-open-path (Ctrl+click in tmux) leaves a file or folder to show here.
+    cx.spawn(async () => {
+      await exec("mkdir", ["-p", openDir()]).catch(() => null);
+      for (;;) {
+        try { await watchFolder(openDir()); } catch { return; }
+        await this.takeRequest();
+      }
+    });
+  }
+
+  // A ctrl-clicked file shows in the Files panel's preview, a folder in its list (files-tmux reads
+  // "files.root" for the terminal clicked in, while its pane stays in the folder it was in). A request
+  // more than a few seconds old was left from before Herdr started.
+  async takeRequest() {
+    const r = await readTextFile(`${openDir()}/request.json`).then(JSON.parse).catch(() => null);
+    if (!r?.at || r.at === this.requested || Date.now() - r.at > 5000) return;
+    this.requested = r.at;
+    if (r.kind === "dir") {
+      const base = this.where?.terminal === r.terminal ? this.where.cwd ?? null : null;
+      setShared("files.root", { dir: r.path, terminal: r.terminal, base, at: r.at });
+      run("layout.select", { stack: "files", child: "files-tree" });
+    } else {
+      setShared("files.open", { file: r.path, at: r.at });
+      run("layout.select", { stack: "files", child: "files-preview" });
+    }
+    run("layout.select", { stack: "panel-body", child: "files" });
+    run("layout.show", { id: "panel" });
   }
 
   loadLinear(cx) {
@@ -204,6 +238,7 @@ export default class TmuxContext extends View {
     if (!terminal || isEditor(terminal)) {
       if (this.where?.tab !== focused()?.tab) this.where = null;
       this.loadContext(cx);
+      this.publish();
       cx.notify();
       return;
     }
@@ -234,6 +269,9 @@ export default class TmuxContext extends View {
 
   publish() {
     const w = this.where;
+    const ctx = this.ctx && { key: this.ctx.key, folder: this.ctx.folder, on: this.ctx.on, git: this.ctx.git };
+    const context = { where: w, ctx };
+    if (JSON.stringify(shared("tmux.context") ?? null) !== JSON.stringify(context)) setShared("tmux.context", context);
     if (!w) return;
     const g = this.ctx?.key === this.ctxKey() ? this.ctx.git : null;
     const published = { terminal: w.terminal, tab: w.tab ?? null, tmux: w.tmux, on: w.on, cwd: w.cwd ?? null, pane: w.pane ?? null, pinned: w.pinned ?? false, branch: g ? g.branch || g.head || null : null };
@@ -248,12 +286,13 @@ export default class TmuxContext extends View {
     cx.spawn(async () => {
       const map = {};
       if (this.where?.tmux && this.where.terminal === terminal) map[terminal] = { cwd: this.where.cwd };
-      for (const other of others) {
+      // All at once; kept in the tab's order, so an unchanged map compares equal.
+      const shown = await Promise.all(others.map(async (other) => {
         const r = await exec(`${home()}/.local/bin/omo-status`, ["where", other], { timeout: 10000 }).catch(() => null);
         const found = r?.code === 0 ? parseWhere(r.stdout) : null;
-        const shown = found && (found.panes.find((p) => p.pane === pins[other]) ?? found.panes.find((p) => p.pane === found.client));
-        if (shown) map[other] = { cwd: shown.path };
-      }
+        return found && (found.panes.find((p) => p.pane === pins[other]) ?? found.panes.find((p) => p.pane === found.client));
+      }));
+      others.forEach((other, i) => { if (shown[i]) map[other] = { cwd: shown[i].path }; });
       if (JSON.stringify(shared("tmux.panes")) !== JSON.stringify(map)) setShared("tmux.panes", map);
     });
   }
@@ -464,8 +503,14 @@ export default class TmuxContext extends View {
     const t = theme();
     if (props()?.picker) return this.picker(t);
     const terminal = focused()?.terminal ?? null, pins = shared("tmux.pins") ?? {};
-    if (terminal !== this.terminal || (terminal && (pins[terminal] ?? null) !== (this.pinSeen ?? null))) this.resolve(cx);
-    if (this.headless) return div();
+    if (this.headless) {
+      if (terminal !== this.terminal || (terminal && (pins[terminal] ?? null) !== (this.pinSeen ?? null))) this.resolve(cx);
+      return div();
+    }
+    const c = shared("tmux.context");
+    this.where = c?.where ?? null;
+    this.ctx = c?.ctx ?? null;
+    if (this.ctx?.git) this.loadPr(cx);
     const w = this.current();
     const folder = this.folder();
     const ctx = this.ctx?.key === this.ctxKey() ? this.ctx : null;
