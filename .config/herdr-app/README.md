@@ -17,6 +17,7 @@ Herdr's desktop app (`herdr-app`, with herdr-core as `hc`) as the window around 
 - `mods/workspace-chrome-tmux/`: Herdr's sidebar header and footer, cloned from `workspace-chrome` in 0.1.13, whose search button opens `picker-tmux`. It uses the shipped mod's icons, since Herdr loads no images through the link.
 - `mods/files-tmux/`, `mods/changes-tmux/`: Herdr's Files and Changes panels, cloned from `files` and `changes` in 0.1.15, showing the folder of the tmux pane you are in rather than where the tmux client started (see Files and Changes). They use the shipped mods' icons.
 - `mods/tmux-context/`: the strip above them: the folder they show and what it is (see Files and Changes).
+- `mods/pane-tmux/`, `mods/workspace-status-tmux/`: Herdr's pane header and status bar, cloned from `pane` and `workspace-status` in 0.1.15, showing the tmux pane's folder and branch (see Files and Changes). The header uses the shipped mod's icons.
 - `mods/omo-board/`: the board view (see Board).
 - `mods/preview/`: the file preview (see Preview).
 - `keys.json`: Herdr's default keys, plus Cmd+P opening `picker-tmux` in the `netrunner` layout. Herdr stops adding its new default shortcuts to a `keys.json` you have edited, so add new ones here by hand.
@@ -109,11 +110,12 @@ Herdr's Files and Changes panels follow the focused terminal's folder, and for a
 - The strip shows the folder (an owt workspace by its name, with its `owt title` beside it) and the repo; the branch with what is to push and pull (↑ ↓), how far it is ahead of and behind the default branch, and the uncommitted files; the Linear issue the branch names; the branch's PR with its state, review and checks (`gh pr view`, read again each minute); and the most urgent omo agent in the session working in that repo, which a click shows (`omo-status show`). A folder on flowstate-remote gets a yellow machine label.
 - Clicking the folder's name (or `tmux-context.pick`, which `keys.json` can bind) lists the session's folders with their agents. Picking one pins the panels to that pane, whatever tmux shows, until you pick "Follow the active pane"; a pink pin marks it. Pins are kept per Herdr terminal in the shared value `tmux.pins`.
 - Linear links come from `~/.config/herdr-app/linear.json`, which maps each Linear workspace to its team keys: `{ "<workspace>": ["ABC", "XYZ"] }`. It stays out of this repo and isn't linked. An issue of a team it doesn't list copies its id instead of opening.
-- Agents are only looked for in the tmux session the client shows. The pane header and the status bar are still Herdr's (`pane`, `workspace-status`), so they show the client's own folder and branch. The Changes panel's Commit button is Herdr's: it commits everything (`git add -A`) in the repo shown.
+- The pane header (`pane-tmux`) shows the folder of the tmux pane each client shows, from the shared value `tmux.panes` that `tmux-context` fills for every tmux client in the shown tab. The status bar (`workspace-status-tmux`) shows that pane's branch, from `tmux.where`. Herdr keeps `tmux-context` running while the panel is hidden, so both stay right with the panel closed.
+- Agents are only looked for in the tmux session the client shows. The Changes panel's Commit button is Herdr's: it commits everything (`git add -A`) in the repo shown.
 
 ## Herdr updates
 
-`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux`, `agents-tmux`, `files-tmux`, `changes-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
+`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux`, `agents-tmux`, `files-tmux`, `changes-tmux`, `pane-tmux`, `workspace-status-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods one by one. A conflict leaves `<<<<<<<` blocks to settle by hand; then check the mod again with `herdr-app check`. Run it when you mean to merge, not as a check: it writes Herdr's pending changes into our copies and records them in `base/`.
 
 ## flowstate-remote
 

@@ -4,8 +4,10 @@
 // Herdr knows a terminal's folder only from its process, and a tmux client's is wherever
 // `tmux attach` started. So this asks `omo-status where <terminal>` which tmux pane the focused
 // client shows and publishes that pane's folder as shared "tmux.where" ({terminal, tmux, cwd, on,
-// pane, pinned}; tmux: false for any other terminal), which files-tmux and changes-tmux show in
-// place of Herdr's. It asks again when Herdr's focus moves, when tmux changes pane, window or
+// pane, pinned, branch}; tmux: false for any other terminal), which files-tmux and changes-tmux show
+// in place of Herdr's and workspace-status-tmux takes its branch from. Every tmux client in the shown
+// tab gets its folder in shared "tmux.panes" ({<terminal>: {cwd}}), for pane-tmux's headers. Herdr
+// keeps this running while the panel is hidden, so the headers and the status bar don't need it open. It asks again when Herdr's focus moves, when tmux changes pane, window or
 // session (.tmux.conf's hooks touch ~/.local/state/omo-status/where/tick, which this watches), and
 // every 3 seconds, for a `cd` and for another machine's tmux, whose hooks can't reach that file.
 //
@@ -199,11 +201,36 @@ export default class TmuxContext extends View {
         const shown = pinned ?? found.panes.find((p) => p.pane === found.client) ?? found.panes.find((p) => p.active);
         this.where = { terminal, tmux: true, on, cwd: shown?.path ?? null, pane: shown?.pane ?? null, pinned: Boolean(pinned), session: found.session, panes: found.panes };
       }
-      const w = this.where;
-      const published = { terminal, tmux: w.tmux, on, cwd: w.cwd ?? null, pane: w.pane ?? null, pinned: w.pinned ?? false };
-      if (JSON.stringify(shared("tmux.where")) !== JSON.stringify(published)) setShared("tmux.where", published);
+      this.publish();
+      this.resolveOthers(cx, terminal);
       this.loadContext(cx);
       cx.notify();
+    });
+  }
+
+  publish() {
+    const w = this.where;
+    if (!w) return;
+    const g = this.ctx?.key === this.ctxKey() ? this.ctx.git : null;
+    const published = { terminal: w.terminal, tmux: w.tmux, on: w.on, cwd: w.cwd ?? null, pane: w.pane ?? null, pinned: w.pinned ?? false, branch: g ? g.branch || g.head || null : null };
+    if (JSON.stringify(shared("tmux.where")) !== JSON.stringify(published)) setShared("tmux.where", published);
+  }
+
+  // The other tmux clients in the shown tab, for their pane headers. A terminal that is no tmux
+  // client is left out, and its header keeps Herdr's folder.
+  resolveOthers(cx, terminal) {
+    const f = focused(), pins = shared("tmux.pins") ?? {};
+    const others = panes().filter((p) => p.tab === f?.tab && p.terminal && p.terminal !== terminal).map((p) => p.terminal);
+    cx.spawn(async () => {
+      const map = {};
+      if (this.where?.tmux && this.where.terminal === terminal) map[terminal] = { cwd: this.where.cwd };
+      for (const other of others) {
+        const r = await exec(`${home()}/.local/bin/omo-status`, ["where", other], { timeout: 10000 }).catch(() => null);
+        const found = r?.code === 0 ? parseWhere(r.stdout) : null;
+        const shown = found && (found.panes.find((p) => p.pane === pins[other]) ?? found.panes.find((p) => p.pane === found.client));
+        if (shown) map[other] = { cwd: shown.path };
+      }
+      if (JSON.stringify(shared("tmux.panes")) !== JSON.stringify(map)) setShared("tmux.panes", map);
     });
   }
 
@@ -222,6 +249,7 @@ export default class TmuxContext extends View {
       this.ctxLoading = null;
       if (this.ctxKey() !== key) return;
       this.ctx = { key, at: Date.now(), folder, on, git };
+      this.publish();
       this.loadPr(cx);
       cx.notify();
     });

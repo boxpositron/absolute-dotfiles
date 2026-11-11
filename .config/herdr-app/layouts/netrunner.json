@@ -115,7 +115,7 @@
                 "pane": {
                   "header": {
                     "content": {
-                      "mod": "pane"
+                      "mod": "pane-tmux"
                     },
                     "reveal": "always",
                     "height": 30,
@@ -189,7 +189,7 @@
           "id": "status",
           "type": "block",
           "content": {
-            "mod": "workspace-status"
+            "mod": "workspace-status-tmux"
           },
           "size": {
             "px": 28

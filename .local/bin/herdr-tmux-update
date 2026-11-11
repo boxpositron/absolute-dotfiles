@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # herdr-tmux-update: carry our Herdr copies onto a new Herdr release.
 #
-# picker-tmux, workspace-chrome-tmux, agents-tmux, files-tmux, changes-tmux and the netrunner
-# layout are copies of Herdr's picker, workspace-chrome, agents, files, changes and main layout
-# with our additions, and Herdr never
+# picker-tmux, workspace-chrome-tmux, agents-tmux, files-tmux, changes-tmux, pane-tmux,
+# workspace-status-tmux and the netrunner layout are copies of Herdr's picker, workspace-chrome,
+# agents, files, changes, pane, workspace-status and main layout with our additions, and Herdr never
 # updates a copy. This merges what Herdr changed in its own versions since we
 # copied them (kept in .config/herdr-app/base/) into ours, with git merge-file,
 # then records the new versions as the base. Run it after Herdr updates; a
@@ -38,8 +38,10 @@ merge workspace-chrome-tmux "$dot/mods/workspace-chrome-tmux/main.js" "$app/mods
 merge agents-tmux "$dot/mods/agents-tmux/main.js" "$app/mods/agents/main.js" "$base/agents.js"
 merge files-tmux "$dot/mods/files-tmux/main.js" "$app/mods/files/main.js" "$base/files.js"
 merge changes-tmux "$dot/mods/changes-tmux/main.js" "$app/mods/changes/main.js" "$base/changes.js"
+merge pane-tmux "$dot/mods/pane-tmux/main.js" "$app/mods/pane/main.js" "$base/pane.js"
+merge workspace-status-tmux "$dot/mods/workspace-status-tmux/main.js" "$app/mods/workspace-status/main.js" "$base/workspace-status.js"
 merge "netrunner layout" "$dot/layouts/netrunner.json" "$app/layouts/main.json" "$base/main.json"
-for mod in picker-tmux workspace-chrome-tmux agents-tmux files-tmux changes-tmux; do
+for mod in picker-tmux workspace-chrome-tmux agents-tmux files-tmux changes-tmux pane-tmux workspace-status-tmux; do
   herdr-app check "$app/mods/$mod" || status=1
 done
 exit "$status"
