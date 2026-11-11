@@ -40,7 +40,11 @@ The ten marketing skills are `product-marketing`, `copywriting`, `copy-editing`,
 - **`web-design-guidelines`**: unchanged. It fetches the current
   [Web Interface Guidelines](https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md)
   when invoked, so its rule feed is intentionally not pinned.
-- **marketing skills**: unchanged. They read a per-project
+- **marketing skills**: each `SKILL.md` frontmatter gains
+  `disable-model-invocation: true`, so they run only through `/skill:<name>` (and
+  `/<name>` in Claude Code). Their descriptions came to about 8 KB, which pushed
+  OmO's skills catalog past its 16 KiB description limit and made it shorten every
+  skill to one line. Otherwise unchanged. They read a per-project
   `.agents/product-marketing.md` for product context, and a project's own copy
   skill overrides their generic direct-response advice. Links to the upstream
   repo's top-level `tools/` directory were not vendored and resolve to nothing.
@@ -54,11 +58,22 @@ The ten marketing skills are `product-marketing`, `copywriting`, `copy-editing`,
   the dotfiles `.gitignore`. Its workflow also copies a starting example into
   `examples/<name>/` inside the skill; delete those copies before committing.
 
+## Catalog size
+
+OmO lists every skill's `description` on each request. Above 16 KiB of
+descriptions it shortens every skill to one line and warns "Context size limits"
+at startup. After adding or upgrading a skill, run `omo --print-prompt-sizes` and
+check the `skills` section. Hide skills you only call by name with
+`disable-model-invocation: true` in their frontmatter; `omo config` turns skills
+off entirely, per user or per project, but its choices live in
+`~/.omo/agent/settings.json`, outside dotfiles.
+
 ## Upgrading
 
 Re-copy the same directories from a newer upstream revision, update the revision
 in the table above, then re-apply the local modifications listed for that skill
-and rerun `link-ai-configs.sh`. For `stageshow`, run
+and rerun `link-ai-configs.sh`. For the marketing skills, add
+`disable-model-invocation: true` back to each `SKILL.md` frontmatter. For `stageshow`, run
 `rsync -a --delete <upstream>/stageshow/ .config/omo/skills/stageshow/` and put the
 narrowed `description` line back in `SKILL.md`. For `impeccable`, re-apply the path
 rewrite:
