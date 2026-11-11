@@ -93,7 +93,7 @@ export default class OmoTmux extends View {
     cx.timer.every(30000, (cx) => cx.notify());
     // Scheduled wake-ups count down here, so no report is sent every second.
     cx.timer.every(1000, (cx) => { if (this.panes.some((p) => p.resumeAt)) cx.notify(); });
-    // keys.json binds "omo-tmux.next" (Cmd+J in the tmux layout): the pane that most needs you.
+    // keys.json binds "omo-tmux.next" (Cmd+J in the netrunner layout): the pane that most needs you.
     cx.spawn(async (cx) => {
       for (;;) {
         if ((await nextCommand()) === "next") await exec(`${home()}/.local/bin/omo-status`, ["next"]);

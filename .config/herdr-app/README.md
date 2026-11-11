@@ -6,16 +6,17 @@ Herdr's desktop app (`herdr-app`, with herdr-core as `hc`) as the window around 
 
 `setup-mac.sh links` links these into `~/.config/herdr-app/`, which holds everything else Herdr writes:
 
-- `settings.json`: Catppuccin Mocha and Latte, following the system's light or dark mode; JetBrainsMono Nerd Font 14 like Ghostty; omo's own `omo-done` and `omo-input` sounds for Herdr's done and blocked alerts; telemetry off.
+- `settings.json`: Catppuccin Mocha and Latte for layouts without a theme of their own, following the system's light or dark mode; JetBrainsMono Nerd Font 14 like Ghostty; omo's own `omo-done` and `omo-input` sounds for Herdr's done and blocked alerts; telemetry off.
 - `themes/catppuccin-mocha.json`, `themes/catppuccin-latte.json`: terminal colours from Catppuccin's Ghostty palettes, plus Herdr panel and status colours from the same palette (blue working, yellow needs you, green done).
+- `themes/netrunner.json`: the `netrunner` layout's own cyberpunk theme (Settings offers it only there): near-black blue terminals, neon ANSI colours, hot pink accent and focus border, cyan working, Cyberpunk yellow needs you, green done. Dark only, whatever the system's mode.
 - `programs.json`: omo with its own name and icon, and in the + menu to start it in a pane of its own.
-- `layouts/tmux.json`: Herdr's main layout, cloned from 0.1.13, with the "omo in tmux" panel under the agents list and the sidebar from `workspace-chrome-tmux`. Herdr no longer updates a cloned layout, so changes to `main` in later releases don't reach it. Switch layouts with Cmd+Shift+L.
+- `layouts/netrunner.json`: Herdr's main layout, cloned from 0.1.13 (called `tmux` until 2026-11-11), with the "omo in tmux" panel under the agents list and the sidebar from `workspace-chrome-tmux`, in the `netrunner` theme with near-square pane corners, a purple sidebar gradient and a cyan divider. Herdr no longer updates a cloned layout, so changes to `main` in later releases don't reach it. Switch layouts with Cmd+Shift+L.
 - `mods/omo-tmux/`: the "omo in tmux" panel.
 - `mods/picker-tmux/`: Herdr's search ("Go to…") with tmux sessions and panes added, cloned from Herdr's `picker` in 0.1.13.
 - `mods/workspace-chrome-tmux/`: Herdr's sidebar header and footer, cloned from `workspace-chrome` in 0.1.13, whose search button opens `picker-tmux`. It uses the shipped mod's icons, since Herdr loads no images through the link.
 - `mods/omo-board/`: the board view (see Board).
 - `mods/preview/`: the file preview (see Preview).
-- `keys.json`: Herdr's default keys, plus Cmd+P opening `picker-tmux` in the `tmux` layout. Herdr stops adding its new default shortcuts to a `keys.json` you have edited, so add new ones here by hand.
+- `keys.json`: Herdr's default keys, plus Cmd+P opening `picker-tmux` in the `netrunner` layout. Herdr stops adding its new default shortcuts to a `keys.json` you have edited, so add new ones here by hand.
 - `omo.svg`: omo's icon. It is copied, not linked: Herdr loads a program icon only from a real file in its folder.
 
 ## omo's status in Herdr
@@ -43,7 +44,7 @@ Inside each session the panes that need you come first, then finished, working, 
 
 ## Search
 
-In the `tmux` layout, Cmd+P and the sidebar's search button open `picker-tmux`: Herdr's "Go to…" list of tabs and spaces, plus tmux. With nothing typed, tmux's sessions fold into one "tmux: N sessions" row; click it to list them. Typing matches sessions by name and panes by window name, program, folder or omo message, so `riga` finds the prawnwire pane working in the riga worktree. Enter or a click shows the session's current pane, or the pane, through `omo-status show`, as the "omo in tmux" panel does. Every tmux pane is searchable, not only omo's. The selection is one highlight that slides to the row you pick, by arrow keys or by moving the pointer (a list scrolling under a still pointer doesn't move it), and "needs you" marks pulse.
+In the `netrunner` layout, Cmd+P and the sidebar's search button open `picker-tmux`: Herdr's "Go to…" list of tabs and spaces, plus tmux. With nothing typed, tmux's sessions fold into one "tmux: N sessions" row; click it to list them. Typing matches sessions by name and panes by window name, program, folder or omo message, so `riga` finds the prawnwire pane working in the riga worktree. Enter or a click shows the session's current pane, or the pane, through `omo-status show`, as the "omo in tmux" panel does. Every tmux pane is searchable, not only omo's. The selection is one highlight that slides to the row you pick, by arrow keys or by moving the pointer (a list scrolling under a still pointer doesn't move it), and "needs you" marks pulse.
 
 The cloned picker, sidebar chrome and layout don't get Herdr's later changes to the shipped ones. To pick those up, clone again from the new release and carry the tmux additions over.
 
@@ -60,7 +61,7 @@ A session attached in Ghostty and in Herdr at once is sized to whichever client 
 ## Attention
 
 - The panel is an inbox: panes that need you, failed, finished, working or running something in the background, with idle ones folded into an "N idle" row that opens them.
-- Cmd+J in the `tmux` layout (`omo-tmux.next` in `keys.json`, `omo-status next` from a shell) shows the pane that most needs you: a question or a failure, then a finished turn, the longest waiting first. Looking at it clears it, so pressing again moves on.
+- Cmd+J in the `netrunner` layout (`omo-tmux.next` in `keys.json`, `omo-status next` from a shell) shows the pane that most needs you: a question or a failure, then a finished turn, the longest waiting first. Looking at it clears it, so pressing again moves on.
 - A tmux session holding several agents shows its most urgent state. Herdr's Agents list has one entry per session and names that pane and the queue behind it (`needs you · reoclo: which server? (+1 more)`). Going to the session selects the pane that most needs you (a failure, a question, then a finished turn, the longest waiting first) and clears only that pane, so the session keeps its next state and the next visit goes to the next pane, until it falls to working, background or idle. A click on a panel row or board card that needs you goes to that pane; a click on one that doesn't goes to the session's most urgent pane instead. Herdr sends tmux no focus event, so a click in its Agents list is seen as a change of Herdr's focused terminal, within the panel's two-second refresh.
 - Herdr's agents list reads "<space> · <work>": `omo-status` names a session's Herdr tab after its most urgent pane's window (an `owt` title) or task, and sends it as the report's OSC 7501 `title`. Only tabs still called by their number, or by the label it set, change.
 - omo sends no Stop hook while a background task (a terminal monitor, a child session) is live, so a finished turn could stay "working". `omo-notify` records each pane's transcript (`@omo_transcript`), and `omo-status list` reads the transcript's last `session-lifecycle` entry. A pane with terminal monitors, background commands, detached eval cells or child sessions still live goes to `background` (a purple dot on its tab), as does a pane with a job in `~/.omo/agent/schedule/pending/`; one waiting on nothing real goes to idle. omo's own plumbing in that entry (queued deliveries, goal timers, open questions) doesn't count.
@@ -71,7 +72,7 @@ A session attached in Ghostty and in Herdr at once is sized to whichever client 
 
 ## Board
 
-Cmd+Shift+B in the `tmux` layout, or the screen button in the "omo in tmux" panel's header, opens the board (`mods/omo-board`): every omo session on every machine the omo board knows, read every five seconds from agent-state (`127.0.0.1:4747`, through the omo board's tunnel). Sessions sit in five columns: Needs you (an open question or a blocked goal, oldest first), Working, Background (the turn is over but a build, watcher or child session still runs), Done (finished in the last day) and Idle. A card shows the session's title, its machine, project and tmux target, the question waiting or the "For you" part of its last report, its to-do progress, and a dot for how recently it was active: hot under an hour, warm under a day, dim after that. A click runs `omo-status open`, which shows the session in its Herdr space, or a new one, server sessions included. Sessions not in tmux can't be shown from here.
+Cmd+Shift+B in the `netrunner` layout, or the screen button in the "omo in tmux" panel's header, opens the board (`mods/omo-board`): every omo session on every machine the omo board knows, read every five seconds from agent-state (`127.0.0.1:4747`, through the omo board's tunnel). Sessions sit in five columns: Needs you (an open question or a blocked goal, oldest first), Working, Background (the turn is over but a build, watcher or child session still runs), Done (finished in the last day) and Idle. A card shows the session's title, its machine, project and tmux target, the question waiting or the "For you" part of its last report, its to-do progress, and a dot for how recently it was active: hot under an hour, warm under a day, dim after that. A click runs `omo-status open`, which shows the session in its Herdr space, or a new one, server sessions included. Sessions not in tmux can't be shown from here.
 
 Telegram's "Open on Mac" button (omo-assistant) runs the same `omo-status open` on the Mac through the board, and brings Herdr forward. `omo-presence` tells omo-assistant whether you are at the Mac (Herdr in front, screen unlocked, keyboard or mouse used in the last five minutes); while you are, it keeps a session's questions and errors off Telegram, since Herdr alerts you.
 
@@ -98,7 +99,7 @@ Watch out:
 
 ## Herdr updates
 
-`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux` and the `tmux` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
+`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
 
 ## flowstate-remote
 

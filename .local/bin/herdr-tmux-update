@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # herdr-tmux-update: carry our Herdr copies onto a new Herdr release.
 #
-# picker-tmux, workspace-chrome-tmux and the tmux layout are copies of Herdr's
+# picker-tmux, workspace-chrome-tmux and the netrunner layout are copies of Herdr's
 # picker, workspace-chrome and main layout with our additions, and Herdr never
 # updates a copy. This merges what Herdr changed in its own versions since we
 # copied them (kept in .config/herdr-app/base/) into ours, with git merge-file,
@@ -34,6 +34,6 @@ merge() {
 
 merge picker-tmux "$dot/mods/picker-tmux/main.js" "$app/mods/picker/main.js" "$base/picker.js"
 merge workspace-chrome-tmux "$dot/mods/workspace-chrome-tmux/main.js" "$app/mods/workspace-chrome/main.js" "$base/workspace-chrome.js"
-merge "tmux layout" "$dot/layouts/tmux.json" "$app/layouts/main.json" "$base/main.json"
+merge "netrunner layout" "$dot/layouts/netrunner.json" "$app/layouts/main.json" "$base/main.json"
 herdr-app check "$app/mods/picker-tmux" && herdr-app check "$app/mods/workspace-chrome-tmux" || status=1
 exit "$status"

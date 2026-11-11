@@ -50,7 +50,8 @@ local_servers
 .config/herdr-app/programs.json
 .config/herdr-app/themes/catppuccin-mocha.json
 .config/herdr-app/themes/catppuccin-latte.json
-.config/herdr-app/layouts/tmux.json
+.config/herdr-app/themes/netrunner.json
+.config/herdr-app/layouts/netrunner.json
 .config/herdr-app/mods/omo-tmux
 .config/herdr-app/mods/picker-tmux
 .config/herdr-app/mods/workspace-chrome-tmux

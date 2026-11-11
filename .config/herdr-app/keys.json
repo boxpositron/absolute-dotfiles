@@ -70,7 +70,7 @@
     "cmd-right": "send:\u0005",
     "cmd-backspace": "send:\u0015"
   },
-  "layout:tmux": {
+  "layout:netrunner": {
     "cmd-p": "mod.open:picker-tmux",
     "cmd-j": "omo-tmux.next",
     "cmd-shift-b": "mod.open:omo-board"

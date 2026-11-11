@@ -32,7 +32,7 @@
                 "mod": "spaces"
               },
               "size": {
-                "weight": 1
+                "weight": 0.63
               },
               "min": 90
             },
@@ -43,7 +43,7 @@
                 "mod": "agents"
               },
               "size": {
-                "weight": 1
+                "weight": 1.24
               },
               "min": 90
             },
@@ -51,7 +51,7 @@
               "id": "omo-tmux",
               "type": "block",
               "size": {
-                "weight": 1
+                "weight": 1.13
               },
               "min": 90,
               "content": {
@@ -75,11 +75,17 @@
         }
       ],
       "size": {
-        "px": 268
+        "px": 424
       },
       "min": 44,
       "max": 480,
-      "background": "chrome",
+      "background": {
+        "gradient": [
+          "#160b30",
+          "#07060f"
+        ],
+        "angle": 180
+      },
       "resizable": false
     },
     {
@@ -124,7 +130,7 @@
                     "width": 1,
                     "color": "accent"
                   },
-                  "radius": 10,
+                  "radius": 3,
                   "gap": 8,
                   "lone": true
                 }
@@ -157,7 +163,7 @@
                 }
               ],
               "size": {
-                "px": 368
+                "px": 712
               },
               "min": 280,
               "max": 900,
@@ -181,14 +187,21 @@
       "resizable": false
     }
   ],
-  "background": "canvas",
+  "background": {
+    "gradient": [
+      "#140a2a",
+      "#05050b"
+    ],
+    "angle": 160
+  },
+  "theme": "netrunner",
   "terminal_padding": [
     14,
     12
   ],
   "divider": {
     "width": 1,
-    "color": "border"
+    "color": "#00f0ff40"
   },
   "titlebar": "none",
   "traffic_lights": [

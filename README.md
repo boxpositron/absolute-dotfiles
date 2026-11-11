@@ -140,8 +140,8 @@ Key features:
 - Does not auto-attach tmux; start or attach sessions yourself
 
 #### Herdr (`.config/herdr-app/`)
-- Herdr desktop app themed to match tmux: Catppuccin Mocha and Latte following the system appearance, JetBrainsMono Nerd Font 14, omo's own sounds, telemetry off
-- A `tmux` layout whose sidebar adds an "omo in tmux" panel listing every omo pane in every tmux session, with its state and message; a click shows that pane
+- Herdr desktop app themed to match tmux: the `netrunner` layout's cyberpunk theme (other layouts use Catppuccin Mocha and Latte, following the system appearance), JetBrainsMono Nerd Font 14, omo's own sounds, telemetry off
+- A `netrunner` layout whose sidebar adds an "omo in tmux" panel listing every omo pane in every tmux session, with its state and message; a click shows that pane
 - Search (Cmd+P, or the sidebar's search button) also finds tmux sessions and panes, by session name, window name, program, folder or omo message, and goes to the one you pick
 - A tmux session can have a Herdr space of its own: opening one from the panel or search makes it, and the panel's spaces button makes one for every session running omo, so Herdr's sidebar lists your sessions and its Agents list shows each one's status
 - omo shows its status in Herdr from inside tmux through `omo-status`; see [its README](.config/herdr-app/README.md)

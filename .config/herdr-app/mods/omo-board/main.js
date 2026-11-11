@@ -7,7 +7,7 @@
 // report, its to-do progress and how recently it was active: hot under an hour,
 // warm under a day, cold after that. A click shows the session in Herdr with
 // `omo-status open` (its space, or a new one; other machines' sessions too). Cmd+Shift+B
-// opens it in the tmux layout, as does the "omo in tmux" panel's board button.
+// opens it in the netrunner layout, as does the "omo in tmux" panel's board button.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
