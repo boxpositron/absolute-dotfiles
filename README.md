@@ -315,7 +315,7 @@ A lightweight tmux configuration (`.tmux-server.conf`) is available for remote s
 | Status bar | Top | Bottom |
 | Prefix key | `Ctrl+b` | `Ctrl+/` |
 | Plugins | Full (TPM, sessionx, floax, etc.) | None |
-| Theme | Netrunner (dark cyberpunk, matches Herdr) | Simple minimal |
+| Theme | Netrunner (dark cyberpunk, matches Herdr) | Cyberpunk yellow bar, so a remote session never passes for the Mac's |
 
 ### Quick Setup on Remote Server
 
