@@ -46,17 +46,6 @@
                 "weight": 1.24
               },
               "min": 90
-            },
-            {
-              "id": "omo-tmux",
-              "type": "block",
-              "size": {
-                "weight": 1.13
-              },
-              "min": 90,
-              "content": {
-                "mod": "omo-tmux"
-              }
             }
           ]
         },
@@ -206,6 +195,20 @@
                       "content": {
                         "mod": "changes-tmux"
                       }
+                    },
+                    {
+                      "id": "mcp",
+                      "type": "block",
+                      "content": {
+                        "mod": "mcp-tmux"
+                      }
+                    },
+                    {
+                      "id": "omo",
+                      "type": "block",
+                      "content": {
+                        "mod": "omo-tmux"
+                      }
                     }
                   ],
                   "active": "files"
@@ -223,14 +226,60 @@
           "gap": 8
         },
         {
-          "id": "status",
-          "type": "block",
-          "content": {
-            "mod": "workspace-status-tmux"
-          },
+          "id": "status-row",
+          "type": "row",
           "size": {
             "px": 28
-          }
+          },
+          "resizable": false,
+          "children": [
+            {
+              "id": "status",
+              "type": "block",
+              "content": {
+                "mod": "workspace-status-tmux"
+              }
+            },
+            {
+              "id": "data-tmux-context",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "tmux-context",
+                "props": {
+                  "headless": true
+                }
+              }
+            },
+            {
+              "id": "data-omo-tmux",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "omo-tmux",
+                "props": {
+                  "headless": true
+                }
+              }
+            },
+            {
+              "id": "data-mcp-tmux",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "mcp-tmux",
+                "props": {
+                  "headless": true
+                }
+              }
+            }
+          ]
         }
       ],
       "resizable": false

@@ -435,14 +435,28 @@ export default class Agents extends View {
             .justify_between()
             .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
             .child(
-              div()
-                .id("ag-sort")
-                .text_size(11)
-                .text_color(t.dim)
-                .hover((s) => s.text_color(t.foreground))
-                .on_click(() => openOverlay({ mod: "agents-tmux", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
-                .tooltip(`Sort agents: ${sort.label}`)
-                .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
+              h_flex()
+                .gap(10)
+                .items_center()
+                .child(
+                  div()
+                    .id("ag-board")
+                    .text_color(t.dim)
+                    .hover((s) => s.text_color(t.foreground))
+                    .on_click(() => run("mod.open", { name: "omo-board" }))
+                    .tooltip("Board: every omo session on both machines (Cmd+Shift+B)")
+                    .child(svg("mods/workspace-chrome/monitor.svg").size(14)),
+                )
+                .child(
+                  div()
+                    .id("ag-sort")
+                    .text_size(11)
+                    .text_color(t.dim)
+                    .hover((s) => s.text_color(t.foreground))
+                    .on_click(() => openOverlay({ mod: "agents-tmux", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
+                    .tooltip(`Sort agents: ${sort.label}`)
+                    .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
+                ),
             ),
         ),
       )

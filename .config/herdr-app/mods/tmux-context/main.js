@@ -131,17 +131,24 @@ const label = (p) => p.name || (GENERIC.has(p.windowName) ? base(p.path) || "~" 
 export default class TmuxContext extends View {
   init(_props, cx) {
     if (props()?.picker) return;
+    // Herdr starts a block only once it shows, and the side panel is often closed: then nothing would
+    // publish tmux.where for the pane headers, the status bar and the panels. A hidden copy beside the
+    // status bar (props {headless: true}) follows tmux and publishes it, takes the keys (they reach
+    // shown copies only, and one picker is enough), and skips what only the strip draws (PRs, Linear).
+    this.headless = Boolean(props()?.headless);
     this.terminal = undefined;
     this.where = null;
     this.ctx = null;
     this.prs = new Map();
     this.linear = {};
-    this.loadLinear(cx);
+    if (!this.headless) {
+      this.loadLinear(cx);
+      cx.timer.every(300000, (cx) => this.loadLinear(cx));
+    }
     this.resolve(cx);
     cx.timer.every(POLL, (cx) => this.resolve(cx));
-    cx.timer.every(300000, (cx) => this.loadLinear(cx));
     // `tmux-context.pick` (a key in keys.json, or `herdr-app do tmux-context.pick`) opens the folder list.
-    cx.spawn(async () => {
+    if (this.headless) cx.spawn(async () => {
       for (;;) if ((await nextCommand()) === "pick") this.openPicker();
     });
     // tmux's hooks touch the tick file when a client changes pane, window or session.
@@ -254,7 +261,7 @@ export default class TmuxContext extends View {
   loadContext(cx) {
     const key = this.ctxKey(), folder = this.folder(), on = this.current()?.on ?? machineOf(focused()?.terminal);
     if (!folder) return;
-    if (this.ctx?.key === key && Date.now() - this.ctx.at < GIT_EVERY) return this.loadPr(cx);
+    if (this.ctx?.key === key && Date.now() - this.ctx.at < GIT_EVERY) return this.headless ? undefined : this.loadPr(cx);
     if (this.ctxLoading === key) return;
     this.ctxLoading = key;
     cx.spawn(async (cx) => {
@@ -267,7 +274,7 @@ export default class TmuxContext extends View {
       if (this.ctxKey() !== key) return;
       this.ctx = { key, at: Date.now(), folder, on, git };
       this.publish();
-      this.loadPr(cx);
+      if (!this.headless) this.loadPr(cx);
       cx.notify();
     });
   }
@@ -458,6 +465,7 @@ export default class TmuxContext extends View {
     if (props()?.picker) return this.picker(t);
     const terminal = focused()?.terminal ?? null, pins = shared("tmux.pins") ?? {};
     if (terminal !== this.terminal || (terminal && (pins[terminal] ?? null) !== (this.pinSeen ?? null))) this.resolve(cx);
+    if (this.headless) return div();
     const w = this.current();
     const folder = this.folder();
     const ctx = this.ctx?.key === this.ctxKey() ? this.ctx : null;

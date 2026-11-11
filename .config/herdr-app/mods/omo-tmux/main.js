@@ -14,10 +14,16 @@
 // come first, and a row that moves slides from where it was, a new one fades in
 // from above, one that goes fades out where it was (150ms ease-out). "Needs you"
 // pulses, and a pane that just finished flashes green once.
+//
+// It is a view of the netrunner layout's side panel (panel-body "omo"), opened and closed by the
+// status bar's omo chip. Herdr starts a block only once it shows and gives keys to shown copies only,
+// and the panel is often closed, so a hidden copy beside the status bar (props {headless: true}) runs
+// `omo-status list` and Cmd+J: it publishes the list in shared "omo.list" for this panel and the
+// counts in "omo.tmux" for the chip. The panel only draws.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, home, layout, nextCommand, run, theme } from "herdr";
+import { exec, home, nextCommand, run, theme, shared, setShared, props } from "herdr";
 
 const SEP = "|^|";
 const RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
@@ -29,17 +35,6 @@ const MOTION = { duration: 150, easing: "ease-out" };
 const HEAD_H = 26;
 const ROW_H = 30;
 const ROW_MSG_H = 44;
-
-function find(node, id) {
-  if (node?.id === id) return node;
-  for (const child of node?.children ?? []) {
-    const found = find(child, id);
-    if (found) return found;
-  }
-  return null;
-}
-
-const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
 // Time left to a scheduled wake-up: m:ss under an hour, then hours and minutes.
 function countdown(ms) {
@@ -81,29 +76,36 @@ function sessionsWithUrgentPanesFirst(panes) {
 
 export default class OmoTmux extends View {
   init(_props, cx) {
+    this.headless = Boolean(props()?.headless);
     this.panes = [];
     this.last = null;
     this.problem = null;
     this.states = new Map();
     this.flash = new Map();
     this.motion = null;
-    this.refresh(cx);
-    cx.timer.every(2000, (cx) => this.refresh(cx));
+    if (this.headless) {
+      this.refresh(cx);
+      cx.timer.every(2000, (cx) => this.refresh(cx));
+      // keys.json binds "omo-tmux.next" (Cmd+J in the netrunner layout): the pane that most needs you.
+      cx.spawn(async (cx) => {
+        for (;;) {
+          if ((await nextCommand()) === "next") await exec(`${home()}/.local/bin/omo-status`, ["next"]);
+          this.refresh(cx);
+        }
+      });
+      return;
+    }
+    // Herdr's tabs mod brings a space's panel back on return only for the panels listed here.
+    const panels = shared("workspace.panels") ?? ["files", "changes"];
+    if (!panels.includes("omo")) setShared("workspace.panels", [...panels, "omo"]);
     // The times on the rows count up.
     cx.timer.every(30000, (cx) => cx.notify());
     // Scheduled wake-ups count down here, so no report is sent every second.
     cx.timer.every(1000, (cx) => { if (this.panes.some((p) => p.resumeAt)) cx.notify(); });
-    // keys.json binds "omo-tmux.next" (Cmd+J in the netrunner layout): the pane that most needs you.
-    cx.spawn(async (cx) => {
-      for (;;) {
-        if ((await nextCommand()) === "next") await exec(`${home()}/.local/bin/omo-status`, ["next"]);
-        this.refresh(cx);
-      }
-    });
   }
 
   refresh(cx) {
-    if (this.busy) return;
+    if (!this.headless || this.busy) return;
     this.busy = true;
     cx.spawn(async (cx) => {
       let out = "";
@@ -121,9 +123,19 @@ export default class OmoTmux extends View {
       this.last = out;
       this.problem = problem;
       this.panes = parse(out);
-      this.noteFinished(cx);
-      cx.notify();
+      setShared("omo.list", { out, problem });
+      this.publish();
     });
+  }
+
+  publish() {
+    const count = (...states) => this.panes.filter((p) => states.includes(p.state)).length;
+    const summary = { panes: this.panes.length, needs: count("input", "error"), working: count("working", "background"), done: count("done") };
+    if (JSON.stringify(shared("omo.tmux") ?? null) !== JSON.stringify(summary)) setShared("omo.tmux", summary);
+  }
+
+  badge(t, text, color) {
+    return div().px(5).py(1).flex_none().rounded(4).border_1().border_color(t.border).text_size(10).text_color(color ?? t.muted).child(text);
   }
 
   // A pane that has just come to done flashes once: drawn lit, then let fade.
@@ -245,17 +257,19 @@ export default class OmoTmux extends View {
   }
 
   render(cx) {
+    if (this.headless) return div();
+    const list = shared("omo.list");
+    if (list && (list.out !== this.last || list.problem !== this.problem)) {
+      this.last = list.out;
+      this.problem = list.problem;
+      this.panes = parse(list.out ?? "");
+      this.noteFinished(cx);
+    }
     const t = theme();
     const now = Date.now();
     const idle = this.panes.filter((p) => p.state === "idle").length;
     const sessions = sessionsWithUrgentPanesFirst(this.showIdle ? this.panes : this.panes.filter((p) => p.state !== "idle"));
-
-    if (narrow()) {
-      return v_flex().size_full().min_h(0).bg(t.chrome).border_t(1).border_color(t.border).pt(6)
-        .children(sessions.flatMap((s) => s.panes).map((p) => h_flex().id(`omo-${p.pane}`).h(26).flex_none().items_center().justify_center()
-          .hover((s) => s.bg(t.hover)).tooltip(`${p.session}: ${p.msg || p.project}`)
-          .on_click((_e, cx) => this.open(p, cx)).child(this.status(t, p.state === "input" || p.state === "error" ? "done" : p.state))));
-    }
+    const needs = this.panes.filter((p) => p.state === "input" || p.state === "error").length;
 
     const items = [];
     let y = 0;
@@ -276,7 +290,7 @@ export default class OmoTmux extends View {
     const fly = (x) => {
       const f = m.fly[x.key];
       // The panel's own background, so a row sliding over another hides it instead of mixing their text.
-      return div().id(`fly-${x.key}-${m.gen[x.key] ?? 0}`).flex_none().relative().bg(t.chrome)
+      return div().id(`fly-${x.key}-${m.gen[x.key] ?? 0}`).flex_none().relative().bg(t.background)
         .top(f?.top ?? 0).opacity(f?.fade ? 0 : 1).transition("top", MOTION).transition("opacity", MOTION)
         .child(x.draw());
     };
@@ -284,21 +298,13 @@ export default class OmoTmux extends View {
     const leaving = (x) => div().id(`leaving-${x.key}-${m.step}`).absolute().left(8).right(8).top(x.y)
       .opacity(m.leaving ? 0 : 1).transition("opacity", MOTION).child(x.draw());
 
-    const empty = this.problem ?? (idle ? "Nothing needs you." : "No omo running in tmux.");
-    return v_flex()
-      .size_full()
-      .min_h(0)
-      .bg(t.chrome)
-      .border_t(1)
-      .border_color(t.border)
-      .text_size(13)
-      .child(h_flex().px(16).h(41).pt(14).pb(5).flex_none().items_center().justify_between()
-        .child(div().flex_1().text_size(11.5).font_medium().text_color(t.dim).child("omo in tmux"))
-        .child(div().id("omo-board").size(22).flex_none().flex().items_center().justify_center().rounded(5)
-          .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer()
-          .tooltip("Board: every omo session on both machines (Cmd+Shift+B)")
-          .on_click(() => run("mod.open", { name: "omo-board" }))
-          .child(svg("mods/workspace-chrome/monitor.svg").size(14)))
+    const empty = !list ? "Reading omo-status…" : this.problem ?? (idle ? "Nothing needs you." : "No omo running in tmux.");
+    return v_flex().id("omo").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
+        .child(div().font_semibold().child("omo in tmux"))
+        .child(this.badge(t, `${this.panes.length} pane${this.panes.length === 1 ? "" : "s"}`))
+        .when(needs > 0, (el) => el.child(this.badge(t, `${needs} need${needs === 1 ? "s" : ""} you`, t.blocked)))
+        .child(div().flex_1())
         .child(div().id("omo-spaces").size(22).flex_none().flex().items_center().justify_center().rounded(5)
           .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer()
           .tooltip("Give every tmux session running omo its own space")
@@ -306,8 +312,8 @@ export default class OmoTmux extends View {
           .child(this.syncing
             ? svg("mods/workspace-chrome/spinner.svg").size(13).text_color(t.working).spin(900)
             : svg("mods/workspace-chrome/layers.svg").size(14))))
-      .when(sessions.length === 0, (el) => el.child(div().px(16).text_size(12).text_color(t.dim).child(empty)))
-      .child(v_flex().id("omo-list").relative().flex_1().min_h(0).px(8).overflow_y_scrollbar().mode("always")
+      .when(sessions.length === 0, (el) => el.child(div().px(12).py(8).text_size(12).text_color(t.dim).child(empty)))
+      .child(v_flex().id("omo-list").relative().flex_1().min_h(0).px(8).pb(6).overflow_y_scrollbar().mode("always")
         .children([...m.exits.map(leaving), ...items.map(fly)]));
   }
 }
