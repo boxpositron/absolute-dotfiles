@@ -23,6 +23,10 @@ Every file path or link you show must open as written: the user clicks paths and
 - In chat replies, link a local file as `[label](path)` or show the bare path. Do not use image syntax (`![alt](path)`) there: the terminal shows only the alt text, so the path is lost.
 - In chat replies, put a bare file or folder path in backticks (`~/Desktop/Screenshot 2026-11-11 at 16.29.10.png`), so a click anywhere on it opens the whole path, spaces and all.
 
+## Test runs
+
+Agents share the machine with the user's apps and with other agents, and test runners start one worker per CPU core by default. Cap test workers at 3: `jest --maxWorkers=3`, `vitest --maxWorkers=3`, and `pytest -n 3` with pytest-xdist instead of `-n auto`. Keep a project's own limit when it is lower.
+
 ## Client work
 
 Some work is done for clients and is tracked. In omo, the `omo-work` hook names the client in each prompt's context when a session works in a client's code, and the user may also say that work is for a client. Before changing anything for that work, read `~/.config/omo-work/rules.md` and follow it: it says how the work is scoped, billed and tracked, and it stays out of this shared file. A question or a read-only look needs none of this. If that file is missing, say so and ask the user how to proceed.
