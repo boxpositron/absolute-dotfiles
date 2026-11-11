@@ -22,7 +22,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, home, appHome, focused, panes, spaces, readTextFile, watchFolder, shared, setShared, theme, props, openOverlay, closeOverlay, notify, nextCommand } from "herdr";
+import { exec, home, appHome, focused, panes, spaces, terminals, readTextFile, watchFolder, shared, setShared, theme, props, openOverlay, closeOverlay, notify, nextCommand } from "herdr";
 
 const SEP = "|^|";
 const RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
@@ -122,6 +122,10 @@ function foldersOf(list) {
   });
 }
 
+// The Files panel's own nvim (preview mod), shown in the panel: not a terminal of the tab.
+// Focus reports the layout block's terminal by the name the block gives, "files-nvim".
+const isEditor = (terminal) => terminal === "files-nvim" || terminals().some((x) => x.address === terminal && x.name === "files-nvim");
+
 const label = (p) => p.name || (GENERIC.has(p.windowName) ? base(p.path) || "~" : p.windowName);
 
 export default class TmuxContext extends View {
@@ -169,11 +173,11 @@ export default class TmuxContext extends View {
   }
 
   // The resolved tmux pane that applies to what has focus: the focused terminal's or, for a mod pane
-  // (a preview opened beside a tmux client), the one its tab showed last.
+  // (a preview opened beside a tmux client) or the Files panel's nvim, the one its tab showed last.
   current() {
     const f = focused(), w = this.where;
     if (!w) return null;
-    return f?.terminal ? (w.terminal === f.terminal ? w : null) : f?.tab && w.tab === f.tab ? w : null;
+    return f?.terminal && !isEditor(f.terminal) ? (w.terminal === f.terminal ? w : null) : f?.tab && w.tab === f.tab ? w : null;
   }
 
   folder() {
@@ -190,7 +194,7 @@ export default class TmuxContext extends View {
     if (this.resolving) { this.again = true; return; }
     const terminal = focused()?.terminal ?? null;
     this.terminal = terminal;
-    if (!terminal) {
+    if (!terminal || isEditor(terminal)) {
       if (this.where?.tab !== focused()?.tab) this.where = null;
       this.loadContext(cx);
       cx.notify();

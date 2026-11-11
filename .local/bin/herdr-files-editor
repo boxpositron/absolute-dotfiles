@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# herdr-files-editor: the editor of Herdr's Files panel. It runs as the terminal named files-nvim,
+# which the netrunner layout's files-edit block shows, and it never exits: a terminal that ends
+# takes its layout block with it, and Herdr then rewrites the layout file.
+#
+# The preview mod types "<folder><TAB><file>" into it (`hc send`). It opens the file in nvim from
+# that folder and, while nvim runs, keeps the file's path in ~/.local/state/herdr-files/editing.
+# When nvim quits it writes ~/.local/state/herdr-files/closed, which the preview watches to come
+# back. Between files it waits on a cleared screen; Ctrl+C and end of input don't end it.
+
+state="${XDG_STATE_HOME:-$HOME/.local/state}/herdr-files"
+mkdir -p "$state"
+rm -f "$state/editing"
+trap '' INT
+
+while :; do
+  printf '\033[2J\033[3J\033[H'
+  stty -echo 2>/dev/null
+  if ! IFS=$'\t' read -r folder file; then
+    sleep 1
+    continue
+  fi
+  stty echo 2>/dev/null
+  [[ -n $file ]] || continue
+  cd -- "$folder" 2>/dev/null || cd -- "${file%/*}" 2>/dev/null
+  printf '%s\n' "$file" >"$state/editing"
+  nvim -- "$file"
+  rm -f "$state/editing"
+  printf '%s %s %s\n' "$(date +%s)" "$RANDOM" "$file" >"$state/closed"
+done

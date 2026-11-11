@@ -2,23 +2,38 @@
 // files-tmux: Herdr's `files` (base/files.js; herdr-tmux-update merges Herdr's later changes in)
 // for tmux clients. A client's own folder is only where `tmux attach` started, so this shows the
 // folder of the tmux pane the client shows, which tmux-context publishes as shared "tmux.where".
+// A file on this Mac opens in the preview mod beside the tree (the layout's files-preview block,
+// through shared "files.open"), where Edit runs nvim in the panel; another machine's files keep
+// Herdr's read-only view, as the preview reads this Mac's files only.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared, terminals, layout, run } from "herdr";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
   const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  // A mod pane (a preview opened beside a tmux client) keeps the folder its tab's client showed.
+  // A mod pane (a preview opened beside a tmux client), or the panel's own nvim, keeps the folder
+  // its tab's client showed.
   const where = shared("tmux.where");
-  const mine = f?.terminal ? where?.terminal === f.terminal : Boolean(f?.tab) && where?.tab === f.tab;
+  // The layout's block names its terminal "files-nvim", and focus reports it by that name.
+  const editor = f?.terminal === "files-nvim" || (Boolean(f?.terminal) && terminals().some((x) => x.address === f.terminal && x.name === "files-nvim"));
+  const mine = f?.terminal && !editor ? where?.terminal === f.terminal : Boolean(f?.tab) && where?.tab === f.tab;
   // Until tmux-context has looked at this terminal, nothing: not the client's folder for a moment.
-  if (f?.terminal && !mine) return { cwd: null, on, space: space?.id, pending: true };
+  if (f?.terminal && !editor && !mine) return { cwd: null, on, space: space?.id, pending: true };
   if (mine && where.tmux) return { cwd: where.cwd, on: where.on ?? on, space: space?.id };
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }
 const key = () => JSON.stringify(location());
+
+function find(node, id) {
+  if (node?.id === id) return node;
+  for (const child of node?.children ?? []) {
+    const found = find(child, id);
+    if (found) return found;
+  }
+  return null;
+}
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
 const PER_FOLDER = 500, TOTAL = 5000;
 
@@ -81,6 +96,8 @@ export default class Files extends View {
   refresh(cx) {
     const { cwd, on } = location(), next = key();
     if (next !== this.context?.key) {
+      // Somewhere else now: the tree again, not the last folder's preview (an open nvim keeps running).
+      if (this.context && find(layout(), "files")?.active !== "files-tree") run("layout.select", { stack: "files", child: "files-tree" });
       if (this.context) this.saved.set(this.context.key, { folders: this.folders, file: this.file });
       const saved = this.saved.get(next);
       this.context = { key: next, cwd, on }; this.root = cwd; this.on = on; this.entries = new Map(); this.folders = new Set(saved?.folders);
@@ -136,6 +153,12 @@ export default class Files extends View {
     cx.notify();
   }
 
+  open(path, cx) {
+    if (this.on) return this.show(path, cx);
+    setShared("files.open", { file: `${this.root}/${path}`, at: Date.now() });
+    run("layout.select", { stack: "files", child: "files-preview" });
+  }
+
   show(path, cx) {
     this.code?.release(); this.code = null; this.file = path; this.fileError = null;
     if (!path || !cx) return;
@@ -162,7 +185,7 @@ export default class Files extends View {
       if (out.length >= TOTAL) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
-        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.show(path, cx))
+        .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.open(path, cx))
         .child(entry.dir ? svg(`mods/files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(`mods/files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().child(entry.name))

@@ -24,10 +24,27 @@
 // below the preview, in the file's folder, so the preview follows each save); Esc closes
 // the preview when it is shown as an overlay. The file's folder is watched, so the
 // preview follows edits (the Editor keeps its scroll position).
+//
+// In the Files panel (the netrunner layout's files-preview block, props {panel: "files"}) it shows
+// the file Files puts in shared "files.open", "Files" (or Esc) goes back to the tree, and Edit
+// runs nvim in the panel itself: the terminal named files-nvim (herdr-files-editor), which the
+// layout's files-edit block shows. Quitting nvim brings the preview back, reloaded.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, Editor, EditorState } from "gpui-base";
-import { exec, home, appHome, theme, props, settings, watchFolder, notify, closeOverlay, nextCommand, run as herdrRun } from "herdr";
+import { exec, home, appHome, theme, props, settings, watchFolder, readTextFile, notify, closeOverlay, nextCommand, shared, terminals, hc, layout, run as herdrRun } from "herdr";
+
+const EDITOR = "files-nvim";
+const editorState = () => `${home()}/.local/state/herdr-files`;
+
+function findNode(node, id) {
+  if (node?.id === id) return node;
+  for (const child of node?.children ?? []) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return null;
+}
 
 const MAX_BYTES = 1048576;
 const MAX_LINES = 20000;
@@ -314,7 +331,9 @@ async function build(path) {
 export default class Preview extends View {
   init(_props, cx) {
     const p = props() ?? {};
-    this.path = expand(p.file ?? p.path);
+    this.panel = p.panel ?? null;
+    this.opened = this.panel ? shared("files.open") : null;
+    this.path = expand(this.panel ? this.opened?.file : p.file ?? p.path);
     this.history = [];
     this.mode = p.mode === "source" ? "source" : "rendered";
     this.keepMode = true;
@@ -336,12 +355,25 @@ export default class Preview extends View {
         else if (c === "copy") this.copyPath();
         else if (c === "reveal") this.reveal();
         else if (c === "open") this.openDefault();
-        else if (c === "edit") this.edit();
+        else if (c === "edit") this.edit(cx);
         else if (c === "back") this.back(cx);
         cx.notify();
       }
     });
     cx.timer.every(5000, (cx) => this.checkStat(cx));
+    if (this.panel) {
+      cx.timer.every(300, (cx) => this.watchEditor(cx));
+      // herdr-files-editor writes "closed" when nvim quits. This loop never ends, so what it starts lives on.
+      cx.spawn(async (cx) => {
+        await exec("mkdir", ["-p", editorState()]).catch(() => null);
+        for (;;) {
+          try { await watchFolder(editorState()); } catch { return; }
+          if (!this.editing) continue;
+          const closed = await readTextFile(`${editorState()}/closed`).catch(() => null);
+          if (closed && closed !== this.closedSeen) this.editorDone(cx);
+        }
+      });
+    }
     run("find", [cacheRoot(), "-mindepth", "1", "-maxdepth", "1", "-mtime", `+${CACHE_DAYS}`, "-exec", "rm", "-rf", "{}", "+"]);
     if (this.path) this.load(cx, false);
   }
@@ -456,8 +488,13 @@ export default class Preview extends View {
   // nvim opens in a terminal below the preview, in the file's folder; the preview reloads as you save.
   // It starts through your interactive login shell, so it has what a terminal has (XDG_CONFIG_HOME
   // from .zshrc, PATH for language servers); started bare, the nvim config's theme sync fails.
-  edit() {
+  edit(cx) {
     if (!this.canEdit()) return;
+    if (this.panel) return this.editHere(cx);
+    this.editBelow();
+  }
+
+  editBelow() {
     const path = this.path;
     const folder = this.v.kind === "folder" ? path : dirOf(path);
     exec("sh", ["-c", 'printf "%s\\n%s" "${SHELL:-/bin/zsh}" "$(command -v nvim)"'])
@@ -474,14 +511,80 @@ export default class Preview extends View {
       .catch(() => notify({ title: "Could not start nvim", level: "error" }));
   }
 
+  toTree() {
+    herdrRun("layout.select", { stack: this.panel, child: `${this.panel}-tree` });
+  }
+
+  // The editor terminal (herdr-files-editor) starts once and stays: it takes "<folder>\t<file>" and
+  // opens it. If nvim is still open there (its "editing" file), it is shown, never typed into.
+  // Without the files-edit block (Herdr drops a block whose terminal ended), nvim opens below instead.
+  editHere(cx) {
+    const path = this.path, folder = this.v.kind === "folder" ? path : dirOf(path);
+    if (!findNode(layout(), `${this.panel}-edit`)) {
+      notify({ title: "The Files panel has no editor block", body: "Opening nvim below. Restore files-edit in layouts/netrunner.json.", level: "warning", timeout: 5000 });
+      return this.editBelow();
+    }
+    cx.spawn(async () => {
+      try {
+        let term = terminals().find((x) => x.name === EDITOR && x.state === "live" && !String(x.address).includes("/"));
+        if (!term) {
+          const shell = (await exec("sh", ["-c", 'printf "%s" "${SHELL:-/bin/zsh}"'])).stdout.trim() || "/bin/zsh";
+          // --rm: a finished terminal left under the name would get the block dropped when the layout loads.
+          const started = await hc(["run", "--bg", "--json", "--no-parent", "--rm", "--name", EDITOR, "--", shell, "-lic", 'exec "$0"', `${home()}/.local/bin/herdr-files-editor`]);
+          if (started.code !== 0) return notify({ title: "Could not start nvim", body: started.stderr.trim(), level: "error" });
+          term = JSON.parse(started.stdout);
+        }
+        const open = (await readTextFile(`${editorState()}/editing`).catch(() => null))?.trim();
+        if (open) {
+          if (open !== path) notify({ title: `nvim still has ${basename(open)} open`, body: "Quit it (:q) to edit another file here.", timeout: 4000 });
+        } else {
+          this.closedSeen = await readTextFile(`${editorState()}/closed`).catch(() => null);
+          const sent = await hc(["send", term.address, `${folder}\t${path}`]);
+          if (sent.code !== 0) return notify({ title: "Could not open the file in nvim", body: sent.stderr.trim(), level: "error" });
+        }
+        this.showEditor(term.address);
+      } catch (e) {
+        notify({ title: "Could not start nvim", body: String(e?.message ?? e), level: "error" });
+      }
+    });
+  }
+
+  // The block shows the terminal only once the stack has switched, so the keyboard is handed over
+  // again on the next tick of watchEditor (a timer of the view: one on a finished task never fires).
+  // pane.focus finds the layout's block by the terminal name it shows, not by address.
+  showEditor(address) {
+    this.editing = address;
+    this.focusEditor = EDITOR;
+    herdrRun("layout.select", { stack: this.panel, child: `${this.panel}-edit` });
+    herdrRun("pane.focus", { terminal: EDITOR });
+  }
+
+  // Hands the keyboard to nvim once its block shows; brings the preview back if the editor terminal died.
+  watchEditor(cx) {
+    if (this.focusEditor) {
+      herdrRun("pane.focus", { terminal: this.focusEditor });
+      this.focusEditor = null;
+    }
+    if (this.editing && !terminals().some((x) => x.address === this.editing && x.state === "live")) this.editorDone(cx);
+  }
+
+  // nvim quit (:q): the preview comes back, reloaded, with the keyboard.
+  editorDone(cx) {
+    this.editing = null;
+    herdrRun("layout.select", { stack: this.panel, child: `${this.panel}-preview` });
+    this.handle.focus();
+    this.load(cx, true);
+  }
+
   key(e, cx) {
     const k = e.keystroke;
     if (k === "cmd-shift-c") this.copyPath();
     else if (k === "cmd-shift-r") this.reveal();
     else if (k === "cmd-o") this.openDefault();
-    else if (k === "cmd-e") this.edit();
+    else if (k === "cmd-e") this.edit(cx);
     else if (k === "cmd-r") this.load(cx, true);
     else if (k === "cmd-[") this.back(cx);
+    else if (k === "escape" && this.panel) this.toTree();
     else if (k === "escape") {
       const overlay = props()?.overlay;
       if (!overlay) return;
@@ -518,6 +621,9 @@ export default class Preview extends View {
     if (v?.formatted) meta.push("formatted");
     return v_flex().flex_none().gap(1).px(12).py(7).border_b(1).border_color(t.border)
       .child(h_flex().h(28).gap(6).items_center()
+        .when(Boolean(this.panel), (el) => el.child(h_flex().id("pv-files").h(24).px(6).gap(4).flex_none().items_center().rounded(6).cursor_pointer()
+          .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Back to the file tree (Esc)")
+          .on_click(() => this.toTree()).child(svg("mods/workspace-chrome/chevron-left.svg").size(13)).child("Files")))
         .when(this.history.length > 0, (el) => el.child(this.button(t, "pv-back", "mods/workspace-chrome/chevron-left.svg", "Back (Cmd+[)", (cx) => this.back(cx))))
         .child(svg(icon).size(14).flex_none().text_color(t.muted))
         .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(basename(path)))
@@ -526,7 +632,7 @@ export default class Preview extends View {
           .child(this.segment(t, "pv-rendered", "Rendered", this.mode === "rendered", (cx) => this.setMode("rendered", cx)))
           .child(this.segment(t, "pv-source", "Source", this.mode === "source", (cx) => this.setMode("source", cx)))))
         .child(h_flex().flex_none().gap(1)
-          .when(this.canEdit(), (el) => el.child(this.button(t, "pv-edit", "mods/workspace-chrome/square-pen.svg", "Edit in Neovim (Cmd+E)", () => this.edit())))
+          .when(this.canEdit(), (el) => el.child(this.button(t, "pv-edit", "mods/workspace-chrome/square-pen.svg", "Edit in Neovim (Cmd+E)", (cx) => this.edit(cx))))
           .child(this.button(t, "pv-copy", "mods/workspace-chrome/files.svg", "Copy path (Cmd+Shift+C)", () => this.copyPath()))
           .child(this.button(t, "pv-reveal", "mods/workspace-chrome/folder.svg", "Reveal in Finder (Cmd+Shift+R)", () => this.reveal()))
           .child(this.button(t, "pv-open", "mods/workspace-chrome/monitor.svg", "Open with the default app (Cmd+O)", () => this.openDefault()))
@@ -683,6 +789,17 @@ export default class Preview extends View {
 
   render(cx) {
     const t = theme();
+    const o = this.panel ? shared("files.open") : null;
+    // A file Files just opened. load() runs on this view's context: a task started from a spawned one
+    // is dropped when that one ends, and the preview would stay on "Loading".
+    if (o && o.at !== this.opened?.at) {
+      this.opened = o;
+      this.history = [];
+      this.path = expand(o.file);
+      this.v = null;
+      this.loading = true;
+      this.load(cx, true);
+    }
     const body = this.body(t);
     return v_flex().id("preview").track_focus(this.handle).size_full().min_h(0).overflow_hidden().rounded(8)
       .bg(t.background).text_color(t.foreground).text_size(13)

@@ -158,10 +158,47 @@
                   "children": [
                     {
                       "id": "files",
-                      "type": "block",
-                      "content": {
-                        "mod": "files-tmux"
-                      }
+                      "type": "stack",
+                      "children": [
+                        {
+                          "id": "files-tree",
+                          "type": "block",
+                          "content": {
+                            "mod": "files-tmux"
+                          }
+                        },
+                        {
+                          "id": "files-preview",
+                          "type": "block",
+                          "content": {
+                            "mod": "preview",
+                            "props": {
+                              "panel": "files"
+                            }
+                          },
+                          "background": "background",
+                          "border": {
+                            "width": 1,
+                            "color": "border"
+                          },
+                          "radius": 10
+                        },
+                        {
+                          "id": "files-edit",
+                          "type": "block",
+                          "content": {
+                            "terminal": "files-nvim"
+                          },
+                          "background": "background",
+                          "border": {
+                            "width": 1,
+                            "color": "border"
+                          },
+                          "radius": 10,
+                          "padding": 6
+                        }
+                      ],
+                      "active": "files-tree"
                     },
                     {
                       "id": "changes",

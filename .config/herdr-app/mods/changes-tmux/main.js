@@ -12,17 +12,18 @@
 // commits pick the view; preview, edit, copy act on the open file (copy: the open commit's hash too).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, run, notify, nextCommand } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, run, notify, nextCommand, terminals } from "herdr";
 
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
   const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
-  // A mod pane (a preview opened from here) keeps the folder its tab's client showed.
+  // A mod pane (a preview opened from here), or the Files panel's nvim, keeps the folder its tab's client showed.
   const where = shared("tmux.where");
-  const mine = f?.terminal ? where?.terminal === f.terminal : Boolean(f?.tab) && where?.tab === f.tab;
+  const editor = f?.terminal === "files-nvim" || (Boolean(f?.terminal) && terminals().some((x) => x.address === f.terminal && x.name === "files-nvim"));
+  const mine = f?.terminal && !editor ? where?.terminal === f.terminal : Boolean(f?.tab) && where?.tab === f.tab;
   // Until tmux-context has looked at this terminal, nothing: not the client's folder for a moment.
-  if (f?.terminal && !mine) return { cwd: null, on, pending: true };
+  if (f?.terminal && !editor && !mine) return { cwd: null, on, pending: true };
   if (mine && where.tmux) return { cwd: where.cwd, on: where.on ?? on };
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on };
 }
