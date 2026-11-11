@@ -139,7 +139,19 @@
             {
               "id": "panel",
               "type": "column",
+              "gap": 8,
+              "resizable": false,
               "children": [
+                {
+                  "id": "panel-context",
+                  "type": "block",
+                  "content": {
+                    "mod": "tmux-context"
+                  },
+                  "size": {
+                    "px": 116
+                  }
+                },
                 {
                   "id": "panel-body",
                   "type": "stack",
@@ -148,14 +160,14 @@
                       "id": "files",
                       "type": "block",
                       "content": {
-                        "mod": "files"
+                        "mod": "files-tmux"
                       }
                     },
                     {
                       "id": "changes",
                       "type": "block",
                       "content": {
-                        "mod": "changes"
+                        "mod": "changes-tmux"
                       }
                     }
                   ],

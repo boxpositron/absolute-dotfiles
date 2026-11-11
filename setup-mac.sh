@@ -56,6 +56,9 @@ local_servers
 .config/herdr-app/mods/picker-tmux
 .config/herdr-app/mods/workspace-chrome-tmux
 .config/herdr-app/mods/agents-tmux
+.config/herdr-app/mods/files-tmux
+.config/herdr-app/mods/changes-tmux
+.config/herdr-app/mods/tmux-context
 .config/herdr-app/mods/omo-board
 .config/herdr-app/mods/preview
 .config/herdr-app/keys.json

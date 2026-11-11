@@ -15,6 +15,8 @@ Herdr's desktop app (`herdr-app`, with herdr-core as `hc`) as the window around 
 - `mods/agents-tmux/`: Herdr's Agents list, cloned from `agents` in 0.1.15. Agents on another machine (flowstate-remote) get a faint wash of the Cyberpunk yellow of the server's tmux bar, yellow hover and selection, and a yellow machine label, so a remote session stands out when you scan the list.
 - `mods/picker-tmux/`: Herdr's search ("Go to…") with tmux sessions and panes added, cloned from Herdr's `picker` in 0.1.13.
 - `mods/workspace-chrome-tmux/`: Herdr's sidebar header and footer, cloned from `workspace-chrome` in 0.1.13, whose search button opens `picker-tmux`. It uses the shipped mod's icons, since Herdr loads no images through the link.
+- `mods/files-tmux/`, `mods/changes-tmux/`: Herdr's Files and Changes panels, cloned from `files` and `changes` in 0.1.15, showing the folder of the tmux pane you are in rather than where the tmux client started (see Files and Changes). They use the shipped mods' icons.
+- `mods/tmux-context/`: the strip above them: the folder they show and what it is (see Files and Changes).
 - `mods/omo-board/`: the board view (see Board).
 - `mods/preview/`: the file preview (see Preview).
 - `keys.json`: Herdr's default keys, plus Cmd+P opening `picker-tmux` in the `netrunner` layout. Herdr stops adding its new default shortcuts to a `keys.json` you have edited, so add new ones here by hand.
@@ -98,9 +100,20 @@ Watch out:
 - Code doesn't wrap, so columns stay aligned; long lines scroll sideways.
 - An open preview pane keeps running its old code after `main.js` changes, even after a layout switch: close and reopen it.
 
+## Files and Changes
+
+Herdr's Files and Changes panels follow the focused terminal's folder, and for a tmux client that is wherever `tmux attach` started, not the pane you are working in: a session opened in a repo's main checkout kept showing it while omo worked in an owt worktree. The `netrunner` layout uses `files-tmux` and `changes-tmux` instead, which show the folder of the tmux pane the client shows, with the `tmux-context` strip above them. The tab bar's Files and Changes buttons open them as before.
+
+- `omo-status where <terminal>` finds the tmux client a Herdr terminal runs (`hc get <terminal> --json` `.foreground.pid` is its `#{client_pid}`) and lists its session's panes, with omo found by its process as `omo-status list` does. For flowstate-remote it runs through `hc exec` and takes its own function along, so the server's copy of `omo-status` doesn't need updating. A terminal running no tmux client gets nothing back, and the panels show Herdr's own folder.
+- `tmux-context` publishes that pane's folder as the shared value `tmux.where`, which the two panels read; until it has looked at a newly focused terminal they show "Finding the tmux pane…" rather than the client's folder. It looks again when Herdr's focus moves, when tmux changes pane, window or session (hooks in `.tmux.conf` touch `~/.local/state/omo-status/where/tick`, which it watches), and every 3 seconds, which catches a `cd` and flowstate-remote's sessions, whose hooks can't reach the Mac.
+- The strip shows the folder (an owt workspace by its name, with its `owt title` beside it) and the repo; the branch with what is to push and pull (↑ ↓), how far it is ahead of and behind the default branch, and the uncommitted files; the Linear issue the branch names; the branch's PR with its state, review and checks (`gh pr view`, read again each minute); and the most urgent omo agent in the session working in that repo, which a click shows (`omo-status show`). A folder on flowstate-remote gets a yellow machine label.
+- Clicking the folder's name (or `tmux-context.pick`, which `keys.json` can bind) lists the session's folders with their agents. Picking one pins the panels to that pane, whatever tmux shows, until you pick "Follow the active pane"; a pink pin marks it. Pins are kept per Herdr terminal in the shared value `tmux.pins`.
+- Linear links come from `~/.config/herdr-app/linear.json`, which maps each Linear workspace to its team keys: `{ "<workspace>": ["ABC", "XYZ"] }`. It stays out of this repo and isn't linked. An issue of a team it doesn't list copies its id instead of opening.
+- Agents are only looked for in the tmux session the client shows. The pane header and the status bar are still Herdr's (`pane`, `workspace-status`), so they show the client's own folder and branch. The Changes panel's Commit button is Herdr's: it commits everything (`git add -A`) in the repo shown.
+
 ## Herdr updates
 
-`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux`, `agents-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
+`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux`, `agents-tmux`, `files-tmux`, `changes-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods. A conflict leaves `<<<<<<<` blocks to settle by hand.
 
 ## flowstate-remote
 
