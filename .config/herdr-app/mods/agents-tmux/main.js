@@ -123,9 +123,10 @@ function parsePanes(out) {
 
 const paneRank = (p) => PANE_RANK[p?.state] ?? 0;
 
-// Servers, this Mac first; in each, sessions by their most urgent pane and a session's panes the
-// same way. Ties keep tmux's order, so rows move only when a state changes.
-function serverTree(rows) {
+// Servers, this Mac first. In each, sessions go in the order you dragged them to (order[machine]),
+// sessions you never placed after those; with no order yet, by their most urgent pane. A session's
+// panes go by urgency. Ties keep tmux's order, so rows move only when a state changes.
+function serverTree(rows, order = {}) {
   const servers = new Map();
   for (const p of rows) {
     if (!servers.has(p.machine)) servers.set(p.machine, new Map());
@@ -137,12 +138,15 @@ function serverTree(rows) {
   return [...servers]
     .sort(([a], [b]) => (a !== "") - (b !== "") || a.localeCompare(b))
     .map(([machine, sessions]) => {
+      const place = order[machine] ? new Map(order[machine].map((name, i) => [name, i])) : null;
       const list = [...sessions]
         .map(([name, ps]) => {
           const sorted = [...ps].sort(byUrgency);
           return { key: `ses:${machine}/${name}`, name, machine, panes: sorted, top: sorted[0] };
         })
-        .sort((a, b) => byUrgency(a.top, b.top));
+        .sort((a, b) => place
+          ? (place.get(a.name) ?? Infinity) - (place.get(b.name) ?? Infinity) || a.top.order - b.top.order
+          : byUrgency(a.top, b.top));
       return { key: `srv:${machine}`, machine, sessions: list, panes: list.flatMap((s) => s.panes) };
     });
 }
@@ -161,6 +165,10 @@ export default class Agents extends View {
     if (props()?.sortMenu) return;
     // Folded tree branches are kept across restarts; folded agents and groups are not.
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? "[]"));
+    // Session order per server, as you dragged it ({machine: [session, ...]}); kept across restarts.
+    this.order = JSON.parse(localStorage.getItem("order") ?? "{}");
+    this.drag = null;
+    this.shownSessions = new Map();
     this.panesOut = null;
     this.tmuxPanes = [];
     this.showProblem = null;
@@ -255,6 +263,56 @@ export default class Agents extends View {
     cx.notify();
   }
 
+  // Dragging a session row moves it among its server's sessions. A press becomes a drag only once
+  // the pointer has moved, so a click still folds the session; leaving the list cancels it.
+  dragStart(s, e) {
+    this.dragged = false;
+    this.drag = { machine: s.machine, name: s.name, y: e.position.y, moved: false, target: null };
+  }
+
+  // Where the dragged session would land: before or after session `name` of `machine`.
+  dragOver(machine, name, after, e, cx) {
+    const d = this.drag;
+    if (!d || d.machine !== machine) return;
+    if (!d.moved && Math.abs(e.position.y - d.y) < 4) return;
+    d.moved = true;
+    if (d.target?.name === name && d.target.after === after) return;
+    d.target = { machine, name, after };
+    cx.notify();
+  }
+
+  dragEnd(cx) {
+    const d = this.drag;
+    this.drag = null;
+    if (!d) return;
+    // The release also clicks the row it was pressed on, which must not fold it.
+    this.dragged = d.moved;
+    const target = d.target;
+    if (d.moved && target && target.name !== d.name) {
+      const shown = this.shownSessions.get(d.machine) ?? [];
+      const names = shown.filter((n) => n !== d.name);
+      const i = names.indexOf(target.name);
+      if (i >= 0) {
+        names.splice(target.after ? i + 1 : i, 0, d.name);
+        // Sessions not running now keep their places after the ones that are.
+        const gone = (this.order[d.machine] ?? []).filter((n) => !shown.includes(n));
+        this.order[d.machine] = [...names, ...gone];
+        localStorage.setItem("order", JSON.stringify(this.order));
+      }
+    }
+    cx.notify();
+  }
+
+  dropping(machine, name, after) {
+    const d = this.drag, at = d?.target;
+    return Boolean(d?.moved && at && at.name !== d.name && at.machine === machine && at.name === name && at.after === after);
+  }
+
+  // The line where a dragged session will land, laid over the row so nothing shifts under the pointer.
+  dropLine(t, below) {
+    return div().absolute().left(4).right(4).top(below ? 27 : -1).h(2).rounded(1).bg(t.accent);
+  }
+
   // The pane in Herdr: the tab already on its session, else the session's space, else a new one.
   // exact: this pane, not the session's most urgent one, since each row is a pane of its own.
   show(p, cx) {
@@ -310,8 +368,12 @@ export default class Agents extends View {
     const open = !this.folded.has(s.key);
     const remote = Boolean(s.machine);
     const top = s.top?.state;
+    const lifted = Boolean(this.drag?.moved && this.drag.machine === s.machine && this.drag.name === s.name);
+    // Folded, the lower half of the row means after it; open, its panes do.
+    const shut = !open || !s.panes.length;
     return h_flex()
       .id(s.key)
+      .relative()
       .px(8)
       .h(28)
       .flex_none()
@@ -319,9 +381,17 @@ export default class Agents extends View {
       .gap(6)
       .items_center()
       .when(remote, (el) => el.bg(REMOTE_ROW))
+      .when(lifted, (el) => el.opacity(0.4))
       .cursor_pointer()
       .hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
-      .on_click((_e, cx) => this.fold(s.key, cx))
+      .on_mouse_down("left", (e) => this.dragStart(s, e))
+      .on_mouse_move((e, cx) => this.dragOver(s.machine, s.name, shut && (e.local_position?.y ?? 0) > 14, e, cx))
+      .on_click((_e, cx) => {
+        if (this.dragged) { this.dragged = false; return; }
+        this.fold(s.key, cx);
+      })
+      .when(this.dropping(s.machine, s.name, false), (el) => el.child(this.dropLine(t, false)))
+      .when(shut && this.dropping(s.machine, s.name, true), (el) => el.child(this.dropLine(t, true)))
       .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim))
       .child(div().min_w(0).truncate().font_medium().text_color(top === "input" || top === "error" ? t.blocked : t.foreground).child(s.name))
       .child(div().text_size(11).text_color(t.dim).child(String(s.panes.length)))
@@ -341,6 +411,7 @@ export default class Agents extends View {
     const msg = goalWait ? said.replace(/^goal \w+/, (m) => `${m} ${countdown(p.resumeAt - now)}`) : said;
     return h_flex()
       .id(`tp-${p.pane}`)
+      .relative()
       .pl(14)
       .pr(8)
       .h(28)
@@ -353,6 +424,8 @@ export default class Agents extends View {
       .cursor_pointer()
       .hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
       .on_click((_e, cx) => this.show(p, cx))
+      .on_mouse_move((e, cx) => this.dragOver(p.machine, p.session, true, e, cx))
+      .when(last && this.dropping(p.machine, p.session, true), (el) => el.child(this.dropLine(t, true)))
       .child(this.connector(t, last))
       .child(h_flex().flex_1().min_w(0).gap(5).items_center()
         .child(div().min_w(0).flex_none().max_w(msg ? 130 : 220).truncate().text_color(quiet && !on ? t.muted : t.foreground).child(label))
@@ -450,7 +523,7 @@ export default class Agents extends View {
       this.panesOut = omo?.out ?? null;
       this.tmuxPanes = parsePanes(this.panesOut);
     }
-    const servers = serverTree(this.tmuxPanes);
+    const servers = serverTree(this.tmuxPanes, this.order);
     const where = shared("tmux.where");
     const shownPane = where?.tmux && where.pane ? (where.on ? `${where.on}/${where.pane}` : where.pane) : null;
     const clients = new Set(all.filter(tmuxClient).map((x) => x.address));
@@ -643,6 +716,7 @@ export default class Agents extends View {
     };
     const count = (ps, ...states) => ps.filter((p) => states.includes(p.state)).length;
     const topState = (ps) => ps.reduce((m, p) => (paneRank(p) > (PANE_RANK[m] ?? 0) ? p.state : m), null);
+    this.shownSessions = new Map(servers.map((srv) => [srv.machine, srv.sessions.map((s) => s.name)]));
     const tmuxRows = servers.flatMap((srv) => [
       this.branch(t, {
         key: srv.key,
@@ -722,7 +796,11 @@ export default class Agents extends View {
       .when(servers.length === 0 && list.length === 0 && !collapsed, (el) =>
         el.child(div().px(16).text_size(12).text_color(t.dim).child("No agents yet. omo in tmux shows up here as soon as it starts; other agents when they report their status.")),
       )
-      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
+      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always")
+        .when(Boolean(this.drag?.moved), (el) => el.cursor_grabbing())
+        .on_mouse_up("left", (_e, cx) => this.dragEnd(cx))
+        .on_hover((on, cx) => { if (!on && this.drag) { this.drag = null; cx.notify(); } })
+        .children(rows))
       .when(collapsed, (el) =>
         el.child(
           h_flex()
