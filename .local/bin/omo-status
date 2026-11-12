@@ -30,9 +30,11 @@
 #        omo-status sync <client>    (run when a client attaches or switches session)
 #        omo-status refresh          (run when a pane or window closes: each session still
 #                                     reporting an agent works its state out again)
-#        omo-status show <pane>      (shows the pane in Herdr: the tab already on its session,
+#        omo-status show <pane> [exact]
+#                                    (shows the pane in Herdr: the tab already on its session,
 #                                     else a tab in the space named after the session, else a
-#                                     new space for the session)
+#                                     new space for the session. A pane that needs nothing gives
+#                                     way to its session's most urgent pane, unless exact)
 #        omo-status spaces [--local] (a Herdr space for every tmux session running omo; closes
 #                                     the spaces it made for sessions that ended. --local opens
 #                                     spaces only for this computer's sessions)
@@ -857,11 +859,12 @@ case ${1:-} in
   locate)
     # Selects the pane and prints "<Herdr terminal on its session>\x1f<session>\x1f<folder>",
     # the terminal empty when no Herdr terminal shows the session.
-    pane=${2:?pane id required} terminal=""
+    pane=${2:?pane id required} exact=${3:-} terminal=""
     session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 1
-    # A click on a pane that needs nothing goes to the one in its session that does.
-    case $(tmux show-option -pqv -t "$pane" @omo_state) in
-      input | done | error) ;;
+    # A click on a pane that needs nothing goes to the one in its session that does,
+    # unless it asked for exactly that pane (a row in Herdr's Agents tree).
+    case $exact:$(tmux show-option -pqv -t "$pane" @omo_state) in
+      exact:* | *:input | *:done | *:error) ;;
       *)
         urgent=$(most_urgent_pane "$session")
         [[ -n $urgent ]] && pane=$urgent
@@ -882,10 +885,11 @@ case ${1:-} in
       "$(tmux display-message -p -t "$pane" '#{pane_current_path}')"
     ;;
   show)
-    pane=${2:?pane id required} machine=""
+    pane=${2:?pane id required} exact=${3:-} machine=""
     [[ $pane == */* ]] && machine=${pane%%/*} pane=${pane#*/}
     tmux set-option -g @omo_herdr_shown "$(date +%s)"
-    IFS=$'\x1f' read -r terminal session folder < <(at "$machine" locate "$pane") || exit 1
+    # exact goes last, so another machine's older omo-status ignores it.
+    IFS=$'\x1f' read -r terminal session folder < <(at "$machine" locate "$pane" ${exact:+"$exact"}) || exit 1
     if [[ -n $terminal ]]; then
       herdr-app "do" pane.focus --terminal "${machine:+$machine/}$terminal" >/dev/null
     else
