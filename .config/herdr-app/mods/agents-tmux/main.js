@@ -89,6 +89,11 @@ function icon(p, size, color) {
 // `omo-status list` prints a row per pane running omo, fields joined by SEP; another machine's
 // rows carry its name in front of the pane and the session (`flowstate-remote/%3`).
 const SEP = "|^|";
+// Tree rows have fixed heights, so where each sits is known before it is drawn.
+const ROW_H = 28;
+const HEAD_H = 30;
+/** @type {import("gpui-shell").TransitionPolicy} */
+const MOTION = { duration: 160, easing: "ease-out" };
 const PANE_RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
 // Window names tmux picks by itself say nothing about the work.
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
@@ -124,8 +129,8 @@ function parsePanes(out) {
 const paneRank = (p) => PANE_RANK[p?.state] ?? 0;
 
 // Servers, this Mac first. In each, sessions go in the order you dragged them to (order[machine]),
-// sessions you never placed after those; with no order yet, by their most urgent pane. A session's
-// panes go by urgency. Ties keep tmux's order, so rows move only when a state changes.
+// sessions you never placed after those in tmux's order, and a session's panes in tmux's order.
+// A change of state never moves a row; only a drag, or a session or pane coming or going, does.
 function serverTree(rows, order = {}) {
   const servers = new Map();
   for (const p of rows) {
@@ -141,12 +146,11 @@ function serverTree(rows, order = {}) {
       const place = order[machine] ? new Map(order[machine].map((name, i) => [name, i])) : null;
       const list = [...sessions]
         .map(([name, ps]) => {
-          const sorted = [...ps].sort(byUrgency);
-          return { key: `ses:${machine}/${name}`, name, machine, panes: sorted, top: sorted[0] };
+          // Panes keep tmux's order; `top`, the most urgent, is only what a folded session shows.
+          const top = ps.reduce((m, p) => (byUrgency(p, m) < 0 ? p : m), ps[0]);
+          return { key: `ses:${machine}/${name}`, name, machine, panes: ps, top, first: ps[0].order };
         })
-        .sort((a, b) => place
-          ? (place.get(a.name) ?? Infinity) - (place.get(b.name) ?? Infinity) || a.top.order - b.top.order
-          : byUrgency(a.top, b.top));
+        .sort((a, b) => (place ? (place.get(a.name) ?? Infinity) - (place.get(b.name) ?? Infinity) : 0) || a.first - b.first);
       return { key: `srv:${machine}`, machine, sessions: list, panes: list.flatMap((s) => s.panes) };
     });
 }
@@ -168,7 +172,8 @@ export default class Agents extends View {
     // Session order per server, as you dragged it ({machine: [session, ...]}); kept across restarts.
     this.order = JSON.parse(localStorage.getItem("order") ?? "{}");
     this.drag = null;
-    this.shownSessions = new Map();
+    this.blocks = new Map();
+    this.motion = null;
     this.panesOut = null;
     this.tmuxPanes = [];
     this.showProblem = null;
@@ -263,54 +268,85 @@ export default class Agents extends View {
     cx.notify();
   }
 
-  // Dragging a session row moves it among its server's sessions. A press becomes a drag only once
-  // the pointer has moved, so a click still folds the session; leaving the list cancels it.
+  // Dragging a session row lifts its block (the row and its panes) to follow the pointer, while the
+  // server's other sessions slide apart where it would land. A press becomes a drag only once the
+  // pointer has moved, so a click still folds the session.
   dragStart(s, e) {
     this.dragged = false;
-    this.drag = { machine: s.machine, name: s.name, y: e.position.y, moved: false, target: null };
+    const blocks = this.blocks.get(s.machine) ?? [];
+    const me = blocks.find((b) => b.name === s.name);
+    if (!me) return;
+    // The others' places with this one taken out: the slots it can drop between.
+    const others = [];
+    let y = blocks[0].y;
+    for (const b of blocks) if (b !== me) { others.push({ name: b.name, y, h: b.h }); y += b.h; }
+    const from = blocks.indexOf(me);
+    this.drag = { machine: s.machine, name: s.name, y: e.position.y, dy: 0, moved: false, top: me.y, rows: me.rows, others, from, index: from };
   }
 
-  // Where the dragged session would land: before or after session `name` of `machine`.
-  dragOver(machine, name, after, e, cx) {
+  dragMove(e, cx) {
     const d = this.drag;
-    if (!d || d.machine !== machine) return;
-    if (!d.moved && Math.abs(e.position.y - d.y) < 4) return;
+    if (!d) return;
+    const dy = e.position.y - d.y;
+    if (!d.moved && Math.abs(dy) < 4) return;
     d.moved = true;
-    if (d.target?.name === name && d.target.after === after) return;
-    d.target = { machine, name, after };
+    d.dy = dy;
+    // It lands after every session whose middle the lifted row's middle has passed.
+    const middle = d.top + dy + ROW_H / 2;
+    d.index = d.others.filter((o) => o.y + o.h / 2 < middle).length;
     cx.notify();
   }
 
-  dragEnd(cx) {
+  // Letting go settles the lifted rows from where they were into their slot and keeps the order;
+  // leaving the list (keep false) settles them back where they came from.
+  dragEnd(cx, keep = true) {
     const d = this.drag;
     this.drag = null;
     if (!d) return;
     // The release also clicks the row it was pressed on, which must not fold it.
     this.dragged = d.moved;
-    const target = d.target;
-    if (d.moved && target && target.name !== d.name) {
-      const shown = this.shownSessions.get(d.machine) ?? [];
-      const names = shown.filter((n) => n !== d.name);
-      const i = names.indexOf(target.name);
-      if (i >= 0) {
-        names.splice(target.after ? i + 1 : i, 0, d.name);
-        // Sessions not running now keep their places after the ones that are.
-        const gone = (this.order[d.machine] ?? []).filter((n) => !shown.includes(n));
-        this.order[d.machine] = [...names, ...gone];
-        localStorage.setItem("order", JSON.stringify(this.order));
-      }
+    if (!d.moved) return;
+    d.rows.forEach((key, i) => this.motion?.at.set(key, { key, y: d.top + d.dy + i * ROW_H, h: ROW_H }));
+    if (keep && d.index !== d.from) {
+      const names = d.others.map((o) => o.name);
+      names.splice(d.index, 0, d.name);
+      // Sessions not running now keep their places after the ones that are.
+      const gone = (this.order[d.machine] ?? []).filter((n) => !names.includes(n));
+      this.order[d.machine] = [...names, ...gone];
+      localStorage.setItem("order", JSON.stringify(this.order));
     }
     cx.notify();
   }
 
-  dropping(machine, name, after) {
-    const d = this.drag, at = d?.target;
-    return Boolean(d?.moved && at && at.name !== d.name && at.machine === machine && at.name === name && at.after === after);
+  // Where every tree row sits now, against where it sat last time: a row that moved is drawn where it
+  // was for one frame, then let go to slide home; a new one fades in. As the omo-tmux panel does it.
+  plan(items, cx) {
+    const at = new Map(items.map((x) => [x.key, x]));
+    const sig = items.map((x) => `${x.key}@${x.y}`).join("\n");
+    const m = this.motion;
+    if (!m) { this.motion = { sig, at, fly: {}, gen: {}, step: 0 }; return; }
+    if (sig === m.sig) return;
+    const fly = {}, gen = m.gen;
+    for (const x of items) {
+      const was = m.at.get(x.key);
+      if (!was) {
+        gen[x.key] = (gen[x.key] ?? 0) + 1;
+        fly[x.key] = { top: 0, fade: true };
+      } else if (was.y !== x.y) {
+        gen[x.key] = (gen[x.key] ?? 0) + 1;
+        fly[x.key] = { top: was.y - x.y };
+      }
+    }
+    const step = m.step + 1;
+    this.motion = { sig, at, gen, fly, step };
+    cx.timer.after(16, (cx) => { if (this.motion.step === step) { this.motion.fly = {}; cx.notify(); } });
   }
 
-  // The line where a dragged session will land, laid over the row so nothing shifts under the pointer.
-  dropLine(t, below) {
-    return div().absolute().left(4).right(4).top(below ? 27 : -1).h(2).rounded(1).bg(t.accent);
+  // Six dots in the row's left padding: the sign a session can be dragged (by the whole row).
+  grip(t, on) {
+    const dot = () => div().size(2).rounded(1).bg(on ? t.muted : t.dim);
+    const pair = () => h_flex().gap(2).child(dot()).child(dot());
+    return v_flex().absolute().left(1).top(9).gap(2).opacity(on ? 1 : 0.4).child(pair()).child(pair()).child(pair());
   }
 
   // The pane in Herdr: the tab already on its session, else the session's space, else a new one.
@@ -328,7 +364,8 @@ export default class Agents extends View {
     if (state === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
     if (state === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.ansi5).spin(2400);
     if (state === "input" || state === "error") {
-      const color = state === "error" ? t.ansi1 : t.blocked;
+      // Needs you in the accent pink: yellow already marks the remote server.
+      const color = state === "error" ? t.ansi1 : t.accent;
       if (compact) return div().size(14).flex_none().rounded(4).bg(color + "26").text_size(10.5).font_bold().text_color(color).flex().items_center().justify_center().child("!");
       return div().flex_none().px(6).h(18).rounded(5).bg(color + "26").text_size(10.5).font_semibold().text_color(color)
         .flex().items_center().loop("opacity", { from: 0.55, to: 1, period: 1600 })
@@ -357,43 +394,42 @@ export default class Agents extends View {
       .child(svg(`mods/workspace-chrome/${glyph}.svg`).size(12).flex_none().text_color(color ?? t.dim))
       .child(div().truncate().text_color(color ?? t.dim).child(label))
       .child(div().text_color(t.dim).child(String(count)))
-      .when(needs > 0, (el) => el.child(div().text_color(t.blocked).child(`· ${needs} need${needs === 1 ? "s" : ""} you`)))
+      .when(needs > 0, (el) => el.child(div().text_color(t.accent).child(`· ${needs} need${needs === 1 ? "s" : ""} you`)))
       .child(div().flex_1())
       .when(!open, (el) => el
         .when(Boolean(top) && top !== "idle", (el) => el.child(this.paneStatus(t, top, true)))
         .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
   }
 
-  sessionRow(t, s) {
+  // ghost: drawn in the lifted copy that follows the pointer, its grip lit.
+  sessionRow(t, s, ghost = false) {
     const open = !this.folded.has(s.key);
     const remote = Boolean(s.machine);
     const top = s.top?.state;
-    const lifted = Boolean(this.drag?.moved && this.drag.machine === s.machine && this.drag.name === s.name);
-    // Folded, the lower half of the row means after it; open, its panes do.
-    const shut = !open || !s.panes.length;
     return h_flex()
       .id(s.key)
       .relative()
       .px(8)
-      .h(28)
+      .h(ROW_H)
       .flex_none()
       .rounded(8)
       .gap(6)
       .items_center()
       .when(remote, (el) => el.bg(REMOTE_ROW))
-      .when(lifted, (el) => el.opacity(0.4))
       .cursor_pointer()
       .hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
+      .on_hover((on, cx) => {
+        const key = on ? s.key : this.hoverRow === s.key ? null : this.hoverRow;
+        if (key !== this.hoverRow) { this.hoverRow = key; cx.notify(); }
+      })
       .on_mouse_down("left", (e) => this.dragStart(s, e))
-      .on_mouse_move((e, cx) => this.dragOver(s.machine, s.name, shut && (e.local_position?.y ?? 0) > 14, e, cx))
       .on_click((_e, cx) => {
         if (this.dragged) { this.dragged = false; return; }
         this.fold(s.key, cx);
       })
-      .when(this.dropping(s.machine, s.name, false), (el) => el.child(this.dropLine(t, false)))
-      .when(shut && this.dropping(s.machine, s.name, true), (el) => el.child(this.dropLine(t, true)))
+      .child(this.grip(t, ghost || this.hoverRow === s.key))
       .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim))
-      .child(div().min_w(0).truncate().font_medium().text_color(top === "input" || top === "error" ? t.blocked : t.foreground).child(s.name))
+      .child(div().min_w(0).truncate().font_medium().text_color(top === "input" ? t.accent : top === "error" ? t.ansi1 : t.foreground).child(s.name))
       .child(div().text_size(11).text_color(t.dim).child(String(s.panes.length)))
       .child(div().flex_1())
       .when(!open && top !== "idle", (el) => el.child(this.paneStatus(t, top, true)));
@@ -424,8 +460,8 @@ export default class Agents extends View {
       .cursor_pointer()
       .hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
       .on_click((_e, cx) => this.show(p, cx))
-      .on_mouse_move((e, cx) => this.dragOver(p.machine, p.session, true, e, cx))
-      .when(last && this.dropping(p.machine, p.session, true), (el) => el.child(this.dropLine(t, true)))
+      // A short bar at the row's edge: this pane is waiting on you (pink) or failed (red).
+      .when(p.state === "input" || p.state === "error", (el) => el.child(div().absolute().left(3).top(6).w(2).h(16).rounded(1).bg(p.state === "error" ? t.ansi1 : t.accent)))
       .child(this.connector(t, last))
       .child(h_flex().flex_1().min_w(0).gap(5).items_center()
         .child(div().min_w(0).flex_none().max_w(msg ? 130 : 220).truncate().text_color(quiet && !on ? t.muted : t.foreground).child(label))
@@ -716,9 +752,14 @@ export default class Agents extends View {
     };
     const count = (ps, ...states) => ps.filter((p) => states.includes(p.state)).length;
     const topState = (ps) => ps.reduce((m, p) => (paneRank(p) > (PANE_RANK[m] ?? 0) ? p.state : m), null);
-    this.shownSessions = new Map(servers.map((srv) => [srv.machine, srv.sessions.map((s) => s.name)]));
-    const tmuxRows = servers.flatMap((srv) => [
-      this.branch(t, {
+    // The tmux tree as rows that know where they sit, so a move slides and a drag can lift a session.
+    const held = this.drag?.moved ? this.drag : null;
+    const treeItems = [];
+    let ghostRows = null;
+    let rowY = 0;
+    this.blocks = new Map();
+    for (const srv of servers) {
+      treeItems.push({ key: srv.key, y: rowY, h: HEAD_H, draw: () => this.branch(t, {
         key: srv.key,
         glyph: "server",
         label: srv.machine || (window()?.platform === "macos" ? "This Mac" : "This computer"),
@@ -726,12 +767,52 @@ export default class Agents extends View {
         count: srv.panes.length,
         needs: count(srv.panes, "input", "error"),
         top: topState(srv.panes),
-      }),
-      ...(this.folded.has(srv.key) ? [] : srv.sessions.flatMap((s) => [
-        this.sessionRow(t, s),
-        ...(this.folded.has(s.key) ? [] : s.panes.map((p, i) => this.paneRow(t, p, i === s.panes.length - 1, now, p.pane === shownPane))),
-      ])),
-    ]);
+      }) });
+      rowY += HEAD_H;
+      if (this.folded.has(srv.key)) continue;
+      // While a session is dragged, its server's sessions stand in the order it would leave them.
+      let sessions = srv.sessions;
+      if (held?.machine === srv.machine) {
+        const names = held.others.map((o) => o.name);
+        names.splice(held.index, 0, held.name);
+        const byName = new Map(sessions.map((s) => [s.name, s]));
+        sessions = [...names.map((n) => byName.get(n)).filter(Boolean), ...sessions.filter((s) => !names.includes(s.name))];
+      }
+      const heldBlocks = [];
+      for (const s of sessions) {
+        const rows = [{ key: s.key, draw: (ghost) => this.sessionRow(t, s, ghost) }];
+        if (!this.folded.has(s.key)) {
+          s.panes.forEach((p, i) => rows.push({ key: `tp-${p.pane}`, draw: () => this.paneRow(t, p, i === s.panes.length - 1, now, p.pane === shownPane) }));
+        }
+        const h = rows.length * ROW_H;
+        heldBlocks.push({ name: s.name, y: rowY, h, rows: rows.map((r) => r.key) });
+        if (held?.machine === s.machine && held.name === s.name) {
+          // Its landing place stays open as an outline while its rows follow the pointer.
+          treeItems.push({ key: "drag-slot", y: rowY, h, draw: () => div().h(h).rounded(8).border_1().border_color(t.input) });
+          ghostRows = rows;
+        } else {
+          rows.forEach((r, i) => treeItems.push({ key: r.key, y: rowY + i * ROW_H, h: ROW_H, draw: () => r.draw(false) }));
+        }
+        rowY += h;
+      }
+      this.blocks.set(srv.machine, heldBlocks);
+    }
+    if (!collapsed) this.plan(treeItems, cx);
+    const motion = this.motion;
+    // A row in its wrapper: drawn first where it was (or clear, coming in), then let go to slide home.
+    // The list's own background, so a row sliding over another hides it instead of mixing their text.
+    const tmuxRows = treeItems.map((x) => {
+      const f = motion?.fly[x.key];
+      return div().id(`mv-${x.key}-${motion?.gen[x.key] ?? 0}`).flex_none().relative().bg(t.chrome)
+        .top(f?.top ?? 0).opacity(f?.fade ? 0 : 1).transition("top", MOTION).transition("opacity", MOTION)
+        .child(x.draw());
+    });
+    // The lifted copy: a full-width layer at the pointer's height, holding a raised card of the rows.
+    const lifted = held && ghostRows
+      ? div().id("drag-ghost").absolute().left(0).top(held.top + held.dy).w_full().px(8)
+        .child(div().rounded(8).overflow_hidden().bg(t.popover).border_1().border_color(t.input).shadow_lg()
+          .child(v_flex().children(ghostRows.map((r) => r.draw(true)))))
+      : null;
     // Agents outside tmux get a heading of their own only below the tmux tree.
     const outside = servers.length > 0 && list.length > 0;
     const herdrRows = outside && this.folded.has("srv:herdr")
@@ -796,11 +877,13 @@ export default class Agents extends View {
       .when(servers.length === 0 && list.length === 0 && !collapsed, (el) =>
         el.child(div().px(16).text_size(12).text_color(t.dim).child("No agents yet. omo in tmux shows up here as soon as it starts; other agents when they report their status.")),
       )
-      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always")
+      .child(v_flex().id("ag-list").relative().flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always")
         .when(Boolean(this.drag?.moved), (el) => el.cursor_grabbing())
+        .on_mouse_move((e, cx) => this.dragMove(e, cx))
         .on_mouse_up("left", (_e, cx) => this.dragEnd(cx))
-        .on_hover((on, cx) => { if (!on && this.drag) { this.drag = null; cx.notify(); } })
-        .children(rows))
+        .on_hover((on, cx) => { if (!on) this.dragEnd(cx, false); })
+        .children(rows)
+        .when(Boolean(lifted) && !collapsed, (el) => el.child(lifted)))
       .when(collapsed, (el) =>
         el.child(
           h_flex()
