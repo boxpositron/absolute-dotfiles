@@ -73,6 +73,20 @@ COMPLETION_WAITING_DOTS="true"
 # Add wisely, as too many plugins slow down shell startup.
 plugins=(git asdf)
 
+# Completion folders go in before oh-my-zsh, so its compinit is the only one.
+# A compinit after each (Poetry's, Docker Desktop's) saw a different fpath and
+# rebuilt the completion dump on every start.
+# Poetry
+fpath+=~/.zfunc
+# The following lines have been added by Docker Desktop to enable Docker CLI completions.
+fpath=($HOME/.docker/completions $fpath)
+# End of Docker CLI completions
+
+# compinit binds its completion keys (^Xh, ^Xa, Esc-, ...) into the keymap in use,
+# and zsh starts in vi mode when $EDITOR is nvim. oh-my-zsh switches to emacs
+# keys after its compinit, so switch first or those bindings are lost.
+bindkey -e
+
 source $ZSH/oh-my-zsh.sh
 
 # User configuration
@@ -193,6 +207,27 @@ fi
 
 _exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# _cached_source <name> <binary> <command...>: sources what the command prints
+# from a copy in ~/.cache/zsh/<name>.zsh, so a tool's init script costs a file
+# read instead of a process per shell. The copy is written again when <binary>
+# resolves to another file or a newer one, as after an upgrade.
+_cached_source() {
+    local name=$1 bin=${commands[$2]:A} first
+    local cache=${XDG_CACHE_HOME:-$HOME/.cache}/zsh/$name.zsh
+    shift 2
+    [[ -n $bin ]] || return 1
+    [[ -r $cache ]] && read -r first < $cache
+    if [[ $first != "# $bin" || $bin -nt $cache ]]; then
+        mkdir -p ${cache:h}
+        if ! { print -r -- "# $bin"; "$@" } >| $cache.$$ 2>/dev/null; then
+            rm -f $cache.$$
+            return 1
+        fi
+        mv -f $cache.$$ $cache
+    fi
+    source $cache
 }
 
 # TMUX  + FZF Setup Start
@@ -332,23 +367,21 @@ PERL_MM_OPT="INSTALL_BASE=$HOME/perl5"; export PERL_MM_OPT;
 [[ -f $HOME/.dart-cli-completion/zsh-config.zsh ]] && . $HOME/.dart-cli-completion/zsh-config.zsh || true
 
 ## Setup fzf
-[[ -f ~/.fzf.zsh  ]] && source <(fzf --zsh)
+[[ -f ~/.fzf.zsh  ]] && _cached_source fzf fzf fzf --zsh
 ## [/Completion]
 
 # Init Starship
 export STARSHIP_CONFIG="$HOME/.config/starship.toml"
-eval "$(starship init zsh)"
-
-# Poetry Shell
-fpath+=~/.zfunc
-autoload -Uz compinit && compinit
+_cached_source starship starship starship init zsh --print-full-init
 
 # Pyenv Virtualenv init
 export PYENV_ROOT="$HOME/.pyenv"
 [[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
 
-eval "$(pyenv init -)"
-eval "$(pyenv virtualenv-init -)"
+# --no-rehash: rebuilding the shims took 0.25 s per shell. pyenv rebuilds them
+# itself after installing a Python or a package.
+_cached_source pyenv-init pyenv pyenv init - --no-rehash zsh
+_cached_source pyenv-virtualenv-init pyenv-virtualenv-init pyenv virtualenv-init -
 
 if [ -d "/opt/homebrew/share/zsh-syntax-highlighting" ]; then
     source /opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
@@ -362,14 +395,51 @@ fi
 [ -f "$HOME/.deno/env" ] && . "$HOME/.deno/env"
 
 export NVM_DIR="$HOME/.config/nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# Sourcing nvm.sh took ~0.4 s per shell, nearly all of it `nvm use default`. Put
+# the default Node (alias/default, newest installed match) on PATH the way
+# `nvm use` does, and load nvm itself the first time it's needed. An alias this
+# can't match (lts/*, node) loads nvm as before.
+_nvm_load() { . "$NVM_DIR/nvm.sh" --no-use; }
+_nvm_use_default() {
+    local want
+    [[ -r $NVM_DIR/alias/default ]] || return 1
+    want=$(<$NVM_DIR/alias/default)
+    want=${want#v}
+    local -a found=($NVM_DIR/versions/node/v$want(N/) $NVM_DIR/versions/node/v$want.*(N/n))
+    (( $#found )) || return 1
+    export NVM_BIN=$found[-1]/bin NVM_INC=$found[-1]/include/node NVM_CD_FLAGS=-q
+    # Like nvm: an nvm entry already there (inherited from a parent shell) is
+    # swapped in place, else the new one goes first.
+    local -i i=${path[(i)$NVM_DIR/versions/node/*/bin]}
+    (( i <= $#path )) && path[i]=$NVM_BIN || path=($NVM_BIN $path)
+    if [[ -n $MANPATH ]]; then
+        local -a man=(${(s.:.)MANPATH})
+        i=${man[(i)$NVM_DIR/versions/node/*/share/man]}
+        (( i <= $#man )) && man[i]=$found[-1]/share/man || man=($found[-1]/share/man $man)
+        export MANPATH=${(j.:.)man}
+    fi
+    return 0
+}
+if [[ -s $NVM_DIR/nvm.sh ]]; then
+    if _nvm_use_default; then
+        nvm() { unset -f nvm; _nvm_load; nvm "$@"; }
+    else
+        . "$NVM_DIR/nvm.sh"
+    fi
+fi
+unset -f _nvm_use_default
+if [[ -s $NVM_DIR/bash_completion ]]; then
+    . "$NVM_DIR/bash_completion"
+    # Its completions call nvm's own functions, so they load nvm first.
+    functions[__nvm_complete]=$functions[__nvm]
+    __nvm() { (( $+functions[nvm_ls] )) || _nvm_load; __nvm_complete "$@"; }
+fi
 
 # direnv setup
 # Empty log format silences direnv's "loading .envrc" / "export +VAR" chatter
 # on every cd. Errors still print (direnv uses a fixed format for those).
 export DIRENV_LOG_FORMAT=''
-eval "$(direnv hook zsh)"
+_cached_source direnv direnv direnv hook zsh
 
 # bun completions
 [ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
@@ -381,17 +451,11 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 # opencode
 export PATH=$HOME/.opencode/bin:$PATH
 
-eval "$(zoxide init zsh)"
+_cached_source zoxide zoxide zoxide init zsh
 
 # Added by LM Studio CLI (lms)
 export PATH="$PATH:$HOME/.cache/lm-studio/bin"
 # End of LM Studio CLI section
-
-# The following lines have been added by Docker Desktop to enable Docker CLI completions.
-fpath=($HOME/.docker/completions $fpath)
-autoload -Uz compinit
-compinit
-# End of Docker CLI completions
 
 # Tab completion for tma/tml: offer running tmux sessions with window counts.
 # Registered after the last compinit so it is not discarded by a re-init.
@@ -409,7 +473,7 @@ zstyle ':completion:*:*:(tma|tml):*:messages' format '%F{yellow}%d%f'
 
 sshm() { TERM=xterm-256color command sshm "$@"; }
 
-source <(sshm completion zsh)
+_cached_source sshm sshm sshm completion zsh
 
 # `owt cd` jumps into an owt workspace. A script cannot change this shell's
 # directory, so owt prints the path and this wrapper does the cd.
@@ -421,7 +485,7 @@ owt() {
         command owt "$@"
     fi
 }
-(( $+commands[owt] )) && source <(command owt completion zsh)
+(( $+commands[owt] )) && _cached_source owt owt command owt completion zsh
 
 export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
 
