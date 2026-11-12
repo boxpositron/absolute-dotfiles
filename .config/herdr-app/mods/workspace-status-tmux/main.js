@@ -2,7 +2,8 @@
 // Herdr's later changes in). The branch is the one of the tmux pane the focused tmux client shows
 // (shared "tmux.where" from tmux-context), not of the folder that client started in. The MCP chip
 // counts the MCP servers of that pane's omo session (shared "omo.mcp" from mcp-tmux) and opens them;
-// the omo chip counts the panes running omo in tmux (shared "omo.tmux" from omo-tmux) and opens those.
+// the omo chip counts the panes running omo in tmux (shared "omo.tmux" from omo-tmux) and opens those;
+// the jobs chip counts their background jobs (shared "omo.jobs" from jobs-tmux) and opens them.
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, agents, theme, run, window, keys, focused, shared, terminals, layout } from "herdr";
@@ -41,6 +42,7 @@ export default class WorkspaceStatus extends View {
     const branch = mine && where.tmux ? where.branch : space?.branch;
     const mcp = mine && where.tmux && shared("omo.mcp")?.terminal === where.terminal ? shared("omo.mcp") : null;
     const omo = shared("omo.tmux");
+    const jobs = shared("omo.jobs");
     const toggle = (id) => {
       const root = layout(), panel = find(root, "panel");
       if (panel && !panel.hidden && find(root, "panel-body")?.active === id) run("layout.hide", { id: "panel" });
@@ -61,6 +63,11 @@ export default class WorkspaceStatus extends View {
         .on_click(() => toggle("omo"))
         .child(svg("mods/workspace-chrome/terminal.svg").size(13)).child(`omo ${omo.panes}`)
         .when(omo.needs > 0, e => e.child(div().size(6).rounded(3).bg(t.blocked)))))
+      .when(Boolean(jobs), el => el.child(h_flex().id("jobs-chip").gap(6).items_center().cursor_pointer().hover(s => s.text_color(t.foreground))
+        .tooltip(`Background jobs of omo in tmux: ${jobs.count}${jobs.here ? `, ${jobs.here} in this session` : ""}`)
+        .on_click(() => toggle("jobs"))
+        .child(svg("mods/workspace-chrome/clock.svg").size(13)).child(`jobs ${jobs.count}`)
+        .when(jobs.count > 0, e => e.child(div().size(6).rounded(3).bg(t.working)))))
       .child(div().flex_1())
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint(t)));
   }

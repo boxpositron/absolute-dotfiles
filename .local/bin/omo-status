@@ -58,6 +58,11 @@
 #        omo-status list-local | list-remote
 #                                    (list in two parts, for Herdr's omo panel: this Mac's panes,
 #                                     after noting a Herdr focus change; the connected machines')
+#        omo-status jobs             (every background job of every omo pane, for Herdr's jobs panel, one
+#                                     line each: pane, session, window, folder, kind (monitor, command, cell,
+#                                     child, wakeup, goal), started, due, label; here and on each Herdr machine)
+#        omo-status jobs-here | jobs-remote
+#                                    (jobs in two parts: this computer's panes; the connected machines')
 #
 # list, panes, show, next and spaces also cover the tmux of each Herdr machine
 # herdr-core is connected to (`hc machine ls`): there this script runs, through
@@ -102,6 +107,72 @@ scheduled_wakeups() {
   [[ -e $1 ]] || return 0
   jq -rs 'group_by(.sessionId) | map(min_by(.dueAt))[]
     | [.sessionId, (.dueAt / 1000 | ceil), (.prompt | split("\n")[0] | gsub("\\s+"; " ") | .[0:60])] | @tsv' "$@" 2>/dev/null
+}
+
+# From a transcript's session-lifecycle entry, one "<kind>\t<started, epoch seconds>\t<label>" line for
+# each background job the session still has: a terminal monitor, a background command, a detached eval cell,
+# a child session (kind monitor, command, cell, child). omo names a child session only by the count.
+job_items='
+  def secs: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
+  def plural($n): if $n > 1 then "s" else "" end;
+  (.data.waitingOn // {}) as $w
+  | (($w.background // []) | map(select(.source | IN("terminal-monitors", "terminal-background-sessions", "senpi-codemode", "senpi-task")))) as $bg
+  | (([$bg[] | select(.source == "senpi-task") | .items[]?] | length) > 0) as $named_children
+  | ($bg[] | select(.source != "senpi-task" or $named_children) | . as $s
+      | ({"terminal-monitors": "monitor", "terminal-background-sessions": "command", "senpi-codemode": "cell", "senpi-task": "child"}[$s.source]) as $kind
+      | if ($s.items // [] | length) > 0 then
+          $s.items[] | [$kind, ((.startedAt // .since // .createdAt // null) | if . then (try secs catch 0) else 0 end),
+            ((.label // .description // .command // .name // .id // $kind) | tostring | gsub("\\s+"; " ") | .[0:120])]
+        else [$kind, 0, "\($s.activeCount // 1) \($kind)\(plural($s.activeCount // 1))"] end),
+    (if ($w.children // 0) > 0 and ($named_children | not) then ["child", 0, "\($w.children) child session\(plural($w.children))"] else empty end)
+  | @tsv'
+
+# Every scheduled wake-up: "<session id>\t<epoch seconds>\t<prompt's first line>".
+all_wakeups() {
+  set -- "$HOME/.omo/agent/schedule/pending"/*.json
+  [[ -e $1 ]] || return 0
+  jq -r '[.sessionId, (.dueAt / 1000 | ceil), ((.prompt // "") | split("\n")[0] | gsub("\\s+"; " ") | .[0:80])] | @tsv' "$@" 2>/dev/null
+}
+
+# The background jobs of every pane running omo on this computer, one line each:
+# "<pane>|^|<session>|^|<window>|^|<folder>|^|<kind>|^|<started>|^|<due>|^|<label>", in tmux's order. Kinds:
+# monitor, command, cell, child (started: epoch seconds, 0 unknown), wakeup (a scheduled wake-up) and
+# goal (a parked goal's wait), both with the epoch second they fire in <due>. A transcript is read when it
+# grew since the last call (the result is kept per transcript in omo-status/jobs); the rest is tmux options.
+# It uses nothing else in this file but job_items, all_wakeups and the tmux wrapper, so `jobs` can send
+# it to a Herdr machine with declare -f.
+jobs_here() {
+  local cache="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/jobs" wake pane transcript state session window path cmd resume goal mins msg
+  local sid size file seen rows kind start label wsid due
+  mkdir -p "$cache"
+  find "$cache" -type f -mtime +3 -delete 2>/dev/null
+  wake=$(all_wakeups)
+  while IFS=$'\x1f' read -r pane transcript state session window path cmd resume goal mins msg; do
+    [[ -n $state && -r $transcript ]] || continue
+    case $cmd in zsh | bash | fish | sh | dash | -zsh | -bash) continue ;; esac
+    sid=${transcript##*_} sid=${sid%.jsonl}
+    size=$(($(wc -c <"$transcript")))
+    file=$cache/${transcript##*/} seen=""
+    [[ -r $file ]] && IFS= read -r seen <"$file"
+    if [[ $seen == "$size" ]]; then
+      rows=$(tail -n +2 "$file")
+    else
+      rows=$(tail -c 300000 "$transcript" | grep -a '"customType":"session-lifecycle"' | tail -n 1 | jq -r "$job_items" 2>/dev/null)
+      printf '%s\n%s\n' "$size" "$rows" >"$file"
+    fi
+    while IFS=$'\t' read -r kind start label; do
+      [[ -n $kind ]] && printf '%s|^|%s|^|%s|^|%s|^|%s|^|%s|^||^|%s\n' "$pane" "$session" "$window" "$path" "$kind" "$start" "$label"
+    done <<<"$rows"
+    if [[ -n $wake ]]; then
+      while IFS=$'\t' read -r wsid due label; do
+        [[ $wsid == "$sid" ]] && printf '%s|^|%s|^|%s|^|%s|^|wakeup|^|0|^|%s|^|%s\n' "$pane" "$session" "$window" "$path" "$due" "${label:-Scheduled wake-up}"
+      done <<<"$wake"
+    fi
+    # The footer's countdown is read by list-here, which keeps it in these options.
+    if [[ $goal == 1 && -n $mins && -n $resume ]]; then
+      printf '%s|^|%s|^|%s|^|%s|^|goal|^|0|^|%s|^|%s\n' "$pane" "$session" "$window" "$path" "$resume" "${msg:-Goal waiting to continue}"
+    fi
+  done < <(tmux list-panes -a -F $'#{pane_id}\x1f#{@omo_transcript}\x1f#{@omo_state}\x1f#{session_name}\x1f#{window_name}\x1f#{pane_current_path}\x1f#{pane_current_command}\x1f#{@omo_resume}\x1f#{@omo_goal}\x1f#{@omo_goal_mins}\x1f#{@omo_msg}')
 }
 
 icon() {
@@ -735,6 +806,16 @@ case ${1:-} in
   list-remote)
     for machine in $(machines); do
       at "$machine" list-here 2>/dev/null | prefixed "$machine"
+    done
+    ;;
+  jobs-here)
+    jobs_here
+    ;;
+  jobs-remote | jobs)
+    [[ $1 == jobs ]] && jobs_here
+    # The machine's own omo-status may be older than this one, so the function goes along.
+    for machine in $(machines); do
+      hc exec --on "$machine" --timeout 8 bash -c "$(declare -f tmux jobs_here all_wakeups; declare -p job_items)"'; jobs_here' jobs 2>/dev/null | prefixed "$machine"
     done
     ;;
   where)

@@ -209,6 +209,13 @@
                       "content": {
                         "mod": "omo-tmux"
                       }
+                    },
+                    {
+                      "id": "jobs",
+                      "type": "block",
+                      "content": {
+                        "mod": "jobs-tmux"
+                      }
                     }
                   ],
                   "active": "files"
@@ -274,6 +281,19 @@
               },
               "content": {
                 "mod": "mcp-tmux",
+                "props": {
+                  "headless": true
+                }
+              }
+            },
+            {
+              "id": "data-jobs-tmux",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "jobs-tmux",
                 "props": {
                   "headless": true
                 }

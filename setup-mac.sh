@@ -62,6 +62,7 @@ local_servers
 .config/herdr-app/mods/pane-tmux
 .config/herdr-app/mods/workspace-status-tmux
 .config/herdr-app/mods/mcp-tmux
+.config/herdr-app/mods/jobs-tmux
 .config/herdr-app/mods/omo-board
 .config/herdr-app/mods/preview
 .config/herdr-app/keys.json

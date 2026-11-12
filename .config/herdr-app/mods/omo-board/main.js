@@ -12,9 +12,14 @@
 // It opens as a dialog (mod.json): centered, over a dimmed window, drawn in the netrunner colours
 // with its own neon frame (`frame: "none"`). It takes the keyboard when it opens, so Esc closes it;
 // a popup doesn't, and Esc used to go to the terminal underneath.
+//
+// `/` opens a search bar over the columns: every word typed has to appear in a card's title,
+// project, machine, tmux target or text, and the columns count only what matches. Enter shows the
+// first match. Esc clears the search, then closes the bar (as Backspace does on an empty one), and
+// only then closes the board. The search lasts while the board is open.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, home, theme, props, settings, closeOverlay } from "herdr";
 
 // Live sessions only, compact (no transcripts): about 12 KB where the full list is about 700 KB.
@@ -41,6 +46,11 @@ function column(s, now) {
   return "idle";
 }
 
+// What a search looks through, lower-cased: a parked card's next step counts as its text too.
+function haystack(s) {
+  return [s.name, s.project, s.machine, s.tmux, s.excerpt, s.handoff?.next].filter(Boolean).join(" ").toLowerCase();
+}
+
 function progress(s) {
   return s.todos?.all ? `${s.todos.done}/${s.todos.all}` : "";
 }
@@ -61,6 +71,8 @@ function ago(ms) {
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
+
+let keysBound = false;
 
 const mono = () => settings().font_family ?? "JetBrains Mono";
 
@@ -88,6 +100,26 @@ export default class Board extends View {
     this.problem = null;
     this.paintedAt = 0;
     this.handle = cx.focus_handle();
+    this.query = "";
+    this.searching = false;
+    this.inputFocused = false;
+    this.first = null;
+    this.input = InputState.new({ placeholder: "title, project, machine, tmux or text" });
+    this.input.on("change", (_e, cx) => { this.query = this.input.value(); cx.notify(); });
+    this.input.on("submit", (_e, cx) => this.openFirst(cx));
+    this.input.on("focus", () => { this.inputFocused = true; });
+    this.input.on("blur", () => { this.inputFocused = false; });
+    // Esc and Backspace are bound rather than heard in on_key_down: the search field turns Esc into an
+    // action it lets pass, and the dialog's own Esc binding closed the whole board before any key
+    // listener ran; the field itself eats Backspace. A binding in the board's context comes before the
+    // dialog's, and one on an empty field ("OmoBoardSearchEmpty > Input") before the field's own.
+    if (!keysBound) {
+      keysBound = true;
+      cx.bind_keys([
+        { keystroke: "escape", action: "omo-board-escape", context: "OmoBoard" },
+        { keystroke: "backspace", action: "omo-board-backspace", context: "OmoBoardSearchEmpty > Input" },
+      ]);
+    }
     // The keyboard, once the board has drawn: Esc then reaches it.
     cx.timer.after(60, () => this.handle.focus());
     this.refresh(cx);
@@ -144,6 +176,39 @@ export default class Board extends View {
 
   close() {
     closeOverlay(props().overlay);
+  }
+
+  // Shows the search bar and gives it the keyboard, or hides it, empty, and gives the keyboard back to the board.
+  search(on, cx) {
+    this.searching = on;
+    if (on) {
+      this.input.focus();
+    } else {
+      this.input.set_value("");
+      this.query = "";
+      this.handle.focus();
+    }
+    cx.notify();
+  }
+
+  // Esc: clears the search, then closes it, and only then closes the board.
+  escape(cx) {
+    if (!this.searching) return this.close();
+    if (this.query) {
+      this.input.set_value("");
+      this.query = "";
+      cx.notify();
+    } else {
+      this.search(false, cx);
+    }
+  }
+
+  // Enter in the search: the first match, in column order, opens as a click on it would.
+  openFirst(cx) {
+    const hit = this.first;
+    if (!hit) return;
+    if (hit.key === "parked") this.reopen(hit.s, false, cx);
+    else if (hit.s.tmux) this.open(hit.s, cx);
   }
 
   // The board closes once the session shows: closing first would cancel the task.
@@ -229,6 +294,14 @@ export default class Board extends View {
     const by = (field, dir) => (a, b) => dir * ((a[field] ?? 0) - (b[field] ?? 0));
     groups.needs.sort(by("lifecycleSince", 1));
     for (const key of ["working", "background", "done", "idle"]) groups[key].sort(by("lastActivity", -1));
+    const words = this.query.toLowerCase().split(/\s+/).filter(Boolean);
+    const filtering = words.length > 0;
+    if (filtering) {
+      for (const [key] of COLUMNS) groups[key] = groups[key].filter((s) => { const h = haystack(s); return words.every((w) => h.includes(w)); });
+    }
+    const firstKey = COLUMNS.map(([key]) => key).find((key) => groups[key].length);
+    this.first = filtering && firstKey ? { key: firstKey, s: groups[firstKey][0] } : null;
+    const hits = COLUMNS.reduce((n, [key]) => n + groups[key].length, 0);
     const machines = new Set(this.sessions.map((s) => s.machine)).size;
     const stale = !this.fetchedAt || now - this.fetchedAt > 60000;
     const live = this.problem ? t.ansi1 : stale ? t.blocked : t.working;
@@ -245,7 +318,7 @@ export default class Board extends View {
               .font_family(mono()).text_size(10.5).text_color(lit ? tone : t.dim).child(String(list.length).padStart(2, "0"))))
           .child(h_flex().h(2).flex_none().child(div().w(48).h_full().bg(lit ? tone : t.border)).child(div().flex_1().h_full().bg(lit ? tone + "2e" : t.border))))
         .child(v_flex().id(`col-${key}`).flex_1().min_h(0).gap(8).overflow_y_scrollbar()
-          .when(!lit, (el) => el.child(div().px(2).py(4).font_family(mono()).text_size(11).text_color(t.dim).child(this.loaded ? "// empty" : "// loading")))
+          .when(!lit, (el) => el.child(div().px(2).py(4).font_family(mono()).text_size(11).text_color(t.dim).child(filtering ? "// no matches" : this.loaded ? "// empty" : "// loading")))
           .children(list.map((s) => (key === "parked" ? this.parkedCard(t, s, now) : this.card(t, s, key, now)))));
     };
 
@@ -262,10 +335,15 @@ export default class Board extends View {
       .shadow_2xl()
       .text_size(13)
       .text_color(t.foreground)
+      .key_context("OmoBoard")
+      .on_action("omo-board-escape", (_e, cx) => this.escape(cx))
       .on_key_down((e, cx) => {
-        if (e.keystroke !== "escape" && e.key !== "escape") return;
-        cx.stop_propagation();
-        this.close();
+        const k = e.keystroke;
+        // `/` opens the search, or takes the keyboard back to it; typed inside it, it's text.
+        if ((k === "/" || e.key_char === "/") && !(this.searching && this.inputFocused)) {
+          cx.stop_propagation();
+          return this.search(true, cx);
+        }
       })
       .child(h_flex().h(3).flex_none().children(steps(t.accent.slice(0, 7), t.working.slice(0, 7), 24)))
       .child(h_flex().h(62).flex_none().px(22).gap(14).items_center().border_b(1).border_color(t.border)
@@ -280,15 +358,37 @@ export default class Board extends View {
           .child(div().font_family(mono()).text_size(11).text_color(this.problem ? t.ansi1 : t.dim)
             .child(this.problem ?? `${this.sessions.length} sessions · ${machines} machine${machines === 1 ? "" : "s"} · ${this.parked.length} parked`)))
         .child(div().flex_1())
+        .child(h_flex().id("board-search").px(8).h(26).gap(6).items_center().rounded(3).border_1()
+          .border_color(this.searching ? t.accent + "b3" : t.border)
+          .font_family(mono()).text_size(11).font_bold().text_color(this.searching ? t.accent : t.dim).cursor_pointer()
+          .hover((st) => st.bg(t.accent + "1f").text_color(t.accent)).tooltip("Search the board (/)")
+          .on_click((_e, cx) => this.search(true, cx))
+          .child(svg("mods/workspace-chrome/search.svg").size(12))
+          .child("/"))
         .child(div().id("board-esc").px(8).h(26).flex().items_center().rounded(3).border_1().border_color(t.working + "80")
           .font_family(mono()).text_size(11).font_bold().text_color(t.working).cursor_pointer()
           .hover((st) => st.bg(t.working + "1f")).tooltip("Close (Esc)").on_click(() => this.close())
           .child("ESC")))
+      // Backspace closes an empty search: its binding matches only while the field is empty, so with text
+      // the field's own Backspace deletes as usual.
+      .when(this.searching, (el) => el.child(h_flex().when(!this.query, (bar) => bar.key_context("OmoBoardSearchEmpty"))
+        .on_action("omo-board-backspace", (_e, cx) => this.search(false, cx))
+        .h(40).flex_none().mx(20).mt(14).pl(12).pr(10).gap(10).items_center()
+        .rounded(4).border_1().border_color(t.accent + "b3").bg(t.chrome)
+        .child(div().font_family(mono()).text_size(13).font_bold().text_color(t.accent).child("/"))
+        .child(Input.new(this.input).flex_1().h_full().text_size(12.8).text_color(t.foreground))
+        .child(div().flex_none().font_family(mono()).text_size(10.5).font_bold().text_color(filtering ? (hits ? t.working : t.ansi1) : t.dim)
+          .child(filtering ? `${String(hits).padStart(2, "0")} MATCH${hits === 1 ? "" : "ES"}` : "TYPE TO FILTER"))
+        .child(div().id("board-search-esc").px(6).h(20).flex().flex_none().items_center().rounded(3).border_1().border_color(t.border)
+          .font_family(mono()).text_size(10).text_color(t.dim).cursor_pointer().hover((st) => st.text_color(t.foreground))
+          .tooltip(this.query ? "Clear (Esc)" : "Close the search (Esc)")
+          .on_click((_e, cx) => (this.query ? (this.input.set_value(""), (this.query = ""), this.input.focus(), cx.notify()) : this.search(false, cx)))
+          .child(this.query ? "ESC CLEAR" : "ESC CLOSE"))))
       .child(h_flex().flex_1().min_h(0).px(20).pt(16).pb(14).gap(14).children(COLUMNS.map(col)))
       .child(h_flex().h(28).flex_none().px(22).gap(8).items_center().border_t(1).border_color(t.border)
         .font_family(mono()).text_size(10.5).text_color(t.dim)
         .child(div().text_color(t.accent).child(">"))
-        .child("click a card to show it in Herdr · a parked card reopens it")
+        .child(this.searching ? "enter shows the first match · esc clears, then closes the search" : "click a card to show it in Herdr · a parked card reopens it · / searches")
         .child(div().flex_1())
         .child(`agent-state · ${this.fetchedAt ? `read ${ago(now - this.fetchedAt)} ago` : "not read yet"}`));
   }
