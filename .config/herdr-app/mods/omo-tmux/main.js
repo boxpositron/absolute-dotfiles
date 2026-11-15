@@ -30,7 +30,7 @@ import { exec, home, nextCommand, run, theme, shared, setShared, props, focused,
 const listTick = () => `${home()}/.local/state/omo-status/list`;
 
 const SEP = "|^|";
-const RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
+const RANK = { error: 6, input: 5, done: 4, partial: 4, working: 3, background: 2, idle: 1 };
 // Window names tmux picks by itself say nothing about the work.
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
 /** @type {import("gpui-shell").TransitionPolicy} */
@@ -170,7 +170,7 @@ export default class OmoTmux extends View {
 
   publish() {
     const count = (...states) => this.panes.filter((p) => states.includes(p.state)).length;
-    const summary = { panes: this.panes.length, needs: count("input", "error"), working: count("working", "background"), done: count("done") };
+    const summary = { panes: this.panes.length, needs: count("input", "error"), working: count("working", "background"), done: count("done", "partial") };
     if (JSON.stringify(shared("omo.tmux") ?? null) !== JSON.stringify(summary)) setShared("omo.tmux", summary);
   }
 
@@ -183,7 +183,7 @@ export default class OmoTmux extends View {
     const seen = this.states.size > 0;
     const now = new Map(this.panes.map((p) => [p.pane, p.state]));
     for (const [pane, state] of now) {
-      if (!seen || state !== "done" || this.states.get(pane) === "done") continue;
+      if (!seen || (state !== "done" && state !== "partial") || this.states.get(pane) === state) continue;
       const gen = (this.flash.get(pane)?.gen ?? 0) + 1;
       this.flash.set(pane, { gen, lit: true });
       cx.timer.after(60, (cx) => { if (this.flash.get(pane)?.gen === gen) { this.flash.get(pane).lit = false; cx.notify(); } });
@@ -249,6 +249,9 @@ export default class OmoTmux extends View {
         .child(state === "error" ? "Failed" : "Needs you");
     }
     if (state === "done") return div().size(7).mx(3).flex_none().rounded(4).bg(t.done);
+    // A step done with tasks still open (omo-status's partial): a ring around a dot.
+    if (state === "partial") return div().size(8).mx(2.5).flex_none().rounded(4).border(1.5).border_color(t.done).flex().items_center().justify_center()
+      .child(div().size(3).rounded(2).bg(t.done));
     return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
   }
 

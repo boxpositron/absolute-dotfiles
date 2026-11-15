@@ -94,7 +94,7 @@ const ROW_H = 28;
 const HEAD_H = 30;
 /** @type {import("gpui-shell").TransitionPolicy} */
 const MOTION = { duration: 160, easing: "ease-out" };
-const PANE_RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
+const PANE_RANK = { error: 6, input: 5, done: 4, partial: 4, working: 3, background: 2, idle: 1 };
 // Window names tmux picks by itself say nothing about the work.
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
 const TMUX = /(^|\/)tmux$/;
@@ -372,6 +372,9 @@ export default class Agents extends View {
         .child(state === "error" ? "Failed" : "Needs you");
     }
     if (state === "done") return div().size(7).mx(3).flex_none().rounded(4).bg(t.done);
+    // A step done with tasks still open (omo-status's partial): a ring around a dot.
+    if (state === "partial") return div().size(8).mx(2.5).flex_none().rounded(4).border(1.5).border_color(t.done).flex().items_center().justify_center()
+      .child(div().size(3).rounded(2).bg(t.done));
     return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
   }
 

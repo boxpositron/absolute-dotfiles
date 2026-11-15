@@ -4,7 +4,8 @@
 # tab title (set-titles-string in ~/.tmux.conf), so each tab shows what its
 # agents need:
 #   🔴 stopped with an error   🟡 waiting for your answer
-#   🟢 finished                🔵 working
+#   🟢 finished                🔘 finished a step, with tasks still open
+#   🔵 working
 #   🟣 turn over, but a build, watcher or child session still runs, or a wake-up is scheduled
 # An omo at rest (idle) shows no marker.
 # Each pane running omo keeps its own state in the pane option @omo_state and a
@@ -22,7 +23,12 @@
 # shows, and omo-notify leaves the sounds and banners to Herdr there. Ghostty
 # clients get no report. Spec: https://www.superlogical.com/rex/docs/build/program-status
 #
-# Usage: omo-status set <pane> <working|background|input|done|error|idle|clear> [message]
+# A turn that ends while omo's todo list still has tasks open (pending or in progress) finished
+# a step of the work, not the work: `set <pane> done` makes it "partial" (step done) with what is
+# left, "4 of 9 left · next: <task>", from the session's transcript (@omo_transcript). Herdr gets
+# it as done, its message saying so; the Herdr panels here draw it as a ring with a dot.
+#
+# Usage: omo-status set <pane> <working|background|input|done|partial|error|idle|clear> [message]
 #        omo-status name <pane> [name]   the omo session's name, which labels its Herdr tab (none: forget it)
 #          (prints the message it stored; working with a message sets the task)
 #        omo-status tty <tty> <state> [message]   (omo outside tmux, in Herdr)
@@ -186,6 +192,7 @@ icon() {
     error) echo "🔴" ;;
     input) echo "🟡" ;;
     done) echo "🟢" ;;
+    partial) echo "🔘" ;;
     working) echo "🔵" ;;
     background) echo "🟣" ;;
   esac
@@ -195,7 +202,7 @@ rank() {
   case $1 in
     error) echo 6 ;;
     input) echo 5 ;;
-    done) echo 4 ;;
+    done | partial) echo 4 ;;
     working) echo 3 ;;
     background) echo 2 ;;
     idle) echo 1 ;;
@@ -212,6 +219,7 @@ message_for() {
     background) echo "${message:-Running in the background}" ;;
     input) echo "${message:-Needs your input}" ;;
     done) echo "${message:-${task:+Finished: $task}}" | sed 's/^$/Task finished/' ;;
+    partial) echo "Step done${message:+ · $message}" ;;
     error) echo "${message:-${task:+Failed: $task}}" | sed 's/^$/Stopped with an error/' ;;
   esac
 }
@@ -238,6 +246,7 @@ report_body() {
   case $state in
     "") echo "state=clear" && return ;;
     input) body="state=blocked:kind=question:app=omo" ;;
+    partial) body="state=done:app=omo" ;; # OSC 7501 has no such state; the message says "Step done"
     background) # OSC 7501 has no background state. Not idle: Herdr shows a terminal that goes
       # from working to idle while you aren't looking as done, and this work isn't done yet.
       body="state=working:app=omo"
@@ -298,6 +307,17 @@ sessions_here() {
     [[ $herdr == *$'\n'"$name"$'\n'* ]] && shown=1
     printf '%s|^|%s|^|%s|^|%s|^|%s\n' "$name" "$windows" "$clients" "$shown" "$line"
   done < <(tmux list-sessions -F '#{session_name}|^|#{session_windows}|^|#{session_attached}|^|#{session_path}|^|#{session_activity}' 2>/dev/null)
+}
+
+# What omo's todo list in transcript <file> still has open, from its last senpi.todo-state entry:
+# "<open> of <all> left · next: <first open task>". Nothing when no task is open or there is no list.
+open_todos() {
+  [[ -r ${1:-} ]] || return 0
+  grep -F '"customType":"senpi.todo-state"' "$1" | tail -n 1 | jq -r '
+    [(.data.phases[]?.tasks[]?), (.data.todos[]?)] as $all
+    | [$all[] | select(.status == "pending" or .status == "in_progress")] as $open
+    | if ($open | length) == 0 then empty
+      else "\($open | length) of \($all | length) left · next: \($open[0].content // "" | .[0:80])" end' 2>/dev/null
 }
 
 # Herdr's own record of what its terminals are attached to, one
@@ -565,7 +585,7 @@ show_most_urgent() {
   # One listing for all of it; most_urgent_pane's choice is made from it too.
   rows=$(tmux list-panes -s -t "$session" -F $'#{pane_id}\x1f#{pane_current_command}\x1f#{@omo_state}\x1f#{@omo_msg}\x1f#{pane_current_path}\x1f#{window_name}\x1f#{@omo_task}\x1f#{@omo_name}\x1f#{@omo_resume}\x1f#{@omo_since}')
   urgent=$(awk -F$'\x1f' '$2 ~ /^-?(zsh|bash|fish|sh|dash)$/ { next }
-    { r = $3 == "error" ? 3 : $3 == "input" ? 2 : $3 == "done" ? 1 : 0; s = $10 + 0 }
+    { r = $3 == "error" ? 3 : $3 == "input" ? 2 : ($3 == "done" || $3 == "partial") ? 1 : 0; s = $10 + 0 }
     r > 0 && (r > br || (r == br && s < bs)) { br = r; bs = s; bp = $1 }
     END { print bp }' <<<"$rows")
   while IFS=$'\x1f' read -r pane cmd state msg path window task name resume _; do
@@ -577,7 +597,7 @@ show_most_urgent() {
         ;;
     esac
     omo_panes+="$pane,"
-    case $state in input | error | done) needing=$((needing + 1)) ;; esac
+    case $state in input | error | done | partial) needing=$((needing + 1)) ;; esac
     if (($(rank "$state") > $(rank "$best"))) || [[ $pane == "$urgent" ]]; then
       best=$state best_msg=${msg:+${path##*/}: $msg} best_raw=$msg best_project=${path##*/} best_resume=$resume
       [[ $state == background ]] && best_msg=$msg
@@ -596,6 +616,7 @@ show_most_urgent() {
     input) what="needs you" prefix="Needs your input: " ;;
     error) what="failed" prefix="Failed: " ;;
     done) what="finished" prefix="Finished: " ;;
+    partial) what="step done" prefix="Step done · " ;;
   esac
   if [[ -n $what ]]; then
     agent=${label:-$best_project} rest=${best_raw#"$prefix"}
@@ -651,7 +672,7 @@ most_urgent_pane() {
     $4 ~ /^-?(zsh|bash|fish|sh|dash)$/ { next }
     $2 == "error" { print 3 "\t" ($3 == "" ? 0 : $3) "\t" $1 }
     $2 == "input" { print 2 "\t" ($3 == "" ? 0 : $3) "\t" $1 }
-    $2 == "done" { print 1 "\t" ($3 == "" ? 0 : $3) "\t" $1 }' |
+    $2 == "done" || $2 == "partial" { print 1 "\t" ($3 == "" ? 0 : $3) "\t" $1 }' |
     sort -t$'\t' -k1,1nr -k2,2n | head -n 1 | cut -f3
 }
 
@@ -664,7 +685,7 @@ visit_session() {
   if [[ -n $pane ]]; then
     tmux select-window -t "$pane" \; select-pane -t "$pane" 2>/dev/null
     case $(tmux show-option -pqv -t "$pane" @omo_state) in
-      input | done | error) tmux set-option -p -t "$pane" @omo_state idle \; set-option -p -u -t "$pane" @omo_msg ;;
+      input | done | partial | error) tmux set-option -p -t "$pane" @omo_state idle \; set-option -p -u -t "$pane" @omo_msg ;;
     esac
   fi
   show_most_urgent "$session"
@@ -732,6 +753,10 @@ case ${1:-} in
     if [[ $state == "done" && $(tmux show-option -pqv -t "$pane" @omo_state) == input ]]; then
       tmux show-option -pqv -t "$pane" @omo_msg
       exit 0
+    fi
+    if [[ $state == "done" ]]; then
+      left=$(open_todos "$(tmux show-option -pqv -t "$pane" @omo_transcript)")
+      if [[ -n $left ]]; then state=partial message=$left; fi
     fi
     task=$(tmux show-option -pqv -t "$pane" @omo_task)
     if [[ $state == working && -n $message ]]; then
@@ -967,7 +992,7 @@ case ${1:-} in
     # A click on a pane that needs nothing goes to the one in its session that does,
     # unless it asked for exactly that pane (a row in Herdr's Agents tree).
     case $exact:$(tmux show-option -pqv -t "$pane" @omo_state) in
-      exact:* | *:input | *:done | *:error) ;;
+      exact:* | *:input | *:done | *:partial | *:error) ;;
       *)
         urgent=$(most_urgent_pane "$session")
         [[ -n $urgent ]] && pane=$urgent
@@ -977,7 +1002,7 @@ case ${1:-} in
     # Going to a pane is looking at it. A Herdr client gets no focus-in hook for it
     # (tmux already counts it focused), so a finished or waiting pane clears here.
     case $(tmux show-option -pqv -t "$pane" @omo_state) in
-      input | done | error) "$0" set "$pane" idle >/dev/null ;;
+      input | done | partial | error) "$0" set "$pane" idle >/dev/null ;;
     esac
     while read -r pid client_session; do
       [[ $client_session == "$session" ]] || continue
@@ -1034,7 +1059,7 @@ case ${1:-} in
     ;;
   next)
     pane=$("$0" list | awk -F'[|][\\^][|]' '
-      $5 == "input" || $5 == "error" { r = 2 } $5 == "done" { r = 1 } $5 != "input" && $5 != "error" && $5 != "done" { next }
+      $5 == "input" || $5 == "error" { r = 2 } $5 == "done" || $5 == "partial" { r = 1 } $5 != "input" && $5 != "error" && $5 != "done" && $5 != "partial" { next }
       { print r "\t" ($6 == "" ? 0 : $6) "\t" $1 }' | sort -t$'\t' -k1,1nr -k2,2n | head -n 1 | cut -f3)
     [[ -n $pane ]] || { echo "nothing needs you" >&2; exit 1; }
     exec "$0" show "$pane"

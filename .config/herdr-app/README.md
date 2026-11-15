@@ -34,9 +34,12 @@ Herdr knows an agent's state only when the program reports it with OSC 7501 (the
 | working on a prompt | working |
 | turn over, a build, watcher or child session still running, or a wake-up scheduled | working, with `◐ background · <what is running>` as the message (the protocol has no background state, and Herdr shows a terminal that goes from working to idle while you aren't looking as done) |
 | asked you something | blocked (question) |
-| finished | done |
+| finished, every task in its todo list closed | done |
+| finished a step, with tasks still open in its todo list | done, with `Step done · 4 of 9 left · next: <task>` as the message (the protocol has no such state) |
 | stopped with an error | error |
 | at rest, or you've looked | idle |
+
+"Step done" (omo-status's `partial`) comes from the session's transcript: when omo stops, `omo-status set <pane> done` reads the last `senpi.todo-state` entry, and a list with tasks still pending or in progress makes it a step, not the end of the work. The Agents tree, the omo panel and the context strip draw it as a green ring around a dot, beside finished's solid dot; the Ghostty tab marker is 🔘. A session without a todo list, or with every task closed, finishes as before.
 
 The message names the project and the task, the first line of the prompt: `studio: Finished: fix the imap timeouts`. tmux's `client-attached` and `client-session-changed` hooks send it again when a client arrives or switches session. omo running straight in a Herdr pane, outside tmux, reports to its own terminal. Where Herdr shows the session, `omo-notify` plays no sound and posts no banner of its own, and Herdr plays omo's sounds. Ghostty tabs work as before, and Ghostty gets no reports.
 

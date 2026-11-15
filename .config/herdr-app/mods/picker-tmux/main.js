@@ -45,8 +45,8 @@ function spaceColors() {
 // its output into "_" when Herdr runs it, so fields split on text.
 const SEP = "|^|";
 // omo-status's states in Herdr's words.
-const OMO = { working: "working", background: "background", input: "blocked", error: "blocked", done: "done", idle: "idle" };
-const RANK = { blocked: 5, done: 4, working: 3, background: 2, idle: 1 };
+const OMO = { working: "working", background: "background", input: "blocked", error: "blocked", done: "done", partial: "partial", idle: "idle" };
+const RANK = { blocked: 5, done: 4, partial: 4, working: 3, background: 2, idle: 1 };
 // Each row's height. Rows sit at fixed y, so the selection is one highlight that slides between them.
 const H = { section: 30, ctx: 34, earlier: 34, tsession: 36, tpane: 32, create: 40, action: 34, note: 34 };
 const PICK = new Set(["ctx", "earlier", "tsession", "tpane", "create", "action"]);
@@ -301,9 +301,10 @@ export default class Picker extends View {
   glyph(t, st) {
     if (st === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
     if (st === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.ansi5).spin(2400);
-    return div().w(12).flex_none().text_color(t[st] ?? t.dim)
+    // partial: a step done with tasks still open (omo-status).
+    return div().w(12).flex_none().text_color(st === "partial" ? t.done : t[st] ?? t.dim)
       .when(st === "blocked", (el) => el.loop("opacity", { from: 0.45, to: 1, period: 1600 }))
-      .child(st === "idle" ? "\u25cb" : st ? "\u25cf" : "\u00b7");
+      .child(st === "idle" ? "\u25cb" : st === "partial" ? "\u25c9" : st ? "\u25cf" : "\u00b7");
   }
 
   tag(t, text, color) {

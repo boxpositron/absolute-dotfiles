@@ -25,7 +25,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { exec, home, appHome, focused, panes, spaces, terminals, readTextFile, watchFolder, shared, setShared, theme, props, openOverlay, closeOverlay, notify, nextCommand, run } from "herdr";
 
 const SEP = "|^|";
-const RANK = { error: 6, input: 5, done: 4, working: 3, background: 2, idle: 1 };
+const RANK = { error: 6, input: 5, done: 4, partial: 4, working: 3, background: 2, idle: 1 };
 // Window names tmux picks by itself say nothing about the work.
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
 // A safety net: tmux's hooks and omo's state changes (the two tick folders) and Herdr's focus
@@ -375,6 +375,9 @@ export default class TmuxContext extends View {
         .flex().items_center().loop("opacity", { from: 0.55, to: 1, period: 1600 }).child(state === "error" ? "Failed" : "Needs you");
     }
     if (state === "done") return div().size(7).mx(2).flex_none().rounded(4).bg(t.done);
+    // A step done with tasks still open (omo-status's partial): a ring around a dot.
+    if (state === "partial") return div().size(8).mx(1.5).flex_none().rounded(4).border(1.5).border_color(t.done).flex().items_center().justify_center()
+      .child(div().size(3).rounded(2).bg(t.done));
     return div().size(7).mx(2).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
   }
 
