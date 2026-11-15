@@ -47,6 +47,12 @@
 #        omo-status list             (every pane running omo, for Herdr's "omo in tmux" panel:
 #                                     pane, session, window, folder, state, since, scheduled wake-up, message)
 #        omo-status panes            (every tmux pane, for Herdr's search)
+#        omo-status sessions         (every tmux session, for Herdr's search: name, windows, clients,
+#                                     whether a Herdr terminal shows it, folder, last activity)
+#        omo-status session <name> [<machine>]
+#                                    (shows tmux session <name> in Herdr as show does, starting it
+#                                     first in your home folder when there is none; on Herdr machine
+#                                     <machine> when one is named)
 #        omo-status where <terminal> (the tmux pane a Herdr terminal's tmux client shows, for
 #                                     Herdr's Files and Changes panels: a "client|^|<pane>" line,
 #                                     then one "pane|^|..." line per pane in its session; nothing
@@ -276,6 +282,22 @@ herdr_sessions() {
   while read -r pid session; do
     [[ -n $(herdr_terminal "$pid") ]] && printf '%s\n' "$session"
   done < <(tmux list-clients -F '#{client_pid} #{session_name}')
+}
+
+# Every tmux session: "<session>|^|<windows>|^|<clients>|^|<1 when a Herdr terminal shows it, else 0>|^|
+# <folder>|^|<last activity, epoch seconds>". It uses nothing in this file but the tmux wrapper,
+# herdr_terminal and herdr_sessions, so `sessions` can send it to a Herdr machine with declare -f.
+sessions_here() {
+  local herdr line name windows clients shown
+  herdr=$'\n'$(herdr_sessions)$'\n'
+  while IFS= read -r line; do
+    name=${line%%"|^|"*} line=${line#*"|^|"}
+    windows=${line%%"|^|"*} line=${line#*"|^|"}
+    clients=${line%%"|^|"*} line=${line#*"|^|"}
+    shown=0
+    [[ $herdr == *$'\n'"$name"$'\n'* ]] && shown=1
+    printf '%s|^|%s|^|%s|^|%s|^|%s\n' "$name" "$windows" "$clients" "$shown" "$line"
+  done < <(tmux list-sessions -F '#{session_name}|^|#{session_windows}|^|#{session_attached}|^|#{session_path}|^|#{session_activity}' 2>/dev/null)
 }
 
 # Herdr's own record of what its terminals are attached to, one
@@ -986,6 +1008,29 @@ case ${1:-} in
     fi
     "$0" show "${machine:+$machine/}$target" || exit 1
     open -a Herdr 2>/dev/null
+    ;;
+  sessions)
+    sessions_here
+    # A machine's own omo-status may be older than this one, so the functions go along, as for jobs.
+    for machine in $(machines); do
+      hc exec --on "$machine" --timeout 5 bash -c "$(declare -f tmux herdr_terminal herdr_sessions sessions_here)"'; sessions_here' sessions 2>/dev/null |
+        sed "s|^|$machine/|"
+    done
+    ;;
+  session)
+    # Herdr's search (Cmd+P) runs this for a name that matches no session. tmux turns "." and ":"
+    # in a name into "_", and the scripts here split on spaces, so only these characters pass.
+    name=${2:?session name required} machine=${3:-}
+    [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || { echo "omo-status session: use letters, digits, - and _ in a session name" >&2; exit 2; }
+    start='tmux has-session -t "=$1" 2>/dev/null || tmux new-session -d -s "$1" -c "$HOME" || exit 1
+      tmux display-message -p -t "=$1:" "#{session_path}"'
+    if [[ -z $machine ]]; then
+      folder=$(sh -c "$start" _ "$name") || exit 1
+    else
+      folder=$(hc exec --on "$machine" --timeout 8 sh -c "$start" _ "$name") || exit 1
+    fi
+    [[ -n $folder ]] || exit 1
+    open_space "$name" "$folder" "=$name" "$machine"
     ;;
   next)
     pane=$("$0" list | awk -F'[|][\\^][|]' '

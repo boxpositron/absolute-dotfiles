@@ -4,8 +4,8 @@
   "overlay": {
     "kind": "popup",
     "at": "top",
-    "offset": 40,
-    "width": 640,
+    "offset": 170,
+    "width": 680,
     "height": 0.8
   },
   "cloned_from": {

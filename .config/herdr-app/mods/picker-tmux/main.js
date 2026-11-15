@@ -1,19 +1,26 @@
-// Go to a tab. Drops from the Terminals layout's space chip (popup, at: "top"). Spaces with
-// something that needs you come first, quiet spaces (no agent running)
-// fold into "earlier". Type to filter, ↑/↓ and Enter to go, ctrl+d to close
-// a tab, Esc to leave. Last rows: new work (a tab here, a space on this
-// computer or on each connected machine).
-// picker-tmux: Herdr's picker plus tmux. Its sessions fold into one row until
-// you type; then sessions match by name and panes by window, program, folder
-// or omo message. Going to one shows it through `omo-status show`: in the
-// Herdr tab already on its session, else the space named after the session,
-// else a new space for it.
+// Go to a tab, a space or a tmux session: Cmd+P in the netrunner layout, and the sidebar's search
+// button. A popup a little above the middle of the window (mod.json: 170 px down), so the search
+// field stays put while the list shrinks as you type.
+// picker-tmux: Herdr's picker (cloned from `picker` 0.1.13) with tmux added, and a look of its own.
+//
+// With nothing typed: the spaces with something running (what needs you first, the tab you are on
+// selected), quiet spaces folded into one row, then each machine's tmux sessions that no Herdr
+// terminal shows yet (this Mac, then each connected Herdr machine), then new tab and new space.
+// Typing filters tabs by space, tab or agent name, tmux sessions by name and their panes by window,
+// program, folder or omo message, and offers to create a tmux session of that name, on this Mac or
+// a machine. When nothing else matches that offer comes first and is selected, so a name and Enter
+// start the session in your home folder and attach it in a space of its own.
+// Going to a session or a pane runs `omo-status show` (the Herdr tab already on the session, else a
+// tab in the space named after it, else a new space); creating runs `omo-status session`.
+// ↑/↓ and Enter, or the pointer; Ctrl+D closes the selected tab; Esc leaves.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { agents, spaces, terminals, run, hc, exec, home, theme, settings, props, closeOverlay, openOverlay, shared, setShared } from "herdr";
+import { agents, spaces, terminals, run, hc, exec, home, theme, settings, props, closeOverlay, shared, setShared, notify } from "herdr";
 
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+// Another machine's things, as the Agents tree marks them.
+const REMOTE = "#fcee0a";
 
 // Space colors, kept by space id in shared "space.colors": a theme
 // color name ("ansi6") or a picked #rrggbb. A space seen without one gets
@@ -33,15 +40,17 @@ function spaceColors() {
   if (changed) setShared("space.colors", kept);
   return kept;
 }
-// Every tmux pane, here and on Herdr machines ("flowstate-remote/%3"), from
-// `omo-status panes`. tmux turns control characters in its output into "_"
-// when Herdr runs it, so fields split on text.
+// Every tmux pane (`omo-status panes`) and session (`omo-status sessions`), here and on Herdr
+// machines ("flowstate-remote/%3", "flowstate-remote/unified"). tmux turns control characters in
+// its output into "_" when Herdr runs it, so fields split on text.
 const SEP = "|^|";
 // omo-status's states in Herdr's words.
 const OMO = { working: "working", background: "background", input: "blocked", error: "blocked", done: "done", idle: "idle" };
 const RANK = { blocked: 5, done: 4, working: 3, background: 2, idle: 1 };
-// Everything but the titles: the folds toggle when picked, as Herdr's "earlier" does.
-const PICK = new Set(["ctx", "new", "space", "tsession", "tpane", "earlier", "tmuxfold"]);
+// Each row's height. Rows sit at fixed y, so the selection is one highlight that slides between them.
+const H = { section: 30, ctx: 34, earlier: 34, tsession: 36, tpane: 32, create: 40, action: 34, note: 34 };
+const PICK = new Set(["ctx", "earlier", "tsession", "tpane", "create", "action"]);
+const MAX_LIST = 560;
 
 // tmux sessions in tmux's order, each with its panes and the pane it shows.
 function tmuxSessions(stdout) {
@@ -60,37 +69,90 @@ function tmuxSessions(stdout) {
   return [...sessions.values()].map((s) => ({ ...s, current: s.current ?? s.panes[0] }));
 }
 
+// "<[machine/]name>|^|<windows>|^|<clients>|^|<shown in Herdr>|^|<folder>|^|<activity>" lines.
+function tmuxList(stdout) {
+  return stdout.split("\n").filter(Boolean).map((line) => {
+    const [key, windows, clients, shown, folder, activity] = line.split(SEP);
+    const i = key.indexOf("/");
+    return {
+      key, name: i >= 0 ? key.slice(i + 1) : key, machine: i >= 0 ? key.slice(0, i) : null,
+      windows: Number(windows) || 0, clients: Number(clients) || 0, shown: shown === "1", folder: folder ?? "", activity: Number(activity) || 0,
+    };
+  });
+}
+
+// What a typed name becomes as a tmux session name: tmux turns "." and ":" into "_", and
+// omo-status splits on spaces, so spaces become dashes and other characters go.
+function sessionName(text) {
+  return text.trim().replace(/[\s.:/]+/g, "-").replace(/[^A-Za-z0-9_-]/g, "").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function ago(sec) {
+  const s = Math.max(0, Date.now() / 1000 - sec);
+  if (!sec) return "";
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+// "~/…/Code/stockhut": the home folder as ~, and only the last two folders of a deep path.
+function shortPath(folder, machine) {
+  const h = home();
+  let p = machine ? folder.replace(/^\/home\/[^/]+|^\/root(?=\/|$)/, "~") : folder === h ? "~" : folder.startsWith(`${h}/`) ? `~${folder.slice(h.length)}` : folder;
+  const parts = p.split("/");
+  if (parts.length > 4) p = `${parts[0]}/\u2026/${parts.slice(-2).join("/")}`;
+  return p;
+}
+
 function spaceColor(t, p) {
   if (p.name === "~") return t.dim;
   const c = spaceColors()[p.id] ?? PROJECT_COLORS[0];
   return c.startsWith("#") ? c : (MARK[c] ?? t[c]);
 }
 
+// Who each row is, across renders, for the row that is busy opening.
+function rowKey(r) {
+  if (!r) return null;
+  if (r.kind === "ctx") return `ctx:${r.ctx.id}`;
+  if (r.kind === "tsession") return `ts:${r.s.key}`;
+  if (r.kind === "tpane") return `tp:${r.p.pane}`;
+  if (r.kind === "create") return `new:${r.machine ?? ""}:${r.name}`;
+  return r.kind;
+}
+
 export default class Picker extends View {
   init(_props, cx) {
     this.filter = "";
-    this.input = InputState.new({ placeholder: "Go to a tab, space, agent or tmux session…" });
+    this.input = InputState.new({ placeholder: "Go to a tab, space or tmux session, or name a new session\u2026" });
     this.input.on("change", (_e, cx) => {
       this.filter = this.input.value();
-      this.at = this.filter ? Math.max(0, this.rows().filter((r) => PICK.has(r.kind)).findIndex((r) => r.kind === "ctx")) : 0;
+      this.at = this.filter.trim() ? this.preferred() : null;
       cx.notify();
     });
-    this.input.on("submit", (_e, cx) => this.go(this.rows().filter((r) => PICK.has(r.kind))[this.at], cx));
+    this.input.on("submit", (_e, cx) => this.go(this.pickable()[this.at], cx));
     this.input.focus();
     cx.timer.after(600, () => this.input.focus());
     this.at = null;
     this.scroll = 0;
     this.showEarlier = false;
-    this.showTmux = false;
     this.tmux = [];
+    this.sessions = [];
+    this.loaded = { panes: false, sessions: false };
     this.machines = [];
-    cx.spawn(async (cx) => {
+    this.busy = null;
+    const load = (what, parse) => cx.spawn(async (cx) => {
       try {
-        const r = await exec(`${home()}/.local/bin/omo-status`, ["panes"]);
-        if (r.code === 0) this.tmux = tmuxSessions(r.stdout);
+        const r = await exec(`${home()}/.local/bin/omo-status`, [what]);
+        if (r.code === 0) parse(r.stdout);
       } catch {}
+      this.loaded[what] = true;
+      // A name typed before the list came keeps the best row for it selected.
+      if (this.filter.trim()) this.at = this.preferred();
       cx.notify();
     });
+    load("panes", (out) => { this.tmux = tmuxSessions(out); });
+    load("sessions", (out) => { this.sessions = tmuxList(out); });
     this.handle = cx.focus_handle();
     cx.spawn(async (cx) => {
       try {
@@ -105,8 +167,19 @@ export default class Picker extends View {
     closeOverlay(props().overlay);
   }
 
+  // Sessions with what `panes` knows of them: their omo state and the pane each shows. Without
+  // `sessions` (an older omo-status), the panes alone.
+  sessionList() {
+    const byKey = new Map(this.tmux.map((s) => [s.name, s]));
+    const list = this.sessions.length ? this.sessions : this.tmux.map((s) => tmuxList(`${s.name}${SEP}${s.windows.size}${SEP}${s.attached ? 1 : 0}${SEP}0${SEP}${SEP}0`)[0]);
+    return list.map((x) => {
+      const s = byKey.get(x.key);
+      return { ...x, panes: s?.panes ?? [], current: s?.current ?? null, status: s?.status ?? null };
+    });
+  }
+
   rows() {
-    const f = this.filter.toLowerCase();
+    const typed = this.filter.trim(), f = typed.toLowerCase();
     const all = agents();
     const live = terminals().filter((x) => x.state === "live");
     const teamOf = (addrs) => {
@@ -129,59 +202,100 @@ export default class Picker extends View {
     busy.sort((a, b) => (b.w.status === "blocked") - (a.w.status === "blocked"));
     const out = [];
     const add = (p) => {
-      out.push({ kind: "head", w: p.w });
       for (const c of p.ctxs) out.push({ kind: "ctx", ...c });
     };
+    if (busy.length || quiet.length) out.push({ kind: "section", label: "Spaces" });
     busy.forEach(add);
-    if (quiet.length) {
+    if (quiet.length && f) quiet.forEach(add);
+    else if (quiet.length) {
       out.push({ kind: "earlier", count: quiet.length });
-      if (this.showEarlier || f) quiet.forEach(add);
+      if (this.showEarlier) quiet.forEach(add);
     }
-    if (this.tmux.length && !f) {
-      out.push({ kind: "tmuxfold", count: this.tmux.length });
-      if (this.showTmux) this.tmux.forEach((s) => out.push({ kind: "tsession", s }));
-    } else if (this.tmux.length) {
-      const hits = this.tmux
-        .map((s) => ({ s, named: s.name.toLowerCase().includes(f), panes: s.panes.filter((p) => [p.window, p.command, p.folder, p.msg].join(" ").toLowerCase().includes(f)) }))
-        .filter((h) => h.named || h.panes.length);
-      if (hits.length) out.push({ kind: "tmuxhead" });
+
+    // tmux, a section per machine: unshown sessions with nothing typed, every match once typing.
+    const sessions = this.sessionList();
+    const machines = [null, ...this.machines, ...sessions.map((s) => s.machine)].filter((m, i, a) => a.indexOf(m) === i);
+    for (const machine of machines) {
+      const mine = sessions.filter((s) => s.machine === machine);
+      const hits = f
+        ? mine.map((s) => ({ s, named: s.name.toLowerCase().includes(f), panes: s.panes.filter((p) => [p.window, p.command, p.folder, p.msg].join(" ").toLowerCase().includes(f)) }))
+          .filter((h) => h.named || h.panes.length)
+        : mine.filter((s) => !s.shown).map((s) => ({ s, panes: [] }));
+      if (!hits.length) continue;
+      const note = f ? `${hits.length} match${hits.length > 1 ? "es" : ""}` : `${hits.length} not in Herdr`;
+      out.push({ kind: "section", label: "tmux", machine, note });
       for (const h of hits) {
         out.push({ kind: "tsession", s: h.s });
         h.panes.forEach((p) => out.push({ kind: "tpane", s: h.s, p }));
       }
     }
-    out.push({ kind: "new" });
-    out.push({ kind: "space", machine: null });
-    for (const m of this.machines) out.push({ kind: "space", machine: m });
+    if (!this.loaded.sessions || !this.loaded.panes) out.push({ kind: "note", text: "Looking for tmux sessions\u2026", spin: true });
+
+    const name = sessionName(typed);
+    const where = name && this.loaded.sessions ? [null, ...this.machines].filter((m) => !sessions.some((s) => s.machine === m && s.name === name)) : [];
+    if (f && !out.some((r) => PICK.has(r.kind)) && !where.length) out.push({ kind: "note", text: name ? `No matches for \u201c${typed}\u201d` : "Session names take letters, digits, - and _" });
+    out.push({ kind: "section", label: "New" });
+    for (const m of where) out.push({ kind: "create", name, machine: m });
+    out.push({ kind: "action", what: "tab" });
+    out.push({ kind: "action", what: "space", machine: null });
+    for (const m of this.machines) out.push({ kind: "action", what: "space", machine: m });
     return out;
   }
 
+  pickable() {
+    return this.rows().filter((r) => PICK.has(r.kind));
+  }
+
+  // The row Enter takes for what is typed: a tab, else a tmux session or pane, else a new session.
+  preferred() {
+    const p = this.pickable();
+    for (const kind of ["ctx", "tsession", "tpane", "create"]) {
+      const i = p.findIndex((r) => r.kind === kind);
+      if (i >= 0) return i;
+    }
+    return 0;
+  }
+
   go(r, cx) {
-    if (!r) return;
-    if (r.kind === "tsession" || r.kind === "tpane") return this.goTmux(r.kind === "tpane" ? r.p : r.s.current, cx);
-    if (r.kind === "earlier" || r.kind === "tmuxfold") {
-      this.at = this.rows().filter((x) => PICK.has(x.kind)).findIndex((x) => x.kind === r.kind);
-      if (r.kind === "earlier") this.showEarlier = !this.showEarlier;
-      else this.showTmux = !this.showTmux;
+    if (!r || this.busy) return;
+    if (r.kind === "earlier") {
+      this.showEarlier = !this.showEarlier;
+      this.at = this.pickable().findIndex((x) => x.kind === "earlier");
       this.input.focus();
       cx.notify();
       return;
     }
+    if (r.kind === "tsession" || r.kind === "tpane") {
+      const pane = r.kind === "tpane" ? r.p : r.s.current;
+      return this.omo(r, pane ? ["show", pane.pane] : ["session", r.s.name, ...(r.s.machine ? [r.s.machine] : [])], cx);
+    }
+    if (r.kind === "create") return this.omo(r, ["session", r.name, ...(r.machine ? [r.machine] : [])], cx);
     this.close();
     if (r.kind === "ctx") run("tab.select", { id: r.ctx.id });
-    else if (r.kind === "new") run("tab.new");
-    else if (r.kind === "space") run("space.new", { machine: r.machine ?? "" });
+    else if (r.what === "tab") run("tab.new");
+    else run("space.new", { machine: r.machine ?? "" });
   }
 
-  // The popup closes after the jump: closing it first would cancel the task.
-  goTmux(p, cx) {
+  // The popup closes after the jump, which can take a few seconds while a new space attaches:
+  // closing it first would cancel the task. The row spins meanwhile.
+  omo(r, args, cx) {
+    this.busy = rowKey(r);
+    cx.notify();
     cx.spawn(async () => {
+      let failed = null;
       try {
-        await exec(`${home()}/.local/bin/omo-status`, ["show", p.pane]);
-      } finally {
-        this.close();
+        const res = await exec(`${home()}/.local/bin/omo-status`, args);
+        if (res.code !== 0) failed = res.stderr.trim() || `omo-status ${args[0]} stopped with code ${res.code}`;
+      } catch (e) {
+        failed = String(e?.message ?? e);
       }
+      if (failed) notify({ title: r.kind === "create" ? `Could not create ${r.name}` : "Could not open the tmux session", body: failed, level: "error" });
+      this.close();
     });
+  }
+
+  spinner(t, color) {
+    return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(color ?? t.dim).spin(900);
   }
 
   glyph(t, st) {
@@ -189,7 +303,30 @@ export default class Picker extends View {
     if (st === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.ansi5).spin(2400);
     return div().w(12).flex_none().text_color(t[st] ?? t.dim)
       .when(st === "blocked", (el) => el.loop("opacity", { from: 0.45, to: 1, period: 1600 }))
-      .child(st === "idle" ? "○" : st ? "●" : "·");
+      .child(st === "idle" ? "\u25cb" : st ? "\u25cf" : "\u00b7");
+  }
+
+  tag(t, text, color) {
+    return div().flex_none().h(18).px(6).flex().items_center().rounded(4).border_1().border_color(t.border).text_size(10.5).text_color(color).child(text);
+  }
+
+  keycap(t, text) {
+    return div().flex_none().h(18).min_w(18).px(4).flex().items_center().justify_center().rounded(4).border_1().border_color(t.border)
+      .bg(t.background).text_size(10.5).text_color(t.muted).child(text);
+  }
+
+  hint(t, keys, label) {
+    return h_flex().flex_none().gap(4).items_center().children(keys.map((k) => this.keycap(t, k))).child(div().pl(2).child(label));
+  }
+
+  enterLabel(r) {
+    if (!r) return "open";
+    if (r.kind === "ctx") return "go to tab";
+    if (r.kind === "earlier") return this.showEarlier ? "fold quiet spaces" : "show quiet spaces";
+    if (r.kind === "tsession") return r.s.shown ? "go to session" : "open in a space";
+    if (r.kind === "tpane") return "go to pane";
+    if (r.kind === "create") return "create and attach";
+    return r.what === "tab" ? "new tab" : "new space";
   }
 
   render() {
@@ -198,31 +335,26 @@ export default class Picker extends View {
     const pickable = rows.filter((r) => PICK.has(r.kind));
     // Opens on where you are.
     if (this.at === null) this.at = Math.max(0, pickable.findIndex((r) => r.kind === "ctx" && r.w.active && r.ctx.active));
-    this.at = Math.min(this.at, pickable.length - 1);
+    this.at = Math.max(0, Math.min(this.at, pickable.length - 1));
     const sel = pickable[this.at];
-    // One continuous strip: each row (and the group title before it) at a fixed
-    // y. Scrolling moves the strip only as far as it takes to keep the selected
-    // row in view, so the arrows can't run the selection off the list.
-    const H = { head: 29, earlier: 35, new: 36, ctx: 32, space: 32, tmuxfold: 35, tmuxhead: 29, tsession: 32, tpane: 32 };
+    // One continuous strip: each row at a fixed y. Scrolling moves the strip only as far as it takes
+    // to keep the selected row (and the titles right above it) in view.
     const tops = [];
     let y = 0;
-    rows.forEach((r) => { tops.push(y); y += H[r.kind] ?? 32; });
-    const total = y;
-    const height = Math.min(320, this.listHeight ?? 320);
-    // Rows always sit at fixed y, short list or long, so the selection highlight can slide between them.
-    const fixed = true;
+    rows.forEach((r) => { tops.push(y); y += H[r.kind]; });
+    const total = y + 8;
+    const height = Math.min(MAX_LIST, total, this.listHeight ?? MAX_LIST);
     const maxScroll = Math.max(0, total - height);
     this.scroll = Math.max(0, Math.min(this.scroll, maxScroll));
     const si = rows.indexOf(sel);
     if (si >= 0) {
-      if (tops[si] < this.scroll) this.scroll = tops[si];
-      if (tops[si] + (H[sel.kind] ?? 32) > this.scroll + height) this.scroll = tops[si] + (H[sel.kind] ?? 32) - height;
+      let top = si;
+      while (top > 0 && rows[top - 1].kind === "section") top--;
+      if (tops[top] < this.scroll) this.scroll = tops[top];
+      if (tops[si] + H[sel.kind] > this.scroll + height) this.scroll = tops[si] + H[sel.kind] - height;
     }
-    const place = (el, i) =>
-      fixed
-        ? el.absolute().left(0).right(0).top(tops[i] - this.scroll).bottom(height - (tops[i] + (H[rows[i].kind] ?? 32) - this.scroll))
-        : el;
-    const visible = (i) => !fixed || (tops[i] + (H[rows[i].kind] ?? 32) > this.scroll && tops[i] < this.scroll + height);
+    const place = (el, i) => el.absolute().left(0).right(0).top(tops[i] - this.scroll).h(H[rows[i].kind]);
+    const visible = (i) => tops[i] + H[rows[i].kind] > this.scroll && tops[i] < this.scroll + height;
     // Pointer movement picks the row under it; a list scrolling under a still pointer doesn't.
     const point = (r) => (_e, cx) => {
       const i = pickable.indexOf(r);
@@ -231,132 +363,93 @@ export default class Picker extends View {
         cx.notify();
       }
     };
-    // One highlight for the selection, sliding to it; the "new" row sits 4px down its slot.
-    const highlight = si >= 0 && div().id("pk-sel").absolute().left(4).right(4).h(32).rounded(7).bg(t.hover)
-      .top(tops[si] + (sel.kind === "new" ? 4 : 0) - this.scroll)
-      .transition("top", { duration: 120, easing: "ease-out" });
+    const busyKey = this.busy;
+    // One highlight for the selection, sliding to it, with an accent edge.
+    const highlight = si >= 0 && div().id("pk-sel").absolute().left(6).right(6).h(H[sel.kind] - 4).rounded(7).bg(t.selected)
+      .top(tops[si] + 2 - this.scroll)
+      .transition("top", { duration: 120, easing: "ease-out" })
+      .child(div().absolute().left(0).top(8).bottom(8).w(2).rounded(1).bg(t.accent));
+
+    const pickRow = (r, id) => h_flex().id(id).size_full().pr(16).gap(10).items_center().cursor_pointer()
+      .on_mouse_move(point(r)).on_click((_e, cx) => this.go(r, cx));
 
     const row = (r) => {
-      if (r.kind === "head") {
-        return h_flex()
-          .px(10)
-          .pt(10)
-          .pb(3)
-          .gap(8)
-          .items_center()
-          .text_size(11)
-          .font_semibold()
-          .text_color(t.dim)
-          .child(h_flex().size(18).rounded(5).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...r.w.name][0]?.toUpperCase() ?? "?"))
-          .child(r.w.name);
+      if (r.kind === "section") {
+        return h_flex().size_full().px(16).pt(10).gap(6).items_center().text_size(10.5).text_color(t.dim)
+          .child(div().font_semibold().child(r.label.toUpperCase()))
+          .when(r.machine !== undefined, (el) => el
+            .child(div().child("\u00b7"))
+            .child(div().font_semibold().text_color(r.machine ? REMOTE : t.muted).child((r.machine ?? "This Mac").toUpperCase())))
+          .child(div().flex_1())
+          .when(Boolean(r.note), (el) => el.child(div().text_size(11).child(r.note)));
+      }
+      if (r.kind === "note") {
+        return h_flex().size_full().px(18).gap(10).items_center().text_size(12).text_color(t.dim)
+          .child(r.spin ? this.spinner(t) : div().w(12))
+          .child(r.text);
       }
       if (r.kind === "earlier") {
-        return h_flex()
-          .id("pk-earlier")
-          .mt(6)
-          .px(10)
-          .py(6)
-          .border_t(1)
-          .border_color(t.border)
-          .text_size(12)
-          .text_color(t.dim)
-          .cursor_pointer()
-          .when(r === sel, (el) => el.bg(t.hover).text_color(t.foreground))
-          .hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_click((_e, cx) => this.go(r, cx))
-          .child(`earlier: ${r.count} quiet space${r.count > 1 ? "s" : ""} ${this.showEarlier ? "▴" : "▾"}`);
+        return pickRow(r, "pk-earlier").pl(18).text_size(12).text_color(t.dim)
+          .child(svg(this.showEarlier ? "mods/workspace-chrome/chevron-down.svg" : "mods/workspace-chrome/chevron-right.svg").size(12).flex_none())
+          .child(`${r.count} quiet space${r.count > 1 ? "s" : ""}`);
       }
-      if (r.kind === "tmuxfold") {
-        return h_flex()
-          .id("pk-tmux")
-          .mt(6)
-          .px(10)
-          .py(6)
-          .border_t(1)
-          .border_color(t.border)
-          .text_size(12)
-          .text_color(t.dim)
-          .cursor_pointer()
-          .when(r === sel, (el) => el.bg(t.hover).text_color(t.foreground))
-          .hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_click((_e, cx) => this.go(r, cx))
-          .child(`tmux: ${r.count} session${r.count > 1 ? "s" : ""} ${this.showTmux ? "▴" : "▾"}`);
+      if (r.kind === "tsession") {
+        const s = r.s, spinning = busyKey === rowKey(r);
+        return pickRow(r, `pk-ts-${s.key}`).pl(18)
+          .child(spinning ? this.spinner(t, t.accent) : s.status ? this.glyph(t, s.status) : svg("mods/workspace-chrome/terminal.svg").size(12).flex_none().text_color(t.dim))
+          .child(div().flex_none().max_w(220).truncate().text_color(t.foreground).child(s.name))
+          .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim)
+            .child(`${s.windows} window${s.windows === 1 ? "" : "s"}${s.folder ? `  \u00b7  ${shortPath(s.folder, s.machine)}` : ""}`))
+          .when(s.shown, (el) => el.child(this.tag(t, "in Herdr", t.done)))
+          .when(!s.shown && s.clients > 0, (el) => el.child(this.tag(t, "attached elsewhere", t.muted)))
+          .child(div().w(26).flex_none().text_right().text_size(11).text_color(t.dim).child(ago(s.activity)));
       }
-      if (r.kind === "tmuxhead") {
-        return h_flex().px(10).pt(10).pb(3).gap(8).items_center().text_size(11).font_semibold().text_color(t.dim)
-          .child(svg("mods/workspace-chrome/terminal.svg").size(14))
-          .child("tmux");
+      if (r.kind === "tpane") {
+        const p = r.p, spinning = busyKey === rowKey(r);
+        const detail = [p.folder, p.command].filter((x) => x && x !== p.window).join(" \u00b7 ");
+        return pickRow(r, `pk-tp-${p.pane}`).pl(40).gap(8)
+          .child(spinning ? this.spinner(t, t.accent) : this.glyph(t, p.status))
+          .child(div().flex_none().max_w(180).truncate().text_size(12.5).text_color(t.foreground).child(p.window))
+          .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(p.msg || ""))
+          .when(Boolean(detail), (el) => el.child(div().flex_none().max_w(150).truncate().text_size(11).text_color(t.dim).child(detail)))
+          .child(div().flex_none().text_size(10.5).text_color(t.dim).child(`${r.s.name}:${p.windowIndex}.${p.paneIndex}`));
       }
-      if (r.kind === "tsession" || r.kind === "tpane") {
-        const pane = r.kind === "tpane";
-        const s = r.s;
-        const name = pane ? r.p.window : s.name;
-        const detail = pane
-          ? [r.p.folder, r.p.command].filter((x) => x && x !== r.p.window).join(" · ")
-          : `${s.windows.size} window${s.windows.size > 1 ? "s" : ""}${s.attached ? " · open" : ""}`;
-        return h_flex()
-          .id(pane ? `pk-tp-${r.p.pane}` : `pk-ts-${s.name}`)
-          .mx(4)
-          .px(10)
-          .when(pane, (el) => el.pl(32))
-          .h(32)
-          .rounded(7)
-          .gap(10)
-          .items_center()
-          .cursor_pointer()
-          .on_mouse_move(point(r))
-          .on_click((_e, cx) => this.go(r, cx))
-          .child(this.glyph(t, pane ? r.p.status : s.status))
-          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(name))
-          .when(pane && Boolean(r.p.msg), (el) => el.child(div().max_w(220).truncate().text_size(11).text_color(t.dim).child(r.p.msg)))
-          .child(div().flex_none().text_size(11).text_color(t.dim).child(pane ? `${s.name}:${r.p.windowIndex}.${r.p.paneIndex}` : detail))
-          .when(pane && Boolean(detail), (el) => el.child(div().flex_none().max_w(140).truncate().text_size(11).text_color(t.dim).child(detail)));
+      if (r.kind === "create") {
+        const spinning = busyKey === rowKey(r);
+        return pickRow(r, `pk-create-${r.machine ?? "here"}`).pl(14)
+          .child(h_flex().size(22).flex_none().rounded(6).items_center().justify_center().bg((r.machine ? REMOTE : t.accent) + "26")
+            .child(spinning ? this.spinner(t, r.machine ? REMOTE : t.accent) : svg("mods/workspace-chrome/plus.svg").size(13).text_color(r.machine ? REMOTE : t.accent)))
+          .child(h_flex().flex_1().min_w(0).gap(6).items_center()
+            .child(div().flex_none().text_color(t.muted).child("Create tmux session"))
+            .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(r.name)))
+          .child(div().flex_none().text_size(11).text_color(r.machine ? REMOTE : t.dim).child(`on ${r.machine ?? "This Mac"}`));
       }
-      if (r.kind === "new" || r.kind === "space") {
-        const label = r.kind === "new" ? "new tab" : r.machine ? `new space on ${r.machine}` : "new space";
-        return h_flex()
-          .id(r.kind === "new" ? "pk-new" : `pk-space-${r.machine ?? "here"}`)
-          .mx(4)
-          .when(r.kind === "new", (el) => el.mt(4))
-          .px(10)
-          .h(32)
-          .items_center()
-          .rounded(7)
-          .gap(8)
-          .text_color(t.muted)
-          .cursor_pointer()
-          .on_mouse_move(point(r))
-          .on_click((_e, cx) => this.go(r, cx))
-          .child(div().w(12).child("+"))
-          .child(label);
+      if (r.kind === "ctx") {
+        const who = r.mine.map((a) => a.program?.name ?? "agent").join(" \u00b7 ");
+        const here = r.w.active && r.ctx.active;
+        return pickRow(r, `pk-${r.ctx.id}`).pl(18)
+          .child(this.glyph(t, r.ctx.status))
+          .child(h_flex().w(136).flex_none().gap(7).items_center()
+            .child(h_flex().size(16).flex_none().rounded(4).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(9.5).font_bold().text_color("#ffffff").child([...r.w.name][0]?.toUpperCase() ?? "?"))
+            .child(div().min_w(0).truncate().text_size(12).text_color(r.w.machine ? REMOTE : t.muted).child(r.w.name)))
+          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()).child(r.ctx.name))
+          .when(here, (el) => el.child(this.tag(t, "here", t.muted)))
+          .when(r.ctx.status === "blocked", (el) => el.child(this.tag(t, "needs you", t.blocked)))
+          .when(r.ctx.status === "done", (el) => el.child(this.tag(t, "finished", t.done)))
+          .when(Boolean(who), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(who + (r.team ? `  +${r.team}` : ""))));
       }
-      const who = r.mine.map((a) => a.program?.name ?? "agent").join(" · ");
-      const here = r.w.active && r.ctx.active;
-      return h_flex()
-        .id(`pk-${r.ctx.id}`)
-        .mx(4)
-        .px(10)
-.h(32)
-        .rounded(7)
-        .gap(10)
-        .items_center()
-        .cursor_pointer()
-        .on_mouse_move(point(r))
-        .on_click((_e, cx) => this.go(r, cx))
-        .child(this.glyph(t, r.ctx.status))
-        .child(div().flex_1().truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()).child(r.ctx.name))
-        .when(r.ctx.status === "blocked", (el) => el.child(div().text_size(11).text_color(t.blocked).child("needs you")))
-        .when(r.ctx.status === "done", (el) => el.child(div().text_size(11).text_color(t.done).child("finished")))
-        .child(div().text_size(11).text_color(t.dim).child(who + (r.team ? `  +${r.team}` : "")));
+      return pickRow(r, r.what === "tab" ? "pk-new" : `pk-space-${r.machine ?? "here"}`).pl(18).text_color(t.muted)
+        .child(svg(r.what === "tab" ? "mods/workspace-chrome/plus.svg" : "mods/workspace-chrome/folder-plus.svg").size(13).flex_none().text_color(t.dim))
+        .child(div().flex_1().child(r.what === "tab" ? "New tab" : "New space"))
+        .when(Boolean(r.machine), (el) => el.child(div().flex_none().text_size(11).text_color(REMOTE).child(`on ${r.machine}`)));
     };
 
+    const typing = Boolean(this.filter);
     return v_flex()
       .id("picker")
       .track_focus(this.handle)
       .w_full()
       .min_h(0)
-      .p(18)
-      .gap(10)
       .bg(t.popover)
       .text_size(13)
       .on_key_down((e, cx) => {
@@ -373,31 +466,38 @@ export default class Picker extends View {
         cx.stop_propagation();
         cx.notify();
       })
-      .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().text_color(t.foreground).child("Go to…")).child(div().id("picker-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("Esc")))
-      .child(
-        h_flex().h(36).flex_none().px(10).gap(8).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
-          .child(svg("mods/workspace-chrome/search.svg").size(15).text_color(t.dim))
-          .child(Input.new(this.input).flex_1().h_full().text_size(12.8).text_color(t.foreground)),
-      )
+      .child(h_flex().h(54).flex_none().px(16).gap(10).items_center().border_b(1).border_color(t.border)
+        .child(svg("mods/workspace-chrome/search.svg").size(16).flex_none().text_color(typing ? t.accent : t.dim))
+        .child(Input.new(this.input).flex_1().h_full().text_size(14.5).text_color(t.foreground))
+        .when(!this.loaded.sessions || !this.loaded.panes, (el) => el.child(this.spinner(t)))
+        .child(div().id("picker-esc").flex_none().cursor_pointer().on_click(() => this.close()).child(this.keycap(t, "esc"))))
       .child(
         v_flex()
           .id("pk-list")
+          .relative()
           .on_size_change((size, cx) => {
-            this.listHeight = size.height / settings().zoom;
+            const h = size.height / settings().zoom;
+            if (this.listHeight !== undefined && Math.abs(this.listHeight - h) < 1) return;
+            this.listHeight = h;
             cx.notify();
           })
-          .h(Math.min(320, total))
+          .h(Math.min(MAX_LIST, total))
           .min_h(0)
-          .mb(6)
-          .when(fixed, (el) =>
-            el.overflow_hidden().on_scroll_wheel((e, cx) => {
-              this.scroll = Math.max(0, Math.min(this.scroll - e.delta.y, maxScroll));
-              // The selection follows the wheel, so the next frame doesn't scroll back to it.
-              while (this.at < pickable.length - 1 && tops[rows.indexOf(pickable[this.at])] < this.scroll) this.at++;
-              while (this.at > 0 && tops[rows.indexOf(pickable[this.at])] + (H[pickable[this.at].kind] ?? 32) > this.scroll + height) this.at--;
-              cx.notify();
-            }))
+          .overflow_hidden()
+          .on_scroll_wheel((e, cx) => {
+            this.scroll = Math.max(0, Math.min(this.scroll - e.delta.y, maxScroll));
+            // The selection follows the wheel, so the next frame doesn't scroll back to it.
+            while (this.at < pickable.length - 1 && tops[rows.indexOf(pickable[this.at])] < this.scroll) this.at++;
+            while (this.at > 0 && tops[rows.indexOf(pickable[this.at])] + H[pickable[this.at].kind] > this.scroll + height) this.at--;
+            cx.notify();
+          })
           .children([highlight, ...rows.map((r, i) => (visible(i) ? place(row(r), i) : null))].filter(Boolean)),
-      );
+      )
+      .child(h_flex().h(36).flex_none().px(16).gap(14).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
+        .child(this.hint(t, ["\u2191", "\u2193"], "move"))
+        .child(this.hint(t, ["\u21b5"], this.enterLabel(sel)))
+        .when(sel?.kind === "ctx", (el) => el.child(this.hint(t, ["\u2303D"], "close tab")))
+        .child(div().flex_1())
+        .child(this.hint(t, ["esc"], "close")));
   }
 }
