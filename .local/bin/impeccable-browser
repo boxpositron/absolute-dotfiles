@@ -20,6 +20,8 @@
 //   IMPECCABLE_TUNNEL         1 (default) tunnels private origins; 0 sends them to local Chrome
 //   BROWSERLESS_TOKEN         use this key instead of the Reoclo secret
 //   BROWSERLESS_REOCLO_PROJECT  the Reoclo project holding BROWSERLESS_API_KEY (set in ~/.zshenv)
+//   BROWSERLESS_REOCLO_ORG      that project's Reoclo organization (set in ~/.zshenv); passed as --org,
+//                               since a scan's folder may be bound to another one by its .reoclo
 //   BROWSERLESS_URL           default wss://production-sfo.browserless.io
 //   BROWSERLESS_TIMEOUT_MS    Browserless session cap, default 600000
 //   IMPECCABLE_LOCAL_CHROME   local Chrome binary, default newest cached headless shell
@@ -178,7 +180,8 @@ async function browserlessKey(fresh: boolean): Promise<string> {
   }
   const project = process.env.BROWSERLESS_REOCLO_PROJECT;
   if (!project) throw new Error("no BROWSERLESS_TOKEN, and no BROWSERLESS_REOCLO_PROJECT to read the key from");
-  const proc = Bun.spawn([bin("reoclo"), "secrets", "get", "BROWSERLESS_API_KEY", "--project", project], {
+  const org = process.env.BROWSERLESS_REOCLO_ORG;
+  const proc = Bun.spawn([bin("reoclo"), ...(org ? ["--org", org] : []), "secrets", "get", "BROWSERLESS_API_KEY", "--project", project], {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
