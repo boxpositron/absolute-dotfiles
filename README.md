@@ -236,6 +236,7 @@ Global instructions (`CLAUDE.md`, which imports the shared `.config/ai/AGENTS.md
 ```bash
 owt new                 # random city name, e.g. ~/worktrees/<repo>/lagos on branch feature/lagos
 owt new PRA-107 PRA-108 # same, and tell the agent which Linear issues to start on
+owt new --task <id>     # same, for Studio tasks (a PRD requirement's task; repeatable): the agent binds its time to them
 owt ls                  # workspaces and their current branches
 owt all                 # workspaces of every repo, with branches and source checkouts (from anywhere)
 owt cd                  # jump into a workspace with fzf; owt cd lagos goes straight there

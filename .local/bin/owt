@@ -13,6 +13,7 @@ set -euo pipefail
 OWT_ROOT="${OWT_ROOT:-$HOME/worktrees}"
 OWT_AGENT="${OWT_AGENT:-omo}"
 ISSUE_RE='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
+TASK_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 CITIES=(
   accra amman antwerp asmara athens austin baku bamako bergen bern bilbao bogota
   bonn bremen brno cairo cali cork dakar dhaka dublin durban essen faro fes
@@ -34,7 +35,7 @@ usage() {
 owt: Conductor-style git worktree workspaces for coding agents
 
 Usage (run from anywhere inside the repo):
-  owt new [ISSUE-1 ISSUE-2 ...] [--name <name>] [--base <ref>] [--no-ff] [--no-install] [--no-launch]
+  owt new [ISSUE-1 ISSUE-2 ...] [--task <id>]... [--name <name>] [--base <ref>] [--no-ff] [--no-install] [--no-launch]
         Create a workspace with a random city name (or <name>) at
         $OWT_ROOT/<repo>/<name> on placeholder branch feature/<name>, from the
         latest origin default branch (or <ref>). Fetches that branch and
@@ -46,6 +47,9 @@ Usage (run from anywhere inside the repo):
         later. Either way the agent renames the branch to
         feature/<keys>-<slug> (e.g. feature/pra-107-108-imap-timeouts), moves
         each issue to In Progress, and to In Review with the PR link.
+        --task <id> (repeatable) names Studio tasks the workspace covers, such as
+        the tasks of the PRD requirements it builds: the agent reads them and
+        binds its time to the first with omo-work, then to the next as it moves.
   owt open <name>      Open a tmux window (or Herdr space) running the agent in an existing workspace
   owt title <words>    Title the tmux windows and Herdr spaces and tabs of the workspace you are in
                        with one to three words naming the work (owt title imap timeouts).
@@ -413,7 +417,7 @@ fast_forward_base() {
 }
 
 cmd_new() {
-  local issues=() name="" base="" install=1 open=1 ff=1
+  local issues=() tasks=() name="" base="" install=1 open=1 ff=1
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --name) name="${2:-}"; [[ -n "$name" ]] || die "--name needs a value"; shift 2 ;;
@@ -421,6 +425,8 @@ cmd_new() {
       --no-ff) ff=0; shift ;;
       --no-install) install=0; shift ;;
       --no-launch) open=0; shift ;;
+      --task) [[ "${2:-}" =~ $TASK_RE ]] || die "--task needs a task id, such as 2509b49a-b327-4bf6-bd52-61b938b92015"
+              tasks+=("$2"); shift 2 ;;
       -*) die "unknown option $1" ;;
       *) [[ "$1" =~ $ISSUE_RE ]] || die "'$1' is not an issue key (e.g. PRA-123); use --name for a workspace name"
          issues+=("$(upper "$1")"); shift ;;
@@ -448,8 +454,15 @@ cmd_new() {
   if [[ $install -eq 1 ]]; then install_deps "$dir"; fi
   say "workspace '$name' ready at $dir on $branch"
   if [[ $open -eq 1 ]]; then
-    if [[ ${#issues[@]} -gt 0 ]]; then
-      launch "$name" "$dir" "Work on Linear issue(s) ${issues[*]}."
+    local message=""
+    [[ ${#issues[@]} -gt 0 ]] && message="Work on Linear issue(s) ${issues[*]}."
+    if [[ ${#tasks[@]} -gt 0 ]]; then
+      # The backticks are literal markdown for the agent, not a command substitution.
+      # shellcheck disable=SC2016
+      message+="${message:+ }$(printf 'This workspace covers Studio task(s) %s. Read each with get_task, run `omo-work bind %s` before changing anything, and bind the next task when the work moves to it.' "${tasks[*]}" "${tasks[0]}")"
+    fi
+    if [[ -n "$message" ]]; then
+      launch "$name" "$dir" "$message"
     else
       launch "$name" "$dir"
     fi
@@ -677,6 +690,7 @@ _owt() {
             '--no-ff[do not fetch or fast-forward the base first]' \
             '--no-install[skip installing dependencies]' \
             '--no-launch[do not open the agent]' \
+            '*--task[a Studio task the workspace covers]:task id: ' \
             '*:Linear issue key: '
           ;;
         open|path) _arguments '1:workspace:_owt_workspaces_here' ;;
