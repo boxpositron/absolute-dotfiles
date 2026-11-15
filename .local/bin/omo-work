@@ -17,6 +17,12 @@
 # then means the subfolder's name. "~" is your home; # starts a comment. Without
 # the file, no folder is a client. In-house clients are tracked, never billed.
 #
+# The private file ~/.config/omo-work/names gives a client its name in the
+# tracker the time is posted to, one per line: <name found> <billed|in-house>
+# <tracker's name, spaces allowed>. The name found (a folder name, or the one
+# given to bind) matches in any case, and the line's kind replaces the one
+# found. Names it lacks stay as found.
+#
 # Usage: omo-work hook                     (omo's hooks; reads the payload on stdin)
 #        omo-work bind <task id> [<client> [--in-house]]
 #                                          (this session's work goes to that task from now on;
@@ -38,6 +44,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$PA
 
 customers="${XDG_CONFIG_HOME:-$HOME/.config}/omo-work/customers"
 rules="${XDG_CONFIG_HOME:-$HOME/.config}/omo-work/rules.md"
+names="${XDG_CONFIG_HOME:-$HOME/.config}/omo-work/names"
 state="${XDG_STATE_HOME:-$HOME/.local/state}/omo-work"
 log="$state/log.tsv"
 mkdir -p "$state/sessions"
@@ -45,6 +52,23 @@ mkdir -p "$state/sessions"
 die() {
   echo "omo-work: $*" >&2
   exit 1
+}
+
+lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
+
+# "<client>\t<billed|in-house>" with the client's name from the names file.
+named() {
+  local client=$1 kind=$2 key k rest
+  if [[ -r $names ]]; then
+    while read -r key k rest; do
+      [[ -z $key || $key == \#* || -z $rest ]] && continue
+      if [[ $(lower "$key") == "$(lower "$client")" ]]; then
+        printf '%s\t%s\n' "$rest" "$k"
+        return 0
+      fi
+    done <"$names"
+  fi
+  printf '%s\t%s\n' "$client" "$kind"
 }
 
 # "<client>\t<billed|in-house>" for the code in a folder, by the customers file;
@@ -67,7 +91,7 @@ classify() {
       else
         [[ $candidate == "$pattern" || $candidate == "$pattern"/* ]] || continue
       fi
-      printf '%s\t%s\n' "$client" "${kind:-billed}"
+      named "$client" "${kind:-billed}"
       return 0
     done <"$customers"
   done
@@ -255,10 +279,13 @@ case ${1:-} in
     ;;
   bind)
     task=${2:?usage: omo-work bind <task id> [<client> [--in-house]]}
+    [[ $task =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] ||
+      die "\"$task\" is not a task id: use the task's id from the tracker, such as 2509b49a-b327-4bf6-bd52-61b938b92015"
     s=$(session) || exit 1
     if [[ -n ${3:-} ]]; then
-      put "$s" client "$3"
-      put "$s" kind "$([[ ${4:-} == --in-house ]] && echo in-house || echo billed)"
+      found=$(named "$3" "$([[ ${4:-} == --in-house ]] && echo in-house || echo billed)")
+      put "$s" client "${found%%$'\t'*}"
+      put "$s" kind "${found#*$'\t'}"
     elif [[ ! -f $state/sessions/$s ]]; then
       found=$(classify "$PWD") || die "this folder isn't a client's code: omo-work bind <task id> <client> [--in-house]"
       put "$s" client "${found%%$'\t'*}"
