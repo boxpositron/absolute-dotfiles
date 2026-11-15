@@ -6,41 +6,85 @@
 # agents, files, changes, pane, workspace-status and main layout with our additions, and Herdr never
 # updates a copy. This merges what Herdr changed in its own versions since we
 # copied them (kept in .config/herdr-app/base/) into ours, with git merge-file,
-# then records the new versions as the base. Run it after Herdr updates; a
-# conflict leaves <<<<<<< blocks in our file to settle by hand.
+# then records the new versions as the base. Run it after Herdr updates.
 #
-# Usage: herdr-tmux-update
+# Our files are live: Herdr loads them through the mods link, and a file left with <<<<<<< blocks
+# stops loading. So each merge is tried on a copy and only a clean one replaces ours. When Herdr's
+# change runs into ours (picker-tmux, agents-tmux, changes-tmux and the layout are largely our own
+# now, so most of their changes will), our file and its base stay as they are, and base/pending/ gets
+#   <name>.diff     what Herdr changed since the base: port what applies by hand
+#   <name>.merged   the attempted merge with its <<<<<<< blocks, for reference
+# Every run says so again (with Herdr's later changes added to the diff) until
+# `herdr-tmux-update --ported <name>` records Herdr's version as the base and clears them.
+#
+# Usage: herdr-tmux-update                  merge, then check each mod
+#        herdr-tmux-update --ported <name>  after porting Herdr's change to <name> by hand
 
 set -euo pipefail
 
-app="$HOME/.config/herdr-app"
+app="${HERDR_APP_HOME:-$HOME/.config/herdr-app}"
 dot="${DOTFILES:-$HOME/dotfiles}/.config/herdr-app"
 base="$dot/base"
+pending="$base/pending"
 status=0
 
+# <name>|<ours>|<Herdr's now>|<Herdr's when we last took it>
+copies="picker-tmux|$dot/mods/picker-tmux/main.js|$app/mods/picker/main.js|$base/picker.js
+workspace-chrome-tmux|$dot/mods/workspace-chrome-tmux/main.js|$app/mods/workspace-chrome/main.js|$base/workspace-chrome.js
+agents-tmux|$dot/mods/agents-tmux/main.js|$app/mods/agents/main.js|$base/agents.js
+files-tmux|$dot/mods/files-tmux/main.js|$app/mods/files/main.js|$base/files.js
+changes-tmux|$dot/mods/changes-tmux/main.js|$app/mods/changes/main.js|$base/changes.js
+pane-tmux|$dot/mods/pane-tmux/main.js|$app/mods/pane/main.js|$base/pane.js
+workspace-status-tmux|$dot/mods/workspace-status-tmux/main.js|$app/mods/workspace-status/main.js|$base/workspace-status.js
+netrunner-layout|$dot/layouts/netrunner.json|$app/layouts/main.json|$base/main.json"
+
+clear_pending() {
+  rm -f "$pending/$1.diff" "$pending/$1.merged"
+  rmdir "$pending" 2>/dev/null || true
+}
+
 merge() {
-  local name=$1 ours=$2 shipped=$3 was=$4
+  local name=$1 ours=$2 shipped=$3 was=$4 work
   if cmp -s "$shipped" "$was"; then
+    clear_pending "$name"
     printf '%s: Herdr has not changed it\n' "$name"
     return
   fi
-  if git merge-file -L ours -L "Herdr before" -L "Herdr now" "$ours" "$was" "$shipped"; then
+  work=$(mktemp)
+  cp "$ours" "$work"
+  if git merge-file -L ours -L "Herdr before" -L "Herdr now" "$work" "$was" "$shipped"; then
+    cp "$work" "$ours"
+    cp "$shipped" "$was"
+    clear_pending "$name"
     printf '%s: merged Herdr'"'"'s changes\n' "$name"
   else
-    printf '%s: merged with conflicts; settle the <<<<<<< blocks in %s\n' "$name" "$ours"
+    mkdir -p "$pending"
+    diff -u --label "Herdr before" --label "Herdr now" "$was" "$shipped" >"$pending/$name.diff" || true
+    cp "$work" "$pending/$name.merged"
+    printf '%s: Herdr'"'"'s changes run into ours, so it was left as it is.\n' "$name"
+    printf '  Port what applies from %s\n  (the attempted merge is %s),\n  then run: herdr-tmux-update --ported %s\n' \
+      "$pending/$name.diff" "$pending/$name.merged" "$name"
     status=1
   fi
-  cp "$shipped" "$was"
+  rm -f "$work"
 }
 
-merge picker-tmux "$dot/mods/picker-tmux/main.js" "$app/mods/picker/main.js" "$base/picker.js"
-merge workspace-chrome-tmux "$dot/mods/workspace-chrome-tmux/main.js" "$app/mods/workspace-chrome/main.js" "$base/workspace-chrome.js"
-merge agents-tmux "$dot/mods/agents-tmux/main.js" "$app/mods/agents/main.js" "$base/agents.js"
-merge files-tmux "$dot/mods/files-tmux/main.js" "$app/mods/files/main.js" "$base/files.js"
-merge changes-tmux "$dot/mods/changes-tmux/main.js" "$app/mods/changes/main.js" "$base/changes.js"
-merge pane-tmux "$dot/mods/pane-tmux/main.js" "$app/mods/pane/main.js" "$base/pane.js"
-merge workspace-status-tmux "$dot/mods/workspace-status-tmux/main.js" "$app/mods/workspace-status/main.js" "$base/workspace-status.js"
-merge "netrunner layout" "$dot/layouts/netrunner.json" "$app/layouts/main.json" "$base/main.json"
+if [[ ${1:-} == --ported ]]; then
+  wanted=${2:?usage: herdr-tmux-update --ported <name>}
+  while IFS='|' read -r name _ shipped was; do
+    [[ $name == "$wanted" ]] || continue
+    cp "$shipped" "$was"
+    clear_pending "$name"
+    printf '%s: Herdr'"'"'s current version is its base now\n' "$name"
+    exit 0
+  done <<<"$copies"
+  echo "herdr-tmux-update: no copy named $wanted (one of: $(cut -d'|' -f1 <<<"$copies" | paste -sd ' ' -))" >&2
+  exit 2
+fi
+
+while IFS='|' read -r name ours shipped was; do
+  merge "$name" "$ours" "$shipped" "$was"
+done <<<"$copies"
 for mod in picker-tmux workspace-chrome-tmux agents-tmux files-tmux changes-tmux pane-tmux workspace-status-tmux; do
   herdr-app check "$app/mods/$mod" || status=1
 done

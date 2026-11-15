@@ -56,7 +56,7 @@ In the `netrunner` layout, Cmd+P and the sidebar's search button open `picker-tm
 
 Typing a name also offers "Create tmux session <name>" on this Mac and on each connected machine where no session has that name. When nothing else matches, the first of these comes first and is selected, so a name and Enter run `omo-status session <name> [machine]`: it starts the session in your home folder and attaches it in a space of its own, or shows the session if it already exists. Spaces in the name become dashes and only letters, digits, - and _ stay, since tmux turns `.` and `:` into `_` and omo-status splits on spaces. The row spins until the space attaches (about 3 seconds), and an error shows as a toast. The selection is one highlight that slides to the row you pick, by arrow keys or by moving the pointer (a list scrolling under a still pointer doesn't move it), and "needs you" marks pulse.
 
-The cloned picker, sidebar chrome and layout don't get Herdr's later changes to the shipped ones. To pick those up, clone again from the new release and carry the tmux additions over.
+The cloned picker, sidebar chrome and layout don't get Herdr's later changes to the shipped ones. To pick those up, clone again from the new release and carry the tmux additions over. The picker's look is its own since 2026-11-15 (as the Agents tree, Changes and the layout largely are), so most of Herdr's changes to those won't merge by themselves: `herdr-tmux-update` then leaves our file alone and hands you the change to port (see below).
 
 ## Spaces
 
@@ -151,7 +151,7 @@ The status bar's MCP chip counts the MCP servers of the omo session in the tmux 
 
 ## Herdr updates
 
-`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux`, `agents-tmux`, `files-tmux`, `changes-tmux`, `pane-tmux`, `workspace-status-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods one by one. A conflict leaves `<<<<<<<` blocks to settle by hand; then check the mod again with `herdr-app check`. Run it when you mean to merge, not as a check: it writes Herdr's pending changes into our copies and records them in `base/`.
+`herdr-tmux-update` carries our copies onto a new Herdr: it keeps Herdr's own versions we copied from in `base/`, merges what Herdr changed since into `picker-tmux`, `workspace-chrome-tmux`, `agents-tmux`, `files-tmux`, `changes-tmux`, `pane-tmux`, `workspace-status-tmux` and the `netrunner` layout with `git merge-file`, and checks the mods one by one. Each merge is tried on a copy first, since our files are live and one left with `<<<<<<<` blocks would stop loading: a clean merge replaces ours and records Herdr's version in `base/`. When Herdr's change runs into ours, our file and its base stay as they are and `base/pending/` gets `<name>.diff` (what Herdr changed) and `<name>.merged` (the attempted merge, conflicts and all). Port what applies by hand, check the mod with `herdr-app check`, then run `herdr-tmux-update --ported <name>` to record Herdr's version as the base; until then every run reports it again, with any later Herdr changes added to the diff. It exits 1 while anything is left to port. Run it when you mean to merge, not as a check: it writes Herdr's clean changes into our copies and records them in `base/`.
 
 ## flowstate-remote
 
