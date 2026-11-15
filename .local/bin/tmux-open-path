@@ -6,8 +6,8 @@
 #   markdown        -> Markdown Preview (GUI)
 #   images, pdf, dirs -> yazi in a split pane (image preview via passthrough)
 #   anything else   -> nvim in a split pane, jumping to :line when present
-# When the clicking tmux client runs in a Herdr terminal, markdown, images, pdf
-# and documents open in Herdr's preview beside it instead (~/.local/bin/herdr-preview).
+# When the clicking tmux client runs in a Herdr terminal, every file (code, HTML and text
+# too) opens in Herdr's preview beside it instead (~/.local/bin/herdr-preview).
 #
 # What the click names, first match wins:
 #   1. an OSC 8 hyperlink under it (tmux keeps them; read from the pane's line with escapes)
@@ -216,11 +216,8 @@ if [[ -n $herdr && $(jq -r '.layout // empty' ~/.config/herdr-app/shared.json 2>
         '{kind: $kind, path: $path, terminal: $terminal, at: (now * 1000 | floor)}' >$req/.request.json &&
         mv -f $req/.request.json $req/request.json && exit
 fi
-if [[ -n $herdr && -x ~/.local/bin/herdr-preview ]]; then
-    case ${file:e:l} in
-        md|markdown|mdx|mdown|mkd|mkdn|png|jpg|jpeg|gif|webp|svg|bmp|tif|tiff|heic|ico|pdf|docx|doc|rtf|odt|pages|pptx|xlsx|key|numbers)
-            HC_TERMINAL_ID=$herdr ~/.local/bin/herdr-preview $file >/dev/null 2>&1 && exit ;;
-    esac
+if [[ -n $herdr && -x ~/.local/bin/herdr-preview && -f $file ]]; then
+    HC_TERMINAL_ID=$herdr ~/.local/bin/herdr-preview $file >/dev/null 2>&1 && exit
 fi
 
 if [[ -d $file ]]; then

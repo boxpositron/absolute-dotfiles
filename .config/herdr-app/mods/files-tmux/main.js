@@ -2,9 +2,9 @@
 // files-tmux: Herdr's `files` (base/files.js; herdr-tmux-update merges Herdr's later changes in)
 // for tmux clients. A client's own folder is only where `tmux attach` started, so this shows the
 // folder of the tmux pane the client shows, which tmux-context publishes as shared "tmux.where".
-// A file on this Mac opens in the preview mod beside the tree (the layout's files-preview block,
-// through shared "files.open"), where Edit runs nvim in the panel; another machine's files keep
-// Herdr's read-only view, as the preview reads this Mac's files only.
+// A file opens in the preview mod beside the tree (the layout's files-preview block, through shared
+// "files.open", with `on` naming the machine of a file on another one), where Edit runs nvim in the
+// panel for this Mac's files.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared, terminals, layout, run } from "herdr";
@@ -162,8 +162,7 @@ export default class Files extends View {
   }
 
   open(path, cx) {
-    if (this.on) return this.show(path, cx);
-    setShared("files.open", { file: `${this.root}/${path}`, at: Date.now() });
+    setShared("files.open", { file: `${this.root}/${path}`, on: this.on ?? null, at: Date.now() });
     run("layout.select", { stack: "files", child: "files-preview" });
   }
 

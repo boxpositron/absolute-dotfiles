@@ -1,0 +1,123 @@
+#!/usr/bin/env bun
+// herdr-render: draws what Herdr's preview can't draw itself, with the system WebKit (Bun.WebView),
+// into PNGs the preview shows with image(). Run it with bun: the preview calls
+// `~/.bun/bin/bun ~/.local/bin/herdr-render ...`.
+//
+//   herdr-render html <file> <out-dir> [width]
+//       The page as a browser lays it out, <width> CSS pixels wide (default 1200), in tiles
+//       <out-dir>/tile-1.png, tile-2.png ... of up to 2000 CSS pixels each (a picture taller than
+//       16384 device pixels can't be drawn), 15 tiles at most. Prints JSON:
+//       {"tiles": [{"file", "w", "h"}], "height": <page height>} with sizes in CSS pixels.
+//   herdr-render mermaid <out-dir> <background> <file.mmd>...
+//       Each Mermaid diagram to <out-dir>/<name>.png in the dark theme on <background> (#rrggbb).
+//       Prints JSON [{"file", "w", "h"} or {"error"}], one per diagram, in order.
+//
+// Mermaid comes from the `mermaid` package, which the first diagram installs into
+// ~/.cache/herdr-render (it needs the network once).
+
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+
+const TILE = 2000;
+const MAX_TILES = 15;
+const cache = join(process.env.HOME ?? "/tmp", ".cache/herdr-render");
+const mermaidJs = join(cache, "node_modules/mermaid/dist/mermaid.min.js");
+
+// Two frames, so what was just laid out is painted before the screenshot.
+const settle = (view) => view.evaluate("new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))");
+
+async function html(file, outDir, width) {
+  mkdirSync(outDir, { recursive: true });
+  const view = new Bun.WebView({ width, height: TILE });
+  try {
+    await view.navigate(`file://${encodeURI(file)}`);
+    await settle(view);
+    const height = Math.max(1, Math.ceil(await view.evaluate(
+      "Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0)")));
+    const count = Math.min(MAX_TILES, Math.ceil(height / TILE));
+    const tiles = [];
+    for (let i = 0; i < count; i++) {
+      const top = i * TILE, h = Math.min(TILE, height - top);
+      // A shorter last tile gets a viewport of its own height (sips ignores a crop offset of 0 across).
+      if (h < TILE) await view.resize(width, h);
+      await view.evaluate(`window.scrollTo(0, ${top})`);
+      await settle(view);
+      const out = join(outDir, `tile-${i + 1}.png`);
+      writeFileSync(out, await view.screenshot({ encoding: "buffer" }));
+      tiles.push({ file: out, w: width, h });
+    }
+    return { tiles, height };
+  } finally {
+    view.close();
+  }
+}
+
+async function ensureMermaid() {
+  if (existsSync(mermaidJs)) return;
+  mkdirSync(cache, { recursive: true });
+  if (!existsSync(join(cache, "package.json"))) writeFileSync(join(cache, "package.json"), '{ "name": "herdr-render-cache", "private": true }\n');
+  const p = Bun.spawn([process.execPath, "add", "mermaid@11"], { cwd: cache, stdout: "ignore", stderr: "pipe" });
+  const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+  if (code !== 0 || !existsSync(mermaidJs)) throw new Error(`could not install mermaid: ${err.trim().split("\n").pop()}`);
+}
+
+async function mermaid(outDir, background, files) {
+  mkdirSync(outDir, { recursive: true });
+  await ensureMermaid();
+  const bg = /^#[0-9a-f]{3,8}$/i.test(background) ? background : "#0a0a14";
+  const page = join(cache, "mermaid.html");
+  writeFileSync(page, `<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;padding:0;background:${bg}}#out{display:inline-block;padding:16px}</style>
+<script src="node_modules/mermaid/dist/mermaid.min.js"></script></head><body><div id="out"></div></body></html>\n`);
+  const view = new Bun.WebView({ width: 2000, height: 2000 });
+  const results = [];
+  try {
+    await view.navigate(`file://${encodeURI(page)}`);
+    await view.evaluate(`mermaid.initialize({ startOnLoad: false, theme: "dark", themeVariables: { background: ${JSON.stringify(bg)} }, securityLevel: "strict" }), true`);
+    for (const [i, file] of files.entries()) {
+      const code = readFileSync(file, "utf8");
+      // Drawn at its natural size: Mermaid caps an SVG at 100% of its container otherwise.
+      const size = await view.evaluate(`(async () => {
+        const out = document.getElementById("out");
+        try {
+          const { svg } = await mermaid.render("d${i}", ${JSON.stringify(code)});
+          out.innerHTML = svg;
+          const el = out.querySelector("svg"), vb = el.viewBox.baseVal;
+          el.setAttribute("width", Math.ceil(vb.width));
+          el.setAttribute("height", Math.ceil(vb.height));
+          el.style.maxWidth = "none";
+          const r = out.getBoundingClientRect();
+          return { w: Math.ceil(r.width), h: Math.ceil(r.height) };
+        } catch (e) {
+          out.innerHTML = "";
+          return { error: String(e && e.message || e).split("\\n")[0] };
+        }
+      })()`);
+      if (size.error) { results.push({ error: size.error }); continue; }
+      await view.resize(Math.min(16384, size.w), Math.min(16384, size.h));
+      await settle(view);
+      const out = join(outDir, `${basename(file).replace(/\.[^.]*$/, "")}.png`);
+      writeFileSync(out, await view.screenshot({ encoding: "buffer" }));
+      results.push({ file: out, w: size.w, h: size.h });
+      await view.resize(2000, 2000);
+    }
+  } finally {
+    view.close();
+  }
+  return results;
+}
+
+const [what, ...args] = process.argv.slice(2);
+try {
+  let result;
+  if (what === "html" && args.length >= 2) result = await html(args[0], args[1], Math.max(320, Math.min(2400, Number(args[2]) || 1200)));
+  else if (what === "mermaid" && args.length >= 3) result = await mermaid(args[0], args[1], args.slice(2));
+  else {
+    console.error("usage: herdr-render html <file> <out-dir> [width] | mermaid <out-dir> <background> <file.mmd>...");
+    process.exit(2);
+  }
+  console.log(JSON.stringify(result));
+} catch (e) {
+  console.error(`herdr-render: ${e?.message ?? e}`);
+  process.exit(1);
+}
