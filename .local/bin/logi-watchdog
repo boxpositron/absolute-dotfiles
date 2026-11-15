@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Restarts Logi Options+'s background agent when it is down. The agent (launchd
+# job com.logi.cp-dev-mgr, from /Library/LaunchAgents/com.logi.optionsplus.plist)
+# is what talks to the mouse and keyboard; without it the Options+ window hangs
+# on its loading screen. Logitech's job restarts the agent only after an unclean
+# exit, and after a crash the restarted agent can exit cleanly at once because
+# another copy is still shutting down, which leaves it down for good.
+#
+# The launchd agent that `logi-watchdog install` writes runs `logi-watchdog
+# check` once a minute. It does nothing while an agent process exists, while
+# Logi's installer runs (an update stops the agent and unloads its job on
+# purpose), or when the job is not loaded at all. Each restart is logged.
+#
+# Usage: logi-watchdog check       (run by the launchd agent)
+#        logi-watchdog install     (install and start the launchd agent)
+#        logi-watchdog uninstall   (stop and remove the launchd agent)
+
+set -u
+
+label="local.logi-watchdog"
+job="com.logi.cp-dev-mgr"
+domain="gui/$(id -u)"
+log="${LOGI_WATCHDOG_LOG:-$HOME/.local/state/logi-watchdog.log}"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+
+logline() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$log"; }
+
+case ${1:-} in
+  check)
+    # Not loaded: Options+ is uninstalled, or its installer has unloaded the job.
+    info=$(launchctl print "$domain/$job" 2>/dev/null) || exit 0
+    state=$(awk -F' = ' '/^\tstate = /{print $2; exit}' <<<"$info")
+    [[ $state == running ]] && exit 0
+    # A copy launchd does not own still counts; starting another would race it.
+    pgrep -f 'logioptionsplus_agent\.app/Contents/MacOS/logioptionsplus_agent' >/dev/null && exit 0
+    # An update in progress runs from Logi's depots folder or with --install.
+    pgrep -f 'LogiOptionsPlus/depots/|logioptionsplus_updater.*--install' >/dev/null && exit 0
+    last=$(awk -F' = ' '/^\tlast exit code = /{print $2; exit}' <<<"$info")
+    if launchctl kickstart "$domain/$job"; then
+      logline "agent was $state (last exit code ${last:-unknown}); restarted it"
+    else
+      logline "agent was $state (last exit code ${last:-unknown}); kickstart failed"
+    fi
+    ;;
+  install)
+    mkdir -p "$(dirname "$log")" "$(dirname "$plist")"
+    cat >"$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.local/bin/logi-watchdog</string>
+    <string>check</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>$log</string>
+  <key>StandardErrorPath</key>
+  <string>$log</string>
+</dict>
+</plist>
+PLIST
+    launchctl bootout "$domain/$label" 2>/dev/null
+    launchctl bootstrap "$domain" "$plist" && echo "logi-watchdog: checking the Logi agent every minute ($plist)"
+    ;;
+  uninstall)
+    launchctl bootout "$domain/$label" 2>/dev/null
+    rm -f "$plist"
+    echo "logi-watchdog: removed $plist"
+    ;;
+  *)
+    sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+    exit 2
+    ;;
+esac
