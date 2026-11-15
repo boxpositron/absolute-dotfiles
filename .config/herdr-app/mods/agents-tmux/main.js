@@ -87,7 +87,7 @@ function icon(p, size, color) {
 }
 
 // `omo-status list` prints a row per pane running omo, fields joined by SEP; another machine's
-// rows carry its name in front of the pane and the session (`flowstate-remote/%3`).
+// rows carry its name in front of the pane and the session (`server/%3`).
 const SEP = "|^|";
 // Tree rows have fixed heights, so where each sits is known before it is drawn.
 const ROW_H = 28;

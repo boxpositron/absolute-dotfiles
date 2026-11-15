@@ -41,7 +41,7 @@ function spaceColors() {
   return kept;
 }
 // Every tmux pane (`omo-status panes`) and session (`omo-status sessions`), here and on Herdr
-// machines ("flowstate-remote/%3", "flowstate-remote/unified"). tmux turns control characters in
+// machines ("server/%3", "server/main"). tmux turns control characters in
 // its output into "_" when Herdr runs it, so fields split on text.
 const SEP = "|^|";
 // omo-status's states in Herdr's words.

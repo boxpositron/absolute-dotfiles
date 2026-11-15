@@ -489,26 +489,34 @@ owt() {
 
 export SSH_AUTH_SOCK=~/Library/Group\ Containers/2BUA8C4S2C.com.1password/t/agent.sock
 
-# Connect to flowstate-remote over mosh instead of ssh. Mosh is UDP with no TCP
+# Connect to the dev server ($FS_HOST) over mosh instead of ssh. Mosh is UDP with no TCP
 # flow to reset, so it rides through Starlink/hotspot IP changes, laptop sleep
 # and unlimited idle. tmux keeps the work alive server-side regardless.
 # Pass a session name to target a specific one, e.g. `fs 0`.
+# FS_HOST, FS_SHARE and FS_SHARE_REMOTE are set in ~/.zshrc.local, outside this repository.
 function fs() {
     local session="${1:-main}"
-    mosh flowstate-remote -- tmux new-session -A -s "$session"
+    mosh "${FS_HOST:?set FS_HOST in ~/.zshrc.local}" -- tmux new-session -A -s "$session"
 }
 
-# Send the clipboard image to flowstate-remote agents. Saves it into the
-# Mutagen-synced share (~/Company/flowstate-share <-> /home/ubuntu/share),
+# Send the clipboard image to the dev server's agents. Saves it into the
+# Mutagen-synced share ($FS_SHARE here, $FS_SHARE_REMOTE on the server),
 # waits for it to reach the server, then copies the server path to paste into chat.
 function fsimg() {
+    local share="${FS_SHARE:?set FS_SHARE in ~/.zshrc.local}"
+    local remote="${FS_SHARE_REMOTE:?set FS_SHARE_REMOTE in ~/.zshrc.local}"
     local name="clip-$(date +%Y%m%d-%H%M%S).png"
-    pngpaste ~/Company/flowstate-share/"$name" || return 1
+    pngpaste "$share/$name" || return 1
     echo "uploading $name..."
     if ! mutagen sync flush fs-share >/dev/null; then
         echo "warning: sync flush failed, the file may not be on the server yet" >&2
     fi
-    printf '/home/ubuntu/share/%s' "$name" | pbcopy
-    echo "path copied: /home/ubuntu/share/$name"
+    printf '%s/%s' "$remote" "$name" | pbcopy
+    echo "path copied: $remote/$name"
 }
 export PATH=$PATH:$HOME/.maestro/bin
+
+# This machine's private settings (hosts, paths), kept out of this repository.
+if [[ -r ~/.zshrc.local ]]; then
+    source ~/.zshrc.local
+fi

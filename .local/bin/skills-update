@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# skills-update: refresh omo's upstream-tracked skills. On flowstate-remote it runs daily from the
+# skills-update: refresh omo's upstream-tracked skills. On a Linux server it runs daily from the
 # skills-update.timer systemd user unit; `skills-update --install-timer` writes and enables it.
 #
 # Vendored in this repo (.config/omo/skills, linked into ~/.omo/agent/skills), committed and pushed:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Ding, tab marker and notification for omo sessions on a remote server
-# (flowstate-remote), the same as omo-notify gives local sessions. Two paths,
+# Ding, tab marker and notification for omo sessions on a remote server,
+# the same as omo-notify gives local sessions. Two paths,
 # so each event arrives once:
 #
 #   Title: the server's omo-notify sets the terminal title of every tmux client

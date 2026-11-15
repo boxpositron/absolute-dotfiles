@@ -36,19 +36,22 @@ omo-sessions: closed sessions, and work passed between sessions
   handoff [--on <machine>] [--cwd <dir>] <session|new> <task...>
                                Give a task to a running session, or to a new one
 
-A session is an id, an id prefix or a tmux target. Machines are agent-state's names (mac, flowstate).
+A session is an id, an id prefix or a tmux target. Machines are agent-state's names, such as mac.
 Called by other tools: file, unfile, taken, deliver.
 EOF
 }
 
-# The machine's name in agent-state.
+# The machine's name in agent-state: $OMO_MACHINE, else the first line of $state/machine (a server
+# whose hostname isn't its agent-state name keeps it there), else mac on macOS or the short hostname.
 self_machine() {
   if [[ -n ${OMO_MACHINE:-} ]]; then
     printf '%s\n' "$OMO_MACHINE"
+  elif [[ -s $state/machine ]]; then
+    head -n 1 "$state/machine"
   elif [[ $(uname) == Darwin ]]; then
     echo mac
   else
-    echo flowstate
+    hostname -s
   fi
 }
 

@@ -4,12 +4,12 @@
 //
 // Chrome stand-in for the impeccable engine, wired in via IMPECCABLE_BROWSER. Linux only: it reads
 // the engine's argv from /proc and finds Chrome in the Linux Puppeteer and Playwright caches, so
-// setup-mac.sh does not link it. On flowstate-remote, ~/.zshenv exports
+// setup-mac.sh does not link it. On the server, ~/.zshenv exports
 // IMPECCABLE_BROWSER="$HOME/.local/bin/impeccable-browser".
 //
 // The engine launches its browser the way Puppeteer does (--remote-debugging-port=0, then reads
 // "DevTools listening on ws://..." from stderr). Here, URL scans run on Browserless (key
-// BROWSERLESS_API_KEY in the Reoclo project flowstate-tools) through a local CDP proxy. Local and
+// BROWSERLESS_API_KEY in the Reoclo project BROWSERLESS_REOCLO_PROJECT names) through a local CDP proxy. Local and
 // private origins (localhost, LAN, Tailscale) are exposed to Browserless through a cloudflared
 // quick tunnel for the length of the scan; the proxy swaps the local origin for the tunnel origin
 // on the way out and back, so the engine and its report only ever see the local URL.
@@ -19,15 +19,17 @@
 //   IMPECCABLE_BROWSER_MODE   auto (default) | remote | local
 //   IMPECCABLE_TUNNEL         1 (default) tunnels private origins; 0 sends them to local Chrome
 //   BROWSERLESS_TOKEN         use this key instead of the Reoclo secret
+//   BROWSERLESS_REOCLO_PROJECT  the Reoclo project holding BROWSERLESS_API_KEY (set in ~/.zshenv)
 //   BROWSERLESS_URL           default wss://production-sfo.browserless.io
 //   BROWSERLESS_TIMEOUT_MS    Browserless session cap, default 600000
 //   IMPECCABLE_LOCAL_CHROME   local Chrome binary, default newest cached headless shell
 // Decisions are appended to ~/.impeccable/browser.log.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import type { Subprocess } from "bun";
 
-const HOME = process.env.HOME ?? "/home/ubuntu";
+const HOME = process.env.HOME ?? homedir();
 const STATE_DIR = `${HOME}/.impeccable`;
 const TOKEN_CACHE = `${STATE_DIR}/browserless.token`;
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
@@ -174,7 +176,9 @@ async function browserlessKey(fresh: boolean): Promise<string> {
   if (!fresh && existsSync(TOKEN_CACHE) && Date.now() - statSync(TOKEN_CACHE).mtimeMs < TOKEN_TTL_MS) {
     return readFileSync(TOKEN_CACHE, "utf8").trim();
   }
-  const proc = Bun.spawn([bin("reoclo"), "secrets", "get", "BROWSERLESS_API_KEY", "--project", "flowstate-tools"], {
+  const project = process.env.BROWSERLESS_REOCLO_PROJECT;
+  if (!project) throw new Error("no BROWSERLESS_TOKEN, and no BROWSERLESS_REOCLO_PROJECT to read the key from");
+  const proc = Bun.spawn([bin("reoclo"), "secrets", "get", "BROWSERLESS_API_KEY", "--project", project], {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

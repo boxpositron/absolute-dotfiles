@@ -230,7 +230,7 @@ step_links() {
         name=${script##*/}
         case $name in
             pbcopy | pbpaste) continue ;; # OSC 52 clipboard shims for headless servers
-            impeccable-browser | skills-update) continue ;; # Linux-only tools for flowstate-remote
+            impeccable-browser | skills-update) continue ;; # Linux-only tools for servers
         esac
         if [[ -x $script ]]; then link ".local/bin/$name" ".local/bin/$name"; fi
     done

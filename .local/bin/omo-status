@@ -501,7 +501,7 @@ at() {
   fi
 }
 
-# A machine's rows, its name in front of the pane and the session ("flowstate-remote/%3").
+# A machine's rows, its name in front of the pane and the session ("server/%3").
 prefixed() {
   local machine=$1 line
   while IFS= read -r line; do

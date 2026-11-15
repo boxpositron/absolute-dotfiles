@@ -58,4 +58,4 @@ Unknown keys and bad notes stop the render with an error naming the table and ke
 
 ## omo's own sounds
 
-`~/dotfiles/.config/omo/sounds/recipes.toml` renders `omo-done`, `omo-input` and `omo-error`. `omo-notify` (local hooks) and `omo-remote` (events from flowstate-remote) play them through `omo-sound NAME`. To change one, edit the recipe, run `sfx recipes.toml` in that directory, and the next event uses the new sound. Keep the three names, because the scripts map events to them.
+`~/dotfiles/.config/omo/sounds/recipes.toml` renders `omo-done`, `omo-input` and `omo-error`. `omo-notify` (local hooks) and `omo-remote` (events from a remote server) play them through `omo-sound NAME`. To change one, edit the recipe, run `sfx recipes.toml` in that directory, and the next event uses the new sound. Keep the three names, because the scripts map events to them.

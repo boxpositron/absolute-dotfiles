@@ -47,7 +47,7 @@ function duration(ms) {
 }
 
 // `omo-status jobs` prints a line per job, fields joined by SEP; another machine's lines carry its
-// name in front of the pane and the session ("flowstate-remote/%3").
+// name in front of the pane and the session ("server/%3").
 function parse(out) {
   const jobs = [];
   for (const line of (out ?? "").split("\n")) {
