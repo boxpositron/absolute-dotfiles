@@ -12,7 +12,12 @@
 // start the session in your home folder and attach it in a space of its own.
 // Going to a session or a pane runs `omo-status show` (the Herdr tab already on the session, else a
 // tab in the space named after it, else a new space); creating runs `omo-status session`.
-// ↑/↓ and Enter, or the pointer; Ctrl+D closes the selected tab; Esc leaves.
+// Typed text can also start an omo task, as the omo assistant does: a sentence ("set up remotion")
+// offers it first. Then the picker asks where it runs: a new tmux session (named after the task's
+// first word that isn't filler, or what you type), a new omo window in an existing tmux session, or a running omo
+// session it is handed to. Places whose names share a word with the task come first. It runs
+// `omo-sessions start` or `omo-sessions handoff` on that machine and shows the pane.
+// ↑/↓ and Enter, or the pointer; Ctrl+D closes the selected tab; Esc leaves (or goes back from "where").
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
@@ -48,8 +53,8 @@ const SEP = "|^|";
 const OMO = { working: "working", background: "background", input: "blocked", error: "blocked", done: "done", partial: "partial", idle: "idle" };
 const RANK = { blocked: 5, done: 4, partial: 4, working: 3, background: 2, idle: 1 };
 // Each row's height. Rows sit at fixed y, so the selection is one highlight that slides between them.
-const H = { section: 30, ctx: 34, earlier: 34, tsession: 36, tpane: 32, create: 40, action: 34, note: 34 };
-const PICK = new Set(["ctx", "earlier", "tsession", "tpane", "create", "action"]);
+const H = { section: 30, ctx: 34, earlier: 34, tsession: 36, tpane: 32, create: 40, action: 34, note: 34, task: 40, tnew: 40, tstart: 36, thand: 32 };
+const PICK = new Set(["ctx", "earlier", "tsession", "tpane", "create", "action", "task", "tnew", "tstart", "thand"]);
 const MAX_LIST = 560;
 
 // tmux sessions in tmux's order, each with its panes and the pane it shows.
@@ -87,6 +92,12 @@ function sessionName(text) {
   return text.trim().replace(/[\s.:/]+/g, "-").replace(/[^A-Za-z0-9_-]/g, "").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
 }
 
+// The words of a task that can name a place: no fillers like "let's get started setting up".
+const FILLER = new Set("a an and the to of in on for with from into up set setting get getting started start starting begin lets let us we our my me you can could please work working task new make build add fix do some it this that".split(" "));
+function taskWords(text) {
+  return [...new Set(text.toLowerCase().replace(/'/g, "").split(/[^a-z0-9_-]+/))].filter((w) => w.length >= 3 && !FILLER.has(w));
+}
+
 function ago(sec) {
   const s = Math.max(0, Date.now() / 1000 - sec);
   if (!sec) return "";
@@ -118,7 +129,17 @@ function rowKey(r) {
   if (r.kind === "tsession") return `ts:${r.s.key}`;
   if (r.kind === "tpane") return `tp:${r.p.pane}`;
   if (r.kind === "create") return `new:${r.machine ?? ""}:${r.name}`;
+  if (r.kind === "tnew") return `tnew:${r.machine ?? ""}:${r.name}`;
+  if (r.kind === "tstart") return `tstart:${r.s.key}`;
+  if (r.kind === "thand") return `thand:${r.p.pane}`;
   return r.kind;
+}
+
+// omo-sessions on the machine the place is on.
+function omoSessions(machine, args) {
+  return machine
+    ? exec("sh", ["-c", 'exec "$HOME/.local/bin/omo-sessions" "$@"', "omo-sessions", ...args], { on: machine })
+    : exec(`${home()}/.local/bin/omo-sessions`, args);
 }
 
 export default class Picker extends View {
@@ -131,6 +152,16 @@ export default class Picker extends View {
       cx.notify();
     });
     this.input.on("submit", (_e, cx) => this.go(this.pickable()[this.at], cx));
+    // The second step, once a task is chosen: where it runs.
+    this.task = null;
+    this.whereFilter = "";
+    this.where = InputState.new({ placeholder: "Where should it run? Filter, or name a new tmux session\u2026" });
+    this.where.on("change", (_e, cx) => {
+      this.whereFilter = this.where.value();
+      this.at = 0;
+      cx.notify();
+    });
+    this.where.on("submit", (_e, cx) => this.go(this.pickable()[this.at], cx));
     this.input.focus();
     cx.timer.after(600, () => this.input.focus());
     this.at = null;
@@ -179,6 +210,7 @@ export default class Picker extends View {
   }
 
   rows() {
+    if (this.task) return this.whereRows();
     const typed = this.filter.trim(), f = typed.toLowerCase();
     const all = agents();
     const live = terminals().filter((x) => x.state === "live");
@@ -201,6 +233,9 @@ export default class Picker extends View {
     const quiet = groups.filter((p) => !p.w.status && p.ctxs.length);
     busy.sort((a, b) => (b.w.status === "blocked") - (a.w.status === "blocked"));
     const out = [];
+    // A sentence is most likely a task, so it leads; a single word is offered with the new things.
+    const sentence = /\s/.test(typed);
+    if (sentence) out.push({ kind: "section", label: "Task" }, { kind: "task", text: typed });
     const add = (p) => {
       for (const c of p.ctxs) out.push({ kind: "ctx", ...c });
     };
@@ -232,13 +267,44 @@ export default class Picker extends View {
     if (!this.loaded.sessions || !this.loaded.panes) out.push({ kind: "note", text: "Looking for tmux sessions\u2026", spin: true });
 
     const name = sessionName(typed);
-    const where = name && this.loaded.sessions ? [null, ...this.machines].filter((m) => !sessions.some((s) => s.machine === m && s.name === name)) : [];
+    // A sentence of three words or more is a task, not a session name.
+    const where = name && this.loaded.sessions && typed.split(/\s+/).length < 3 ? [null, ...this.machines].filter((m) => !sessions.some((s) => s.machine === m && s.name === name)) : [];
     if (f && !out.some((r) => PICK.has(r.kind)) && !where.length) out.push({ kind: "note", text: name ? `No matches for \u201c${typed}\u201d` : "Session names take letters, digits, - and _" });
     out.push({ kind: "section", label: "New" });
     for (const m of where) out.push({ kind: "create", name, machine: m });
+    if (typed && !sentence) out.push({ kind: "task", text: typed });
     out.push({ kind: "action", what: "tab" });
     out.push({ kind: "action", what: "space", machine: null });
     for (const m of this.machines) out.push({ kind: "action", what: "space", machine: m });
+    return out;
+  }
+
+  // Where a task runs: places sharing a word with it first, then a new tmux session on each machine, an
+  // existing session's new window, and running omo sessions to hand it to. What is typed filters them
+  // and names the new session.
+  whereRows() {
+    const typed = this.whereFilter.trim(), f = typed.toLowerCase();
+    const words = taskWords(this.task);
+    const score = (text) => words.filter((w) => text.toLowerCase().includes(w)).length;
+    const shown = (text) => !f || text.toLowerCase().includes(f);
+    const sessions = this.sessionList();
+    const machines = [null, ...this.machines, ...sessions.map((s) => s.machine)].filter((m, i, a) => a.indexOf(m) === i);
+    const starts = sessions.filter((s) => shown(`${s.name} ${s.folder}`)).map((s) => ({ kind: "tstart", s, score: score(`${s.name} ${s.folder}`) }));
+    const hands = sessions.flatMap((s) => s.panes.filter((p) => p.status).map((p) => ({ kind: "thand", s, p, text: `${s.name} ${p.window} ${p.folder} ${p.msg}` })))
+      .filter((r) => shown(r.text)).map((r) => ({ ...r, score: score(r.text) }));
+    const suggested = [...starts, ...hands].filter((r) => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 4);
+    const out = [];
+    if (suggested.length) out.push({ kind: "section", label: "Suggested" }, ...suggested);
+    const name = sessionName(typed) || sessionName(words[0] ?? "") || "task";
+    const fresh = machines.filter((m) => !sessions.some((s) => s.machine === m && s.name === name));
+    if (fresh.length) out.push({ kind: "section", label: "New tmux session" }, ...fresh.map((m) => ({ kind: "tnew", name, machine: m })));
+    for (const [label, list] of [["Start in tmux", starts], ["Hand to omo", hands]]) {
+      for (const machine of machines) {
+        const mine = list.filter((r) => r.s.machine === machine && !suggested.includes(r));
+        if (mine.length) out.push({ kind: "section", label, machine, note: `${mine.length}` }, ...mine);
+      }
+    }
+    if (!this.loaded.sessions || !this.loaded.panes) out.push({ kind: "note", text: "Looking for tmux sessions\u2026", spin: true });
     return out;
   }
 
@@ -246,10 +312,12 @@ export default class Picker extends View {
     return this.rows().filter((r) => PICK.has(r.kind));
   }
 
-  // The row Enter takes for what is typed: a tab, else a tmux session or pane, else a new session.
+  // The row Enter takes for what is typed: a task for a sentence, else a tab, a tmux session or pane, a
+  // new session.
   preferred() {
     const p = this.pickable();
-    for (const kind of ["ctx", "tsession", "tpane", "create"]) {
+    for (const kind of ["task", "ctx", "tsession", "tpane", "create"]) {
+      if (kind === "task" && !/\s/.test(this.filter.trim())) continue;
       const i = p.findIndex((r) => r.kind === kind);
       if (i >= 0) return i;
     }
@@ -270,6 +338,10 @@ export default class Picker extends View {
       return this.omo(r, pane ? ["show", pane.pane] : ["session", r.s.name, ...(r.s.machine ? [r.s.machine] : [])], cx);
     }
     if (r.kind === "create") return this.omo(r, ["session", r.name, ...(r.machine ? [r.machine] : [])], cx);
+    if (r.kind === "task") return this.chooseWhere(r.text, cx);
+    if (r.kind === "tnew") return this.startTask(r, r.machine, ["start", "--tmux", r.name, "--", this.task], cx);
+    if (r.kind === "tstart") return this.startTask(r, r.s.machine, ["start", "--tmux", r.s.name, "--", this.task], cx);
+    if (r.kind === "thand") return this.startTask(r, r.s.machine, ["handoff", r.p.pane.split("/").pop(), this.task], cx, r.p.pane);
     this.close();
     if (r.kind === "ctx") run("tab.select", { id: r.ctx.id });
     else if (r.what === "tab") run("tab.new");
@@ -290,6 +362,47 @@ export default class Picker extends View {
         failed = String(e?.message ?? e);
       }
       if (failed) notify({ title: r.kind === "create" ? `Could not create ${r.name}` : "Could not open the tmux session", body: failed, level: "error" });
+      this.close();
+    });
+  }
+
+  chooseWhere(text, cx) {
+    this.task = text;
+    this.where.set_value("");
+    this.whereFilter = "";
+    this.at = 0;
+    this.scroll = 0;
+    this.where.focus();
+    cx.notify();
+  }
+
+  back(cx) {
+    this.task = null;
+    this.at = this.preferred();
+    this.scroll = 0;
+    this.input.focus();
+    cx.notify();
+  }
+
+  // Starts the task (or hands it over) on the place's machine, then shows its pane: the one
+  // `omo-sessions start` prints, or the running session's. The row spins meanwhile.
+  startTask(r, machine, args, cx, pane) {
+    this.busy = rowKey(r);
+    cx.notify();
+    cx.spawn(async () => {
+      let failed = null;
+      try {
+        const res = await omoSessions(machine, args);
+        if (res.code !== 0) failed = res.stderr.trim() || `omo-sessions ${args[0]} stopped with code ${res.code}`;
+        else {
+          const target = pane ?? `${machine ? `${machine}/` : ""}${res.stdout.trim().split("\n").pop()}`;
+          const shown = await exec(`${home()}/.local/bin/omo-status`, ["show", target]);
+          if (shown.code !== 0) failed = shown.stderr.trim() || `omo-status show stopped with code ${shown.code}`;
+        }
+      } catch (e) {
+        failed = String(e?.message ?? e);
+      }
+      if (failed) notify({ title: r.kind === "thand" ? "Could not hand the task over" : "Could not start the task", body: failed, level: "error" });
       this.close();
     });
   }
@@ -327,6 +440,10 @@ export default class Picker extends View {
     if (r.kind === "tsession") return r.s.shown ? "go to session" : "open in a space";
     if (r.kind === "tpane") return "go to pane";
     if (r.kind === "create") return "create and attach";
+    if (r.kind === "task") return "choose where it runs";
+    if (r.kind === "tnew") return "start in a new session";
+    if (r.kind === "tstart") return "start omo here";
+    if (r.kind === "thand") return "hand the task over";
     return r.what === "tab" ? "new tab" : "new space";
   }
 
@@ -425,6 +542,36 @@ export default class Picker extends View {
             .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(r.name)))
           .child(div().flex_none().text_size(11).text_color(r.machine ? REMOTE : t.dim).child(`on ${r.machine ?? "This Mac"}`));
       }
+      if (r.kind === "task" || r.kind === "tnew") {
+        const spinning = busyKey === rowKey(r), color = r.machine ? REMOTE : t.accent;
+        return pickRow(r, r.kind === "task" ? "pk-task" : `pk-tnew-${r.machine ?? "here"}`).pl(14)
+          .child(h_flex().size(22).flex_none().rounded(6).items_center().justify_center().bg(color + "26")
+            .child(spinning ? this.spinner(t, color) : svg(r.kind === "task" ? "mods/workspace-chrome/terminal.svg" : "mods/workspace-chrome/plus.svg").size(13).text_color(color)))
+          .child(h_flex().flex_1().min_w(0).gap(6).items_center()
+            .child(div().flex_none().text_color(t.muted).child(r.kind === "task" ? "Start an omo task" : "New tmux session"))
+            .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(r.kind === "task" ? `\u201c${r.text}\u201d` : r.name)))
+          .child(r.kind === "task"
+            ? h_flex().flex_none().gap(4).items_center().text_size(11).text_color(t.dim).child("where").child(svg("mods/workspace-chrome/chevron-right.svg").size(11))
+            : div().flex_none().text_size(11).text_color(r.machine ? REMOTE : t.dim).child(`on ${r.machine ?? "This Mac"}`));
+      }
+      if (r.kind === "tstart") {
+        const s = r.s, spinning = busyKey === rowKey(r);
+        return pickRow(r, `pk-tstart-${s.key}`).pl(18)
+          .child(spinning ? this.spinner(t, t.accent) : svg("mods/workspace-chrome/terminal.svg").size(12).flex_none().text_color(s.machine ? REMOTE : t.dim))
+          .child(div().flex_none().max_w(220).truncate().text_color(t.foreground).child(s.name))
+          .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(s.folder ? shortPath(s.folder, s.machine) : ""))
+          .child(this.tag(t, "new omo window", t.muted))
+          .when(Boolean(s.machine), (el) => el.child(div().flex_none().text_size(11).text_color(REMOTE).child(s.machine)));
+      }
+      if (r.kind === "thand") {
+        const p = r.p, spinning = busyKey === rowKey(r);
+        return pickRow(r, `pk-thand-${p.pane}`).pl(18).gap(8)
+          .child(spinning ? this.spinner(t, t.accent) : this.glyph(t, p.status))
+          .child(div().flex_none().max_w(180).truncate().text_size(12.5).text_color(t.foreground).child(p.window))
+          .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(p.msg || p.folder))
+          .child(this.tag(t, "hand over", t.muted))
+          .child(div().flex_none().text_size(10.5).text_color(r.s.machine ? REMOTE : t.dim).child(`${r.s.machine ? `${r.s.machine} ` : ""}${r.s.name}:${p.windowIndex}.${p.paneIndex}`));
+      }
       if (r.kind === "ctx") {
         const who = r.mine.map((a) => a.program?.name ?? "agent").join(" \u00b7 ");
         const here = r.w.active && r.ctx.active;
@@ -445,7 +592,7 @@ export default class Picker extends View {
         .when(Boolean(r.machine), (el) => el.child(div().flex_none().text_size(11).text_color(REMOTE).child(`on ${r.machine}`)));
     };
 
-    const typing = Boolean(this.filter);
+    const typing = Boolean(this.task ? this.whereFilter : this.filter);
     return v_flex()
       .id("picker")
       .track_focus(this.handle)
@@ -455,7 +602,7 @@ export default class Picker extends View {
       .text_size(13)
       .on_key_down((e, cx) => {
         const k = e.key;
-        if (k === "escape") return this.close();
+        if (k === "escape") return this.task ? this.back(cx) : this.close();
         if (k === "down") this.at = (this.at + 1) % pickable.length;
         else if (k === "up") this.at = (this.at + pickable.length - 1) % pickable.length;
         else if (k === "d" && e.modifiers.control) {
@@ -468,10 +615,16 @@ export default class Picker extends View {
         cx.notify();
       })
       .child(h_flex().h(54).flex_none().px(16).gap(10).items_center().border_b(1).border_color(t.border)
-        .child(svg("mods/workspace-chrome/search.svg").size(16).flex_none().text_color(typing ? t.accent : t.dim))
-        .child(Input.new(this.input).flex_1().h_full().text_size(14.5).text_color(t.foreground))
+        .child(this.task
+          ? div().id("picker-back").flex_none().cursor_pointer().on_click((_e, cx) => this.back(cx))
+            .child(svg("mods/workspace-chrome/chevron-left.svg").size(16).text_color(t.accent))
+          : svg("mods/workspace-chrome/search.svg").size(16).flex_none().text_color(typing ? t.accent : t.dim))
+        .child(Input.new(this.task ? this.where : this.input).flex_1().h_full().text_size(14.5).text_color(t.foreground))
         .when(!this.loaded.sessions || !this.loaded.panes, (el) => el.child(this.spinner(t)))
-        .child(div().id("picker-esc").flex_none().cursor_pointer().on_click(() => this.close()).child(this.keycap(t, "esc"))))
+        .child(div().id("picker-esc").flex_none().cursor_pointer().on_click((_e, cx) => (this.task ? this.back(cx) : this.close())).child(this.keycap(t, "esc"))))
+      .when(Boolean(this.task), (el) => el.child(h_flex().h(38).flex_none().px(16).gap(10).items_center().border_b(1).border_color(t.border).bg(t.accent + "12")
+        .child(div().flex_none().text_size(10.5).font_semibold().text_color(t.accent).child("TASK"))
+        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(this.task ?? ""))))
       .child(
         v_flex()
           .id("pk-list")
@@ -499,6 +652,6 @@ export default class Picker extends View {
         .child(this.hint(t, ["\u21b5"], this.enterLabel(sel)))
         .when(sel?.kind === "ctx", (el) => el.child(this.hint(t, ["\u2303D"], "close tab")))
         .child(div().flex_1())
-        .child(this.hint(t, ["esc"], "close")));
+        .child(this.hint(t, ["esc"], this.task ? "back" : "close")));
   }
 }
