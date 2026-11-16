@@ -3,7 +3,8 @@
 // (shared "tmux.where" from tmux-context), not of the folder that client started in. The MCP chip
 // counts the MCP servers of that pane's omo session (shared "omo.mcp" from mcp-tmux) and opens them;
 // the omo chip counts the panes running omo in tmux (shared "omo.tmux" from omo-tmux) and opens those;
-// the jobs chip counts their background jobs (shared "omo.jobs" from jobs-tmux) and opens them.
+// the jobs chip counts their background jobs (shared "omo.jobs" from jobs-tmux) and opens them; the
+// queue chip counts what needs you (shared "omo.queue" from priority-queue) and shows or hides its column.
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { spaces, agents, theme, run, window, keys, focused, shared, terminals, layout } from "herdr";
@@ -43,6 +44,8 @@ export default class WorkspaceStatus extends View {
     const mcp = mine && where.tmux && shared("omo.mcp")?.terminal === where.terminal ? shared("omo.mcp") : null;
     const omo = shared("omo.tmux");
     const jobs = shared("omo.jobs");
+    const queue = shared("omo.queue")?.items;
+    const asks = queue?.filter((i) => i.kind === "input" || i.kind === "error" || i.kind === "blocked").length ?? 0;
     const toggle = (id) => {
       const root = layout(), panel = find(root, "panel");
       if (panel && !panel.hidden && find(root, "panel-body")?.active === id) run("layout.hide", { id: "panel" });
@@ -68,6 +71,11 @@ export default class WorkspaceStatus extends View {
         .on_click(() => toggle("jobs"))
         .child(svg("mods/workspace-chrome/clock.svg").size(13)).child(`jobs ${jobs.count}`)
         .when(jobs.count > 0, e => e.child(div().size(6).rounded(3).bg(t.working)))))
+      .when(Boolean(queue), el => el.child(h_flex().id("queue-chip").gap(6).items_center().cursor_pointer().hover(s => s.text_color(t.foreground))
+        .tooltip(`Priority queue: ${queue.length ? `${queue.length} card${queue.length === 1 ? "" : "s"}${asks ? `, ${asks} need${asks === 1 ? "s" : ""} you` : ""}` : "nothing needs you"} (⌘⇧J)`)
+        .on_click(() => run("layout.toggle", { id: "queue" }))
+        .child(svg("mods/workspace-chrome/circle-check.svg").size(13)).child(`queue ${queue.length}`)
+        .when(queue.length > 0, e => e.child(div().size(6).rounded(3).bg(asks ? t.accent : t.done)))))
       .child(div().flex_1())
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint(t)));
   }

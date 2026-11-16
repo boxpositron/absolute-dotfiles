@@ -50,6 +50,9 @@
 #                                     Herdr machine's makes it that machine's pane)
 #        omo-status next             (shows the pane that most needs you: a question or a
 #                                     failure, then a finished turn, the longest waiting first)
+#        omo-status ack <pane>       (Herdr's priority queue: a finished turn or failure seen there
+#                                     goes back to idle, as looking at the pane would; <machine>/<pane>
+#                                     for another machine's)
 #        omo-status list             (every pane running omo, for Herdr's "omo in tmux" panel:
 #                                     pane, session, window, folder, state, since, scheduled wake-up, message)
 #        omo-status panes            (every tmux pane, for Herdr's search)
@@ -1068,6 +1071,11 @@ case ${1:-} in
     fi
     [[ -n $folder ]] || exit 1
     open_space "$name" "$folder" "=$name" "$machine"
+    ;;
+  ack)
+    pane=${2:?pane id required} machine=""
+    [[ $pane == */* ]] && machine=${pane%%/*} pane=${pane#*/}
+    at "$machine" set "$pane" idle >/dev/null
     ;;
   next)
     pane=$("$0" list | awk -F'[|][\\^][|]' '

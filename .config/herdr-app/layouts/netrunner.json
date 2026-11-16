@@ -227,6 +227,19 @@
               "min": 280,
               "max": 900,
               "hidden": true
+            },
+            {
+              "id": "queue",
+              "type": "block",
+              "content": {
+                "mod": "priority-queue"
+              },
+              "size": {
+                "px": 460
+              },
+              "min": 340,
+              "max": 760,
+              "hidden": true
             }
           ],
           "padding": 8,
@@ -294,6 +307,19 @@
               },
               "content": {
                 "mod": "jobs-tmux",
+                "props": {
+                  "headless": true
+                }
+              }
+            },
+            {
+              "id": "data-priority-queue",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "priority-queue",
                 "props": {
                   "headless": true
                 }

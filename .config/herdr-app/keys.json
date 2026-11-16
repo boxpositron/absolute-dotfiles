@@ -74,6 +74,7 @@
   "layout:netrunner": {
     "cmd-p": "mod.open:picker-tmux",
     "cmd-j": "omo-tmux.next",
+    "cmd-shift-j": "layout.toggle:queue",
     "cmd-shift-b": "mod.open:omo-board"
   }
 }
