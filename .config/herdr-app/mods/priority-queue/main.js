@@ -433,7 +433,7 @@ export default class PriorityQueue extends View {
     const d = this.diagrams[code];
     if (d?.src) {
       const f = Math.min(1, Math.max(120, this.width - 64) / d.dims.w);
-      return h_flex().id(id).w_full().justify_center().child(div().rounded(6).overflow_hidden().child(image(d.src).w(d.dims.w * f).h(d.dims.h * f)));
+      return h_flex().id(id).w_full().justify_center().child(div().overflow_hidden().child(image(d.src).w(d.dims.w * f).h(d.dims.h * f)));
     }
     if (d?.error) {
       return v_flex().id(id).w_full().gap(4)
@@ -452,7 +452,7 @@ export default class PriorityQueue extends View {
       .child(this.markdown(t, `q-${it.key}-${qi}`, q.question))
       .children((q.options ?? []).map((o, oi) => {
         const on = chosen.includes(o.label);
-        return v_flex().id(`opt-${it.key}-${qi}-${oi}`).px(10).py(6).gap(2).rounded(4).border_1()
+        return v_flex().id(`opt-${it.key}-${qi}-${oi}`).px(10).py(6).gap(2).border_1()
           .border_color(on ? t.accent : t.border).bg(on ? t.accent + "1f" : t.background)
           .when(can, (el) => el.cursor_pointer().hover((s) => s.border_color(t.accent + "b3").bg(t.accent + "14"))
             .on_click((_e, cx) => (now ? this.reply(it, o.label, cx) : this.pick(it, qi, o.label, q.multiSelect, cx))))
@@ -471,7 +471,7 @@ export default class PriorityQueue extends View {
       return v_flex().gap(14)
         .children(qs.map((q, i) => this.question(t, it, q, i, qs.length)))
         .when(Boolean(answer) && (qs.length > 1 || qs[0].multiSelect), (el) => el.child(h_flex()
-          .child(div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().rounded(4).bg(t.accent).text_color(t.background)
+          .child(div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().bg(t.accent).text_color(t.background)
             .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85))
             .tooltip(answer).on_click((_e, cx) => this.reply(it, answer, cx)).child("SEND ANSWER"))));
     }
@@ -489,7 +489,7 @@ export default class PriorityQueue extends View {
   }
 
   button(t, id, label, icon, tip, onClick, tone) {
-    return h_flex().id(id).px(8).h(24).gap(5).flex_none().items_center().rounded(4).border_1().border_color(t.border)
+    return h_flex().id(id).px(8).h(24).gap(5).flex_none().items_center().border_1().border_color(t.border).bg(t.background)
       .font_family(mono()).text_size(10.5).font_bold().text_color(tone ?? t.muted).cursor_pointer()
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip).on_click((_e, cx) => onClick(cx))
       .child(svg(`mods/workspace-chrome/${icon}.svg`).size(12))
@@ -512,39 +512,43 @@ export default class PriorityQueue extends View {
   }
 
   replyBox(t, it) {
-    return h_flex().h(34).pl(10).pr(4).gap(6).items_center().rounded(4).border_1().border_color(t.accent + "b3").bg(t.background)
+    return h_flex().h(34).pl(10).pr(4).gap(6).items_center().border_1().border_color(t.accent + "b3").bg(t.background)
       .child(Input.new(this.input).flex_1().h_full().text_size(12.5).text_color(t.foreground))
-      .child(div().id(`send-${it.key}`).px(8).h(24).flex().flex_none().items_center().rounded(3).bg(t.accent).text_color(t.background)
+      .child(div().id(`send-${it.key}`).px(8).h(24).flex().flex_none().items_center().bg(t.accent).text_color(t.background)
         .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85))
         .on_click((_e, cx) => this.sendTyped(cx)).child("SEND"));
   }
 
+  // A card is a block in its session's colour, as the session is in the Agents tree: a band of it across
+  // the top holding the kind in a solid chip, a lighter wash of it below, and an edge of it down the left.
+  // Without a session colour the kind's stands in. Cards that need you are outlined in the kind's colour.
   card(t, it, now) {
     const kind = KINDS[it.kind], tone = t[kind.tone] ?? t.accent;
     const tint = it.session ? shared("tmux.tints")?.[it.machine ? `${it.machine}/${it.session}` : it.session] ?? null : null;
+    const band = (tint ?? tone).slice(0, 7), urgent = kind.rank === 2;
     const title = it.name || it.project || "omo";
-    const where = [it.project !== title ? it.project : null, it.window && !GENERIC.has(it.window) && it.window !== it.project && it.window !== title ? it.window : null]
+    // The header names the session, so a project of the same name isn't repeated.
+    const where = [it.project !== title && it.project !== it.session ? it.project : null, it.window && !GENERIC.has(it.window) && it.window !== it.project && it.window !== title ? it.window : null]
       .filter(Boolean).join(" \u00b7 ");
-    return h_flex().id(`card-${it.key}`).flex_none().items_stretch().rounded(6).overflow_hidden().bg(t.chrome).border_1().border_color(t.border)
-      .child(div().w(3).flex_none().bg(tone))
-      .child(v_flex().flex_1().min_w(0).px(12).py(10).gap(8)
-        .child(h_flex().id(`head-${it.key}`).gap(8).items_center().font_family(mono()).text_size(10.5)
-          .when(Boolean(it.pane || it.tmux), (el) => el.cursor_pointer().tooltip("Show it in Herdr").on_click((_e, cx) => this.goTo(it, cx)))
-          .child(h_flex().px(6).h(18).gap(5).flex_none().items_center().rounded(3).bg(tone + "24").text_color(tone).font_bold()
-            .when(kind.rank === 2, (el) => el.child(div().size(6).rounded(3).bg(tone).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
-            .child(kind.label))
-          .when(Boolean(it.session), (el) => el.child(h_flex().min_w(0).gap(5).items_center()
-            .when(Boolean(tint), (e) => e.child(div().size(8).flex_none().rounded(2).bg(tint)))
-            .child(div().min_w(0).truncate().text_color(t.muted).child(it.session))))
-          .when(Boolean(it.machine), (el) => el.child(div().flex_none().text_color(REMOTE).child(it.machine)))
-          .child(div().flex_1())
-          .child(div().flex_none().text_color(t.dim).child(ago(now - it.since))))
+    return v_flex().id(`card-${it.key}`).flex_none().overflow_hidden().bg(t.chrome).border_1().border_color(urgent ? tone : band + "59")
+      .child(h_flex().id(`head-${it.key}`).h(28).flex_none().pr(10).gap(8).items_center().bg(band + "40").font_family(mono()).text_size(10.5)
+        .when(Boolean(it.pane || it.tmux), (el) => el.cursor_pointer().tooltip("Show it in Herdr").on_click((_e, cx) => this.goTo(it, cx)))
+        .child(h_flex().h_full().px(8).gap(6).flex_none().items_center().bg(tone).text_color(t.background).font_bold()
+          .when(urgent, (el) => el.child(div().size(6).bg(t.background).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
+          .child(kind.label))
+        .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(it.session)))
+        .when(Boolean(it.machine), (el) => el.child(div().flex_none().text_color(REMOTE).child(it.machine)))
+        .child(div().flex_1())
+        .child(div().flex_none().text_color(t.muted).child(ago(now - it.since))))
+      .child(h_flex().items_stretch().bg(mix(band, "#ffffff", 0.35) + "14")
+        .child(div().w(3).flex_none().bg(band))
+        .child(v_flex().flex_1().min_w(0).px(12).py(10).gap(8)
         .child(v_flex().gap(1)
           .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(title))
           .when(Boolean(where), (el) => el.child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(where))))
         .child(this.body(t, it))
         .child(this.actions(t, it))
-        .when(this.replyTo === it.key, (el) => el.child(this.replyBox(t, it))));
+        .when(this.replyTo === it.key, (el) => el.child(this.replyBox(t, it)))));
   }
 
   render(cx) {
@@ -575,7 +579,7 @@ export default class PriorityQueue extends View {
         .child(div().id("queue-hide").size(24).flex().flex_none().items_center().justify_center().rounded(4).cursor_pointer()
           .hover((s) => s.bg(t.hover)).tooltip("Hide (\u2318\u21e7J)").on_click(() => run("layout.hide", { id: "queue" }))
           .child(svg("mods/workspace-chrome/x.svg").size(13).text_color(t.dim))))
-      .when(Boolean(data?.problem), (el) => el.child(div().mx(10).mt(10).px(10).py(7).rounded(4).border_1().border_color(t.blocked + "66").bg(t.blocked + "14")
+      .when(Boolean(data?.problem), (el) => el.child(div().mx(10).mt(10).px(10).py(7).border_1().border_color(t.blocked + "66").bg(t.blocked + "14")
         .text_size(11.5).line_height(1.4).text_color(t.blocked).child(data.problem)))
       .when(items.length === 0, (el) => el.child(v_flex().flex_1().items_center().justify_center().gap(8).px(24)
         .child(svg("mods/workspace-chrome/circle-check.svg").size(22).text_color(t.done))
