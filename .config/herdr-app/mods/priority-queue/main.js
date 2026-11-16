@@ -374,6 +374,8 @@ export default class PriorityQueue extends View {
 
   reply(it, text, cx) {
     if (!it.sid || !it.at || !text.trim()) return;
+    // A second click while the answer is on its way, or once it went, would send it twice.
+    if (["sending", "sent"].includes(this.status.get(it.key))) return;
     this.status.set(it.key, "sending");
     cx.notify();
     cx.spawn(async (cx) => {
@@ -384,8 +386,8 @@ export default class PriorityQueue extends View {
       try { res = JSON.parse(r.stdout); } catch {}
       this.status.set(it.key, res?.ok ? "sent" : res?.error ?? (r.stderr.trim() || "agent-state didn't answer"));
       cx.notify();
-      // The session has the answer, but omo keeps a question asked without holding the turn pending (the board
-      // delivers the answer as a message), so the card goes on its own once SENT has shown.
+      // The session's board extension answers its open question as the dialog would, and agent-state hears of that
+      // a few seconds later, so the card goes once SENT has shown rather than waiting for it.
       if (res?.ok) cx.timer.after(2500, (cx) => this.seen({ ...it, pane: null }, cx));
     });
   }
