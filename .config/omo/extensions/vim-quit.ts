@@ -5,9 +5,10 @@
 //
 // :sq (or /sq) runs the /sq checklist (.config/omo/prompts/sq.md) as a turn: trackers, logged time, git and
 // memory brought up to date, then a handoff that ends in `SQ: done`, `SQ: park <open items>` or `SQ: hold <reason>`.
-// Done means nothing is left: in an owt workspace that is committed and merged it runs /owt-done, which stops what
-// still runs in the workspace (dev servers, watchers, containers), removes it and ends the session; outside a
-// workspace the session just closes. Park means work is left: the session is filed in the session library
+// Done means the session has nothing of its own left (what waits on the user in Studio or Linear is listed in the
+// handoff and doesn't count): in an owt workspace that is committed and merged it runs /owt-done, which stops what still runs
+// in the workspace (dev servers, watchers, containers), removes it and ends the session; outside a workspace the
+// session just closes. Park means the session has work of its own to come back to: it is filed in the session library
 // (`omo-sessions file`) and quits, as is a done in a workspace that can't be finished yet. On hold it stays open.
 // `SQ: ready`, from before done and park, still finishes a merged workspace and parks anything else.
 //
