@@ -15,8 +15,15 @@ import { agents, terminals, panes, focused, spaces, run, exec, home, theme, shar
 const REMOTE = "#fcee0a";
 const REMOTE_ROW = REMOTE + "10", REMOTE_HOVER = REMOTE + "1f", REMOTE_SELECTED = REMOTE + "38";
 // Each tmux session has a colour of its own (tmux-session-tint, which faintly colours its panes too;
-// omo-tmux publishes them as shared "tmux.tints"): its row gets a wash of it, on either machine.
+// omo-tmux publishes them as shared "tmux.tints"): its row gets a wash of it, on either machine. The
+// colours come from tmux-session-tint's list in the order this tree shows the sessions (syncTints), so
+// sessions next to each other always contrast.
 const tintOf = (s) => shared("tmux.tints")?.[s.machine ? `${s.machine}/${s.name}` : s.name] ?? null;
+// A pane row is its session's colour lightened toward white, so it reads as a lighter band under the session's.
+const lighten = (hex, amount) =>
+  `#${[1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * (1 - amount) + 255 * amount).toString(16).padStart(2, "0")).join("")}`;
+// The edge on the right of the pane Herdr shows.
+const FOCUS_EDGE = "#ff3040";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -177,6 +184,8 @@ export default class Agents extends View {
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? "[]"));
     // Session order per server, as you dragged it ({machine: [session, ...]}); kept across restarts.
     this.order = JSON.parse(localStorage.getItem("order") ?? "{}");
+    // The session order each server's tmux last coloured its sessions by (syncTints).
+    this.tinted = new Map();
     this.drag = null;
     this.blocks = new Map();
     this.motion = null;
@@ -424,11 +433,10 @@ export default class Agents extends View {
       .px(8)
       .h(ROW_H)
       .flex_none()
-      .rounded(8)
       .gap(6)
       .items_center()
       .when(remote && !tint, (el) => el.bg(REMOTE_ROW))
-      .when(Boolean(tint), (el) => el.bg(tint + "1c"))
+      .when(Boolean(tint), (el) => el.bg(tint + "2a"))
       .cursor_pointer()
       .hover((el) => el.bg(tint ? tint + "33" : remote ? REMOTE_HOVER : t.hover))
       .on_hover((on, cx) => {
@@ -448,7 +456,38 @@ export default class Agents extends View {
       .when(!open && top !== "idle", (el) => el.child(this.paneStatus(t, top, true)));
   }
 
-  paneRow(t, p, last, now, on) {
+  // Hands each server's tmux the order its sessions show in here, whenever it changes (a drag, a session
+  // coming or going), and takes the colours tmux-session-tint gives them in that order straight away,
+  // rather than at omo-tmux's next read of them.
+  syncTints(servers, cx) {
+    if (this.drag) return;
+    for (const srv of servers) {
+      const machine = srv.machine || "";
+      const names = srv.sessions.map((s) => s.name);
+      if (this.tinted.get(machine) === names.join("\n")) continue;
+      this.tinted.set(machine, names.join("\n"));
+      const args = ["--order", ...names];
+      cx.spawn(async (cx) => {
+        try {
+          const r = machine
+            ? await exec("sh", ["-c", 'exec "$HOME/.local/bin/tmux-session-tint" "$@"', "tmux-session-tint", ...args], { on: machine })
+            : await exec(`${home()}/.local/bin/tmux-session-tint`, args);
+          if (r.code !== 0) return;
+          const tints = Object.assign({}, shared("tmux.tints") ?? {});
+          for (const line of r.stdout.split("\n")) {
+            const [name, colour] = line.split("|^|");
+            if (name && colour) tints[machine ? `${machine}/${name}` : name] = colour;
+          }
+          setShared("tmux.tints", tints);
+          cx.notify();
+        } catch {}
+      });
+    }
+  }
+
+  // `tint` is the session's colour: a pane row gets a lighter wash of it than its session's row.
+  paneRow(t, p, last, now, on, tint) {
+    const wash = tint && lighten(tint, 0.35);
     const remote = Boolean(p.machine);
     const quiet = p.state === "idle";
     const label = GENERIC.has(p.window) ? p.project : p.window;
@@ -465,14 +504,15 @@ export default class Agents extends View {
       .pr(8)
       .h(28)
       .flex_none()
-      .rounded(8)
       .items_center()
       .text_size(12.5)
-      .when(remote, (el) => el.bg(REMOTE_ROW))
-      .when(on, (el) => el.bg(remote ? REMOTE_SELECTED : t.selected))
+      .when(remote && !tint, (el) => el.bg(REMOTE_ROW))
+      .when(Boolean(wash), (el) => el.bg(wash + (on ? "40" : "24")))
+      .when(on && !wash, (el) => el.bg(remote ? REMOTE_SELECTED : t.selected))
       .cursor_pointer()
-      .hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
+      .hover((el) => el.bg(wash ? wash + "40" : remote ? REMOTE_HOVER : t.hover))
       .on_click((_e, cx) => this.show(p, cx))
+      .when(on, (el) => el.child(div().absolute().right(0).top(0).bottom(0).w(3).bg(FOCUS_EDGE)))
       // A short bar at the row's edge: this pane is waiting on you (pink) or failed (red).
       .when(p.state === "input" || p.state === "error", (el) => el.child(div().absolute().left(3).top(6).w(2).h(16).rounded(1).bg(p.state === "error" ? t.ansi1 : t.accent)))
       .child(this.connector(t, last))
@@ -531,7 +571,6 @@ export default class Agents extends View {
       .id(`sub-${k.address}`)
       .pl(39)
       .pr(8)
-      .rounded(8)
       .h(26)
       .flex_none()
       .gap(0)
@@ -573,6 +612,7 @@ export default class Agents extends View {
       this.tmuxPanes = parsePanes(this.panesOut);
     }
     const servers = serverTree(this.tmuxPanes, this.order);
+    this.syncTints(servers, cx);
     const where = shared("tmux.where");
     const shownPane = where?.tmux && where.pane ? (where.on ? `${where.on}/${where.pane}` : where.pane) : null;
     const clients = new Set(all.filter(tmuxClient).map((x) => x.address));
@@ -697,7 +737,6 @@ export default class Agents extends View {
         .px(8)
         .h(30)
         .flex_none()
-        .rounded(8)
         .items_center()
         .gap(9)
         .when(Boolean(machine), (el) => el.bg(REMOTE_ROW))
@@ -795,13 +834,13 @@ export default class Agents extends View {
       for (const s of sessions) {
         const rows = [{ key: s.key, draw: (ghost) => this.sessionRow(t, s, ghost) }];
         if (!this.folded.has(s.key)) {
-          s.panes.forEach((p, i) => rows.push({ key: `tp-${p.pane}`, draw: () => this.paneRow(t, p, i === s.panes.length - 1, now, p.pane === shownPane) }));
+          s.panes.forEach((p, i) => rows.push({ key: `tp-${p.pane}`, draw: () => this.paneRow(t, p, i === s.panes.length - 1, now, p.pane === shownPane, tintOf(s)) }));
         }
         const h = rows.length * ROW_H;
         heldBlocks.push({ name: s.name, y: rowY, h, rows: rows.map((r) => r.key) });
         if (held?.machine === s.machine && held.name === s.name) {
           // Its landing place stays open as an outline while its rows follow the pointer.
-          treeItems.push({ key: "drag-slot", y: rowY, h, draw: () => div().h(h).rounded(8).border_1().border_color(t.input) });
+          treeItems.push({ key: "drag-slot", y: rowY, h, draw: () => div().h(h).border_1().border_color(t.input) });
           ghostRows = rows;
         } else {
           rows.forEach((r, i) => treeItems.push({ key: r.key, y: rowY + i * ROW_H, h: ROW_H, draw: () => r.draw(false) }));
@@ -823,7 +862,7 @@ export default class Agents extends View {
     // The lifted copy: a full-width layer at the pointer's height, holding a raised card of the rows.
     const lifted = held && ghostRows
       ? div().id("drag-ghost").absolute().left(0).top(held.top + held.dy).w_full().px(8)
-        .child(div().rounded(8).overflow_hidden().bg(t.popover).border_1().border_color(t.input).shadow_lg()
+        .child(div().overflow_hidden().bg(t.popover).border_1().border_color(t.input).shadow_lg()
           .child(v_flex().children(ghostRows.map((r) => r.draw(true)))))
       : null;
     // Agents outside tmux get a heading of their own only below the tmux tree.
