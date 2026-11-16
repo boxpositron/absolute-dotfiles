@@ -21,7 +21,10 @@
 // the list and takes Cmd+J: it publishes the list in shared "omo.list" for this panel and the counts
 // in "omo.tmux" for the chip. The panel only draws. It reads this Mac's panes (`omo-status
 // list-local`) the moment omo's state changes (omo-status set touches the list tick) or Herdr's
-// focus moves, else every 5 s; the other machines' (`list-remote`, about a second each) every 15 s.
+// focus moves, else every 5 s. It reads the other machines' (`list-remote`, under a second each)
+// whenever the remote folder changes: `omo-status follow`, a launchd agent, touches its tick the moment
+// a machine's omo state changes and on a beat every 15 s, and `omo-status ack` touches its seen after
+// clearing one of their panes. While no tick comes for 25 s (no agent, or no link), it reads them every 3 s.
 // Every 15 s it also publishes each tmux session's colour (`omo-status tints`, from tmux-session-tint)
 // in shared "tmux.tints", {"<session>" or "<machine>/<session>": "#rrggbb"}, for the Agents tree.
 
@@ -30,6 +33,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { exec, home, nextCommand, run, theme, shared, setShared, props, focused, watchFolder } from "herdr";
 
 const listTick = () => `${home()}/.local/state/omo-status/list`;
+const remoteTick = () => `${home()}/.local/state/omo-status/remote`;
 
 const SEP = "|^|";
 const RANK = { error: 6, input: 5, done: 4, partial: 4, working: 3, background: 2, idle: 1 };
@@ -94,17 +98,16 @@ export default class OmoTmux extends View {
       this.remote = "";
       this.refresh(cx);
       this.refreshRemote(cx);
+      this.heardAt = 0;
       cx.timer.every(5000, (cx) => this.refresh(cx));
-      cx.timer.every(15000, (cx) => this.refreshRemote(cx));
+      cx.timer.every(3000, (cx) => { if (Date.now() - this.heardAt > 25000) this.refreshRemote(cx); });
       this.refreshTints(cx);
       cx.timer.every(15000, (cx) => this.refreshTints(cx));
-      cx.spawn(async (cx) => {
-        await exec("mkdir", ["-p", listTick()]).catch(() => null);
-        for (;;) {
-          try { await watchFolder(listTick()); } catch { return; }
-          this.refresh(cx);
-        }
-      });
+      this.onTick(listTick(), (cx) => this.refresh(cx), cx);
+      this.onTick(remoteTick(), (cx, paths) => {
+        if (paths.some((p) => p.endsWith("/tick"))) this.heardAt = Date.now();
+        this.refreshRemote(cx);
+      }, cx);
       // keys.json binds "omo-tmux.next" (Cmd+J in the netrunner layout): the pane that most needs you.
       cx.spawn(async (cx) => {
         for (;;) {
@@ -149,16 +152,32 @@ export default class OmoTmux extends View {
     });
   }
 
+  // Runs `then` with the changed paths whenever something in the tick folder `dir` changes.
+  onTick(dir, then, cx) {
+    cx.spawn(async (cx) => {
+      await exec("mkdir", ["-p", dir]).catch(() => null);
+      for (;;) {
+        let paths;
+        try { paths = await watchFolder(dir); } catch { return; }
+        then(cx, paths);
+      }
+    });
+  }
+
+  // As refresh: a change heard while a read runs reads again, so it isn't left for the next beat.
   refreshRemote(cx) {
-    if (this.remoteBusy) return;
+    if (this.remoteBusy) { this.remoteAgain = true; return; }
     this.remoteBusy = true;
     cx.spawn(async () => {
-      try {
-        const r = await exec(`${home()}/.local/bin/omo-status`, ["list-remote"]);
-        if (r.code === 0) this.remote = r.stdout;
-      } catch { /* keeps the last answer */ }
+      do {
+        this.remoteAgain = false;
+        try {
+          const r = await exec(`${home()}/.local/bin/omo-status`, ["list-remote"]);
+          if (r.code === 0) this.remote = r.stdout;
+        } catch { /* keeps the last answer */ }
+        this.share();
+      } while (this.remoteAgain);
       this.remoteBusy = false;
-      this.share();
     });
   }
 

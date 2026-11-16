@@ -52,7 +52,7 @@
 #                                     failure, then a finished turn, the longest waiting first)
 #        omo-status ack <pane>       (Herdr's priority queue: a finished turn or failure seen there
 #                                     goes back to idle, as looking at the pane would; <machine>/<pane>
-#                                     for another machine's)
+#                                     for another machine's, whose list Herdr then reads at once)
 #        omo-status list             (every pane running omo, for Herdr's "omo in tmux" panel:
 #                                     pane, session, window, folder, state, since, scheduled wake-up, message)
 #        omo-status panes            (every tmux pane, for Herdr's search)
@@ -75,6 +75,10 @@
 #        omo-status list-local | list-remote
 #                                    (list in two parts, for Herdr's omo panel: this Mac's panes,
 #                                     after noting a Herdr focus change; the connected machines')
+#        omo-status follow           (run by the launchd agent: each connected Herdr machine says when
+#                                     its omo state changes, so Herdr's omo panel reads that machine's
+#                                     list at once rather than at its next look)
+#        omo-status install          (install and start that launchd agent, on a Mac)
 #        omo-status jobs             (every background job of every omo pane, for Herdr's jobs panel, one
 #                                     line each: pane, session, window, folder, kind (monitor, command, cell,
 #                                     child, wakeup, goal), started, due, label; here and on each Herdr machine)
@@ -98,6 +102,10 @@ spaces_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/spaces"
 # Touched whenever a pane's omo state is set, so Herdr's omo panel reads the list at once
 # rather than polling for it.
 list_tick="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/list/tick"
+# Watched by Herdr's omo panel, which reads the other machines' list at once when it changes: `follow`
+# touches tick at each answer from a machine (a change, or the beat that shows the link is up), and
+# `ack` touches seen after clearing one of their panes. Only tick tells the panel `follow` is running.
+remote_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/remote"
 
 # From a transcript's session-lifecycle entry: "<lifecycle state>\x1f<what still runs>".
 # Only real work counts. The other waitingOn sources are omo's own plumbing (queued
@@ -507,6 +515,39 @@ at() {
   else
     hc exec --on "$machine" --timeout 5 sh -c 'exec "$HOME/.local/bin/omo-status" "$@"' omo-status "$@"
   fi
+}
+
+# Run on another machine by `follow`, through `hc exec --on`, in plain sh: waits until that machine's
+# list tick has a time other than the one it is given ($1), looking every quarter second, then prints
+# "change <time>"; after 15 s with no change, "beat <time>". hc passes output on only once a command
+# ends, so `follow` holds one wait open at a time rather than a stream.
+follow_wait='
+tick="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/list/tick"
+stamp() { stat -c %y "$tick" 2>/dev/null || stat -f %Fm "$tick" 2>/dev/null || echo none; }
+i=0 now=$(stamp)
+while [ "$now" = "$1" ] && [ $i -lt 60 ]; do sleep 0.25; i=$((i + 1)); now=$(stamp); done
+if [ "$now" = "$1" ]; then echo "beat $now"; else echo "change $now"; fi'
+
+# `follow` for one machine: asks it to wait for its next change, touches remote_dir's tick at each answer
+# (a change, or the beat that shows the link is up), and asks again. A machine that doesn't answer is asked
+# again after 2 s, backing off to every 30 s, until it is no longer connected.
+follow_machine() {
+  local machine=$1 stamp="" reply pause=2 up=1
+  while :; do
+    if reply=$(hc exec --on "$machine" --timeout 30 sh -c "$follow_wait" follow "$stamp" 2>/dev/null) &&
+      [[ $reply == "change "* || $reply == "beat "* ]]; then
+      stamp=${reply#* } pause=2
+      [[ -n $up ]] || echo "$(date '+%F %T') $machine answers again"
+      up=1
+      touch "$remote_dir/tick"
+    else
+      [[ -z $up ]] || echo "$(date '+%F %T') $machine didn't answer; asking again, at most every 30 s"
+      up=""
+      sleep "$pause"
+      ((pause = pause < 16 ? pause * 2 : 30))
+      [[ $'\n'$(machines)$'\n' == *$'\n'"$machine"$'\n'* ]] || return 0
+    fi
+  done
 }
 
 # A machine's rows, its name in front of the pane and the session ("server/%3").
@@ -1076,6 +1117,64 @@ case ${1:-} in
     pane=${2:?pane id required} machine=""
     [[ $pane == */* ]] && machine=${pane%%/*} pane=${pane#*/}
     at "$machine" set "$pane" idle >/dev/null
+    if [[ -n $machine ]]; then
+      mkdir -p "$remote_dir" && touch "$remote_dir/seen"
+    fi
+    ;;
+  follow)
+    # One follow_machine per connected Herdr machine, started again if it ends; the machines are
+    # looked at every 30 s, so one connected later is followed too.
+    mkdir -p "$remote_dir"
+    running=""
+    while :; do
+      for machine in $(machines); do
+        pid=$(awk -v m="$machine" '$1 == m { print $2 }' <<<"$running")
+        [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null && continue
+        follow_machine "$machine" &
+        running="$(awk -v m="$machine" '$1 != m' <<<"$running")"$'\n'"$machine $!"
+      done
+      sleep 30
+    done
+    ;;
+  install)
+    [[ $(uname) == Darwin ]] || { echo "omo-status install: the agent is a launchd agent, for a Mac" >&2; exit 1; }
+    label=local.omo-status-follow
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    log="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/follow.log"
+    mkdir -p "${log%/*}" "${plist%/*}"
+    # launchd's own PATH would start this script with macOS's bash 3.2.
+    cat >"$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.local/bin/omo-status</string>
+    <string>follow</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>$log</string>
+  <key>StandardErrorPath</key>
+  <string>$log</string>
+</dict>
+</plist>
+PLIST
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+    launchctl bootstrap "gui/$(id -u)" "$plist" && echo "omo-status: following the other machines' omo state ($plist)"
     ;;
   next)
     pane=$("$0" list | awk -F'[|][\\^][|]' '
