@@ -56,6 +56,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, Editor, EditorState } from "gpui-base";
 import { exec, home, appHome, theme, props, settings, fonts, watchFolder, readTextFile, notify, openOverlay, closeOverlay, nextCommand, shared, terminals, hc, layout, run as herdrRun } from "herdr";
+import { fileIcon } from "./file-icons.js";
 
 const EDITOR = "files-nvim";
 // Another machine's things, as the Agents tree marks them.
@@ -953,7 +954,6 @@ export default class Preview extends View {
   header(t) {
     const v = this.v, path = this.path, nav = this.nav();
     const toggle = v && (v.kind === "markdown" || (v.kind === "html" && !v.converted));
-    const icon = v?.kind === "folder" ? "mods/workspace-chrome/folder.svg" : "mods/workspace-chrome/file-text.svg";
     const meta = [];
     if (v?.label) meta.push(v.label);
     if (v?.kind === "image" && v.dims) meta.push(`${v.dims.w} \u00d7 ${v.dims.h} px`);
@@ -968,7 +968,7 @@ export default class Preview extends View {
           .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Back to the file tree (Esc)")
           .on_click(() => this.toTree()).child(svg("mods/workspace-chrome/chevron-left.svg").size(13)).child("Files")))
         .when(this.history.length > 0, (el) => el.child(this.button(t, "pv-back", "mods/workspace-chrome/chevron-left.svg", "Back (Cmd+[)", (cx) => this.back(cx))))
-        .child(svg(icon).size(14).flex_none().text_color(t.muted))
+        .child(fileIcon(basename(path), { dir: v?.kind === "folder", open: true, size: 15, color: v?.kind === "folder" ? t.ansi4 : t.muted }))
         .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(basename(path)))
         .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(this.on ? dirOf(path) : tilde(dirOf(path))))
         .child(h_flex().flex_none().gap(1)
@@ -1221,7 +1221,7 @@ export default class Preview extends View {
         const target = `${v.path === "/" ? "" : v.path}/${e.name}`;
         return h_flex().id(`pv-e-${e.name}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer()
           .hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.navigate(target, cx))
-          .child(svg(e.dir ? "mods/workspace-chrome/folder.svg" : "mods/workspace-chrome/file-text.svg").size(14).flex_none().text_color(t.muted))
+          .child(fileIcon(e.name, { dir: e.dir, color: e.dir ? t.ansi4 : t.muted }))
           .child(div().flex_1().min_w(0).truncate().child(e.name));
       }))
       .when(v.entries.length === 0, (el) => el.child(div().p(8).text_size(12).text_color(t.dim).child("This folder is empty")))
