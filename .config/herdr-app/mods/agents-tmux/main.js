@@ -14,6 +14,9 @@ import { agents, terminals, panes, focused, spaces, run, exec, home, theme, shar
 // a remote session stands out when scanning the list.
 const REMOTE = "#fcee0a";
 const REMOTE_ROW = REMOTE + "10", REMOTE_HOVER = REMOTE + "1f", REMOTE_SELECTED = REMOTE + "38";
+// Each tmux session has a colour of its own (tmux-session-tint, which faintly colours its panes too;
+// omo-tmux publishes them as shared "tmux.tints"): its row gets a wash of it, on either machine.
+const tintOf = (s) => shared("tmux.tints")?.[s.machine ? `${s.machine}/${s.name}` : s.name] ?? null;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -414,6 +417,7 @@ export default class Agents extends View {
     const open = !this.folded.has(s.key);
     const remote = Boolean(s.machine);
     const top = s.top?.state;
+    const tint = tintOf(s);
     return h_flex()
       .id(s.key)
       .relative()
@@ -423,9 +427,10 @@ export default class Agents extends View {
       .rounded(8)
       .gap(6)
       .items_center()
-      .when(remote, (el) => el.bg(REMOTE_ROW))
+      .when(remote && !tint, (el) => el.bg(REMOTE_ROW))
+      .when(Boolean(tint), (el) => el.bg(tint + "1c"))
       .cursor_pointer()
-      .hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
+      .hover((el) => el.bg(tint ? tint + "33" : remote ? REMOTE_HOVER : t.hover))
       .on_hover((on, cx) => {
         const key = on ? s.key : this.hoverRow === s.key ? null : this.hoverRow;
         if (key !== this.hoverRow) { this.hoverRow = key; cx.notify(); }

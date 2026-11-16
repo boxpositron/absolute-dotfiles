@@ -55,6 +55,8 @@
 #        omo-status panes            (every tmux pane, for Herdr's search)
 #        omo-status sessions         (every tmux session, for Herdr's search: name, windows, clients,
 #                                     whether a Herdr terminal shows it, folder, last activity)
+#        omo-status tints            (every tmux session's colour from tmux-session-tint, for Herdr's
+#                                     Agents tree: session, #rrggbb)
 #        omo-status session <name> [<machine>]
 #                                    (shows tmux session <name> in Herdr as show does, starting it
 #                                     first in your home folder when there is none; on Herdr machine
@@ -296,6 +298,9 @@ herdr_sessions() {
 # Every tmux session: "<session>|^|<windows>|^|<clients>|^|<1 when a Herdr terminal shows it, else 0>|^|
 # <folder>|^|<last activity, epoch seconds>". It uses nothing in this file but the tmux wrapper,
 # herdr_terminal and herdr_sessions, so `sessions` can send it to a Herdr machine with declare -f.
+tints_here() {
+  tmux list-sessions -F '#{session_name}|^|#{@tint_color}' 2>/dev/null | awk -F'[|][\\^][|]' '$2 != ""'
+}
 sessions_here() {
   local herdr line name windows clients shown
   herdr=$'\n'$(herdr_sessions)$'\n'
@@ -1039,6 +1044,13 @@ case ${1:-} in
     # A machine's own omo-status may be older than this one, so the functions go along, as for jobs.
     for machine in $(machines); do
       hc exec --on "$machine" --timeout 5 bash -c "$(declare -f tmux herdr_terminal herdr_sessions sessions_here)"'; sessions_here' sessions 2>/dev/null |
+        sed "s|^|$machine/|"
+    done
+    ;;
+  tints)
+    tints_here
+    for machine in $(machines); do
+      hc exec --on "$machine" --timeout 5 bash -c "$(declare -f tmux tints_here)"'; tints_here' tints 2>/dev/null |
         sed "s|^|$machine/|"
     done
     ;;

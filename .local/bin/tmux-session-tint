@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# A faint background colour per tmux session, so sessions look apart at a glance.
+#
+# A session gets its hue the first time it is seen: of the 24 steps round the colour wheel, the one
+# farthest from the hues the other sessions already have, the session's name choosing among equals.
+# It keeps it in session options while it lives: @tint_hue, @tint (the faint background) and
+# @tint_color (the full colour, which Herdr's Agents tree washes the session's row with, through
+# `omo-status tints`). Every window of the session gets window-style bg=@tint, so all its panes show
+# it, in Herdr and in Ghostty alike. tmux doesn't expand formats in window-style, so the colour is
+# set on each window: tmux's window-linked hook runs this for every new window, and for a window
+# moved to another session, which then takes that session's colour.
+#
+# The colour is mixed into the netrunner terminal background (#0a0a14), which Herdr draws on this
+# Mac and on the server alike.
+#
+# Usage: tmux-session-tint [session]   one session (the hook passes its id), or every session
+
+# A tmux server Herdr started has a bare PATH.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+tmux() { command tmux -u "$@"; }
+
+# Hue (0-345) -> "<faint background> <full colour>", both #rrggbb.
+colours() {
+  awk -v h="$1" 'function abs(v) { return v < 0 ? -v : v }
+    function hex(v) { return sprintf("%02x", int(v + 0.5)) }
+    BEGIN {
+      s = 0.7; l = 0.6; base[1] = 10; base[2] = 10; base[3] = 20; strength = 0.09
+      c = (1 - abs(2 * l - 1)) * s; hp = h / 60; x = c * (1 - abs(hp % 2 - 1)); m = l - c / 2
+      if (hp < 1) { r = c; g = x; b = 0 } else if (hp < 2) { r = x; g = c; b = 0 } else if (hp < 3) { r = 0; g = c; b = x }
+      else if (hp < 4) { r = 0; g = x; b = c } else if (hp < 5) { r = x; g = 0; b = c } else { r = c; g = 0; b = x }
+      full[1] = (r + m) * 255; full[2] = (g + m) * 255; full[3] = (b + m) * 255
+      for (i = 1; i <= 3; i++) faint[i] = base[i] + (full[i] - base[i]) * strength
+      print "#" hex(faint[1]) hex(faint[2]) hex(faint[3]), "#" hex(full[1]) hex(full[2]) hex(full[3])
+    }'
+}
+
+# The step farthest from every taken hue, trying the name's own step first.
+pick_hue() {
+  local name=$1
+  shift
+  awk -v pref="$(($(printf %s "$name" | cksum | cut -d' ' -f1) % 24))" -v taken="$*" 'BEGIN {
+    n = split(taken, t, " "); best = -1
+    for (k = 0; k < 24; k++) {
+      c = ((pref + k) % 24) * 15; d = 360
+      for (i = 1; i <= n; i++) { x = c - t[i]; if (x < 0) x = -x; if (x > 180) x = 360 - x; if (x < d) d = x }
+      if (d > best) { best = d; hue = c }
+    }
+    print hue
+  }'
+}
+
+tint() {
+  local session=$1 hue tint color name window
+  IFS=$'\t' read -r hue tint name < <(tmux display-message -p -t "$session" $'#{@tint_hue}\t#{@tint}\t#{session_name}') || return 0
+  if [[ -z $hue || -z $tint ]]; then
+    # shellcheck disable=SC2046 # the taken hues are words on purpose
+    hue=$(pick_hue "$name" $(tmux list-sessions -F '#{@tint_hue}'))
+    read -r tint color < <(colours "$hue")
+    tmux set-option -t "$session" @tint_hue "$hue" \; set-option -t "$session" @tint "$tint" \; set-option -t "$session" @tint_color "$color"
+  fi
+  while read -r window; do
+    tmux set-option -w -t "$window" window-style "bg=$tint"
+  done < <(tmux list-windows -t "$session" -F '#{window_id}')
+}
+
+if [[ -n ${1:-} ]]; then
+  tint "$1"
+else
+  while read -r session; do tint "$session"; done < <(tmux list-sessions -F '#{session_id}' 2>/dev/null)
+fi
+exit 0

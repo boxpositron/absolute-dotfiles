@@ -22,6 +22,8 @@
 // in "omo.tmux" for the chip. The panel only draws. It reads this Mac's panes (`omo-status
 // list-local`) the moment omo's state changes (omo-status set touches the list tick) or Herdr's
 // focus moves, else every 5 s; the other machines' (`list-remote`, about a second each) every 15 s.
+// Every 15 s it also publishes each tmux session's colour (`omo-status tints`, from tmux-session-tint)
+// in shared "tmux.tints", {"<session>" or "<machine>/<session>": "#rrggbb"}, for the Agents tree.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -94,6 +96,8 @@ export default class OmoTmux extends View {
       this.refreshRemote(cx);
       cx.timer.every(5000, (cx) => this.refresh(cx));
       cx.timer.every(15000, (cx) => this.refreshRemote(cx));
+      this.refreshTints(cx);
+      cx.timer.every(15000, (cx) => this.refreshTints(cx));
       cx.spawn(async (cx) => {
         await exec("mkdir", ["-p", listTick()]).catch(() => null);
         for (;;) {
@@ -155,6 +159,15 @@ export default class OmoTmux extends View {
       } catch { /* keeps the last answer */ }
       this.remoteBusy = false;
       this.share();
+    });
+  }
+
+  refreshTints(cx) {
+    cx.spawn(async () => {
+      const r = await exec(`${home()}/.local/bin/omo-status`, ["tints"]).catch(() => null);
+      if (r?.code !== 0) return;
+      const tints = Object.fromEntries(r.stdout.split("\n").filter(Boolean).map((line) => line.split(SEP)));
+      if (JSON.stringify(shared("tmux.tints") ?? null) !== JSON.stringify(tints)) setShared("tmux.tints", tints);
     });
   }
 
