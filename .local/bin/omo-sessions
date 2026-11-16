@@ -35,6 +35,9 @@ omo-sessions: closed sessions, and work passed between sessions
                                Reopen (or start fresh) on a machine and show it in Herdr
   handoff [--on <machine>] [--cwd <dir>] <session|new> <task...>
                                Give a task to a running session, or to a new one
+  start [--tmux <session>] [--cwd <dir>] <task...>
+                               Start omo on a task in a new window of a tmux session (made if
+                               missing); prints the pane
 
 A session is an id, an id prefix or a tmux target. Machines are agent-state's names, such as mac.
 Called by other tools: file, unfile, taken, deliver.
@@ -349,6 +352,30 @@ cmd_handoff() {
   fi
 }
 
+# A new omo session on a task, in a new window of the tmux session named (in that session's folder, or --cwd), or of
+# the session named after --cwd's folder; a missing session is made in --cwd or the home folder. Herdr's picker uses it.
+cmd_start() {
+  local session="" cwd="" task words
+  while (($#)); do
+    case $1 in
+      --tmux) session=$2; shift 2 ;;
+      --cwd) cwd=$2; shift 2 ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
+  task="$*"
+  [[ -n $task ]] || die "no task given"
+  if [[ -z $cwd && -n $session ]] && tmux has-session -t "=$session" 2>/dev/null; then
+    cwd=$(tmux display-message -p -t "=$session:" '#{session_path}')
+  fi
+  cwd=${cwd:-$HOME}
+  [[ -d $cwd ]] || die "no folder $cwd on $(self_machine)"
+  # The window is named after the task's first few words.
+  read -r -a words <<<"$task"
+  launch "$cwd" "$session" "${words[*]:0:4}" "" -- "$task"
+}
+
 # Shows the session in Herdr: only where the Herdr app runs, which is what clicks a board card.
 cmd_open() {
   local machine=${1:?machine required} sid=${2:?session required} action=resume remote="" pane
@@ -382,6 +409,7 @@ case $command in
   fresh) cmd_fresh "$@" ;;
   open) cmd_open "$@" ;;
   handoff) cmd_handoff "$@" ;;
+  start) cmd_start "$@" ;;
   deliver) cmd_deliver "$@" ;;
   help | -h | --help) usage ;;
   *)
