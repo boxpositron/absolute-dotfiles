@@ -37,7 +37,8 @@ omo-sessions: closed sessions, and work passed between sessions
                                Give a task to a running session, or to a new one
   start [--tmux <session>] [--cwd <dir>] <task...>
                                Start omo on a task in a new window of a tmux session (made if
-                               missing); prints the pane
+                               missing), named after a random city; prints the pane
+  title <words>                Retitle a started task's window: one to three words naming the work
 
 A session is an id, an id prefix or a tmux target. Machines are agent-state's names, such as mac.
 Called by other tools: file, unfile, taken, deliver.
@@ -371,9 +372,39 @@ cmd_start() {
   fi
   cwd=${cwd:-$HOME}
   [[ -d $cwd ]] || die "no folder $cwd on $(self_machine)"
-  # The window is named after the task's first few words.
+  # The window is named after a random city, as owt names workspaces, until the session titles it.
+  local city pane
   read -r -a words <<<"$task"
-  launch "$cwd" "$session" "${words[*]:0:4}" "" -- "$task"
+  city=$("$HOME/.local/bin/owt" city 2>/dev/null) || city=${words[*]:0:4}
+  pane=$(launch "$cwd" "$session" "$city" "" -- "$task") || exit 1
+  tmux set-option -p -t "$pane" @omo_task 1
+  printf '%s\n' "$pane"
+}
+
+# A started task's session names its window after the work (the hook below reminds it).
+cmd_title() {
+  local words=() title
+  [[ -n ${TMUX_PANE:-} ]] || die "not in a tmux pane"
+  read -ra words <<<"$(printf '%s ' "$@" | tr -s '[:space:]' ' ' | tr -d '[:cntrl:]')"
+  ((${#words[@]} >= 1 && ${#words[@]} <= 3)) || die "a title is one to three words naming the work, e.g. omo-sessions title remotion setup"
+  title="${words[*]}"
+  tmux rename-window -t "$TMUX_PANE" "$title" \; set-option -p -t "$TMUX_PANE" @omo_task_title "$title"
+  echo "titled this window '$title'"
+}
+
+# omo UserPromptSubmit hook: in a window `start` opened, hands the agent the window's title with each prompt, so
+# it names the work once it knows it and keeps the name current. owt's hook does the same in workspaces.
+cmd_hook() {
+  local title context
+  [[ -t 0 ]] || cat >/dev/null
+  [[ -n ${TMUX_PANE:-} && $(tmux show-options -pqv -t "$TMUX_PANE" @omo_task 2>/dev/null) == 1 ]] || return 0
+  title=$(tmux display-message -p -t "$TMUX_PANE" '#{window_name}')
+  if [[ -n $(tmux show-options -pqv -t "$TMUX_PANE" @omo_task_title 2>/dev/null) ]]; then
+    context="This task's tmux window is titled \\\"$title\\\". If the work changes, retitle it with \`omo-sessions title <words>\`: one to three short words naming the work, never a sentence."
+  else
+    context="This task's tmux window still has its placeholder name, the city \\\"$title\\\". As soon as you know what the work is, title it with \`omo-sessions title <words>\`: one to three short words naming the work, never a sentence (for example \`omo-sessions title remotion setup\`). Retitle it whenever the focus shifts."
+  fi
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$context"
 }
 
 # Shows the session in Herdr: only where the Herdr app runs, which is what clicks a board card.
@@ -410,6 +441,8 @@ case $command in
   open) cmd_open "$@" ;;
   handoff) cmd_handoff "$@" ;;
   start) cmd_start "$@" ;;
+  title) cmd_title "$@" ;;
+  hook) cmd_hook ;;
   deliver) cmd_deliver "$@" ;;
   help | -h | --help) usage ;;
   *)

@@ -864,6 +864,8 @@ case "${1:-}" in
   done) shift; cmd_done "$@" ;;
   open) shift; cmd_open "$@" ;;
   title) shift; cmd_title "$@" ;;
+  # A random city from the list workspaces are named from; omo-sessions names picker-started tasks with it.
+  city) printf '%s\n' "${CITIES[RANDOM % ${#CITIES[@]}]}" ;;
   hook) shift; cmd_hook ;;
   ls)   shift; cmd_ls ;;
   all)  shift; cmd_all ;;
