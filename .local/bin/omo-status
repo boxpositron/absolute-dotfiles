@@ -106,6 +106,11 @@ list_tick="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/list/tick"
 # touches tick at each answer from a machine (a change, or the beat that shows the link is up), and
 # `ack` touches seen after clearing one of their panes. Only tick tells the panel `follow` is running.
 remote_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/remote"
+# Herdr's focused agent as herdr_arrival last saw it, and when omo-status or a click in Herdr's
+# Agents tree last moved the focus itself (seconds). Files, not tmux options: with a dozen clients
+# attached every set-option holds the tmux server for about 0.4 s, and these change on every switch.
+herdr_focus_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/herdr-focus"
+herdr_shown_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/herdr-shown"
 
 # From a transcript's session-lifecycle entry: "<lifecycle state>\x1f<what still runs>".
 # Only real work counts. The other waitingOn sources are omo's own plumbing (queued
@@ -747,11 +752,11 @@ herdr_arrival() {
   local now last shown target machine=""
   now=$(herdr-app status 2>/dev/null | jq -r '.agent // "none"')
   [[ -n $now ]] || return 0
-  last=$(tmux show-option -gqv @omo_herdr_focus)
+  last=$(cat "$herdr_focus_file" 2>/dev/null)
   [[ $now == "$last" ]] && return 0
-  tmux set-option -g @omo_herdr_focus "$now"
+  printf '%s\n' "$now" >"$herdr_focus_file"
   [[ -n $last && $now != none ]] || return 0
-  shown=$(tmux show-option -gqv @omo_herdr_shown)
+  shown=$(cat "$herdr_shown_file" 2>/dev/null)
   (($(date +%s) - ${shown:-0} < 5)) && return 0
   target=$(herdr_attached "$(herdr-app ls 2>/dev/null)" | awk -F'\t' -v t="$now" '$2 == t { print $1; exit }')
   [[ -n $target ]] || return 0
@@ -1064,7 +1069,7 @@ case ${1:-} in
   show)
     pane=${2:?pane id required} exact=${3:-} machine=""
     [[ $pane == */* ]] && machine=${pane%%/*} pane=${pane#*/}
-    tmux set-option -g @omo_herdr_shown "$(date +%s)"
+    date +%s >"$herdr_shown_file"
     # exact goes last, so another machine's older omo-status ignores it.
     IFS=$'\x1f' read -r terminal session folder < <(at "$machine" locate "$pane" ${exact:+"$exact"}) || exit 1
     if [[ -n $terminal ]]; then
@@ -1072,7 +1077,7 @@ case ${1:-} in
     else
       open_space "$session" "$folder" "$pane" "$machine"
     fi
-    tmux set-option -g @omo_herdr_shown "$(date +%s)"
+    date +%s >"$herdr_shown_file"
     ;;
   open)
     target=${2:?tmux target required} host=${3:-} machine=""

@@ -7,7 +7,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, exec, home, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, exec, home, readTextFile, writeTextFile, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
 
 // Remote tmux (.tmux-server.conf) has a Cyberpunk yellow bar. Agents on another
 // machine get a faint wash of the same yellow, and yellow hover and selection, so
@@ -111,6 +111,18 @@ const PANE_RANK = { error: 6, input: 5, done: 4, partial: 4, working: 3, backgro
 // Window names tmux picks by itself say nothing about the work.
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
 const TMUX = /(^|\/)tmux$/;
+
+// omo-status's note of when it last moved Herdr's focus itself (seconds): its list leaves such a move
+// alone, where it would take a plain change of tab for a visit and go to the session's most urgent pane.
+async function stampShown() {
+  const path = `${home()}/.local/state/omo-status/herdr-shown`;
+  try {
+    await writeTextFile(path, `${Math.floor(Date.now() / 1000)}\n`, await readTextFile(path));
+  } catch {
+    // Only omo-status writes it too, and only when it moves the focus itself: a write lost to it
+    // has been made by it.
+  }
+}
 
 // A Herdr terminal running a tmux client: tmux is its program now, or it was started as `tmux attach`.
 function tmuxClient(term) {
@@ -368,9 +380,31 @@ export default class Agents extends View {
 
   // The pane in Herdr: the tab already on its session, else the session's space, else a new one.
   // exact: this pane, not the session's most urgent one, since each row is a pane of its own.
+  // A pane on this Mac whose session a tab already shows is shown at once: the move is stamped as
+  // omo-status's own (omo-tmux reads the list as soon as the focus moves), one tmux call selects the
+  // pane and names the session's clients, and the tab running one of them is focused; `omo-status
+  // locate` then marks the pane seen behind it. `omo-status show`, which took 0.2 to 0.7 s before the
+  // tab changed, is left for another machine's panes and for sessions no tab shows.
   show(p, cx) {
     cx.spawn(async (cx) => {
-      const r = await exec(`${home()}/.local/bin/omo-status`, ["show", p.pane, "exact"]).catch((e) => ({ code: -1, stderr: String(e?.message ?? e) }));
+      const omo = `${home()}/.local/bin/omo-status`;
+      /** @param {any} e */
+      const failed = (e) => ({ code: -1, stderr: String(e?.message ?? e) });
+      let r = null;
+      if (!p.machine) {
+        const [tmux] = await Promise.all([
+          exec("/opt/homebrew/bin/tmux", ["-u", "select-window", "-t", p.pane, ";", "select-pane", "-t", p.pane,
+            ";", "list-clients", "-t", p.pane, "-F", "#{client_pid}"]).catch(() => ({ stdout: "" })),
+          stampShown(),
+        ]);
+        const pids = new Set(tmux.stdout.split("\n").filter(Boolean).map(Number));
+        const tab = terminals().find((x) => tmuxClient(x) && pids.has(x.foreground?.pid));
+        if (tab) {
+          run("pane.focus", { terminal: tab.address });
+          r = await exec(omo, ["locate", p.pane, "exact"]).catch(failed);
+        }
+      }
+      r ??= await exec(omo, ["show", p.pane, "exact"]).catch(failed);
       this.showProblem = r.code === 0 ? null : r.stderr.trim() || `omo-status show failed (${r.code})`;
       cx.notify();
     });
