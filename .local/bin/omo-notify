@@ -84,7 +84,9 @@ herdr=""
 if [[ -n "$pane" ]]; then
   # omo-status reads the session's lifecycle from it: omo sends no Stop while a
   # background task (a monitor) is still live, so a pane can say working when it isn't.
-  [[ -n "$transcript" ]] && tmux set-option -p -t "$pane" @omo_transcript "$transcript"
+  # Written only when it changed: a tmux call that sets options can hold the server for 0.4 s.
+  [[ -n "$transcript" && $transcript != "$(tmux show-option -pqv -t "$pane" @omo_transcript)" ]] &&
+    tmux set-option -p -t "$pane" @omo_transcript "$transcript"
   message=$("$HOME/.local/bin/omo-status" set "$pane" "$state" "$message")
   herdr=$(tmux display-message -p -t "$pane" '#{@omo_herdr}')
   # A session that starts omo gets its Herdr space (when Herdr runs), in the background.

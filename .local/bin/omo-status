@@ -111,6 +111,9 @@ remote_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/remote"
 # attached every set-option holds the tmux server for about 0.4 s, and these change on every switch.
 herdr_focus_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/herdr-focus"
 herdr_shown_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/herdr-shown"
+# What list-here last read for each pane ("<transcript size> <state> <resume> <goal>"), a file per
+# pane id, so a pass that finds nothing new reads no transcript. A file, as it changes on most passes.
+seen_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/seen"
 
 # From a transcript's session-lifecycle entry: "<lifecycle state>\x1f<what still runs>".
 # Only real work counts. The other waitingOn sources are omo's own plumbing (queued
@@ -625,8 +628,9 @@ open_space_now() {
 
 forget() {
   tmux set-option -p -u -t "$1" @omo_state \; set-option -p -u -t "$1" @omo_msg \; set-option -p -u -t "$1" @omo_task \
-    \; set-option -p -u -t "$1" @omo_since \; set-option -p -u -t "$1" @omo_name \; set-option -p -u -t "$1" @omo_lifecycle_seen \; set-option -p -u -t "$1" @omo_resume \
+    \; set-option -p -u -t "$1" @omo_since \; set-option -p -u -t "$1" @omo_name \; set-option -p -u -t "$1" @omo_resume \
     \; set-option -p -u -t "$1" @omo_goal \; set-option -p -u -t "$1" @omo_goal_mins
+  rm -f "$seen_dir/${1#%}"
 }
 
 # Puts the session's most urgent state in its tab marker and reports it, with its
@@ -635,7 +639,7 @@ forget() {
 show_most_urgent() {
   local session=$1 pane cmd state msg path window task name best="" best_msg="" best_raw="" best_project="" best_resume="" label="" body last pid tty term herdr=() old_label
   local urgent needing=0 what="" prefix="" rest agent
-  local resume left rows both relabel="" sets=() omo_panes=""
+  local resume left rows relabel="" sets=() omo_panes="" marker old_marker old_panes old_herdr
   # One listing for all of it; most_urgent_pane's choice is made from it too.
   rows=$(tmux list-panes -s -t "$session" -F $'#{pane_id}\x1f#{pane_current_command}\x1f#{@omo_state}\x1f#{@omo_msg}\x1f#{pane_current_path}\x1f#{window_name}\x1f#{@omo_task}\x1f#{@omo_name}\x1f#{@omo_resume}\x1f#{@omo_since}')
   urgent=$(awk -F$'\x1f' '$2 ~ /^-?(zsh|bash|fish|sh|dash)$/ { next }
@@ -684,26 +688,27 @@ show_most_urgent() {
     if ((left < 60)); then best_msg+=" <1m"; elif ((left < 3600)); then best_msg+=" $((left / 60))m"; else best_msg+=" $((left / 3600))h $((left % 3600 / 60))m"; fi
     best_msg+=$rest
   fi
-  # The session's options are read in one call and written in one at the end: every tmux call
-  # waits its turn at the server, and this runs on every state change and pane exit.
-  if [[ -n $(icon "$best") ]]; then
-    sets=(set-option -t "$session" @omo_status "$(icon "$best")")
-  else
-    sets=(set-option -u -t "$session" @omo_status)
-  fi
+  # The session's options are read in one call, and only those that changed are written, in one
+  # call at the end: this runs on every state change, pane exit and list pass, and with a dozen
+  # clients attached a tmux call that sets options can hold the server for 0.4 s.
   body=$(report_body "$best" "$best_msg" "$label")
-  both=$(tmux display-message -p -t "$session" '#{@omo_report}|^|#{@omo_label}')
-  last=${both%%"|^|"*} old_label=${both#*"|^|"}
+  marker=$(icon "$best")
+  IFS=$'\x1f' read -r last old_label old_marker old_panes old_herdr < <(tmux display-message -p -t "$session" \
+    $'#{@omo_report}\x1f#{@omo_label}\x1f#{@omo_status}\x1f#{@omo_panes}\x1f#{@omo_herdr}')
+  if [[ $marker != "$old_marker" ]]; then
+    if [[ -n $marker ]]; then sets+=(';' set-option -t "$session" @omo_status "$marker"); else sets+=(';' set-option -u -t "$session" @omo_status); fi
+  fi
   while read -r pid tty; do
     term=$(herdr_terminal "$pid")
     [[ -n $term ]] || continue
     herdr+=("$term")
     [[ $body == "$last" ]] || send_report "$tty" "$body"
   done < <(tmux list-clients -t "$session" -F '#{client_pid} #{client_tty}')
+  [[ $body == "$last" ]] || sets+=(';' set-option -t "$session" @omo_report "$body")
   # The panes counted, so refresh can tell when one has gone.
-  sets+=(';' set-option -t "$session" @omo_report "$body" ';' set-option -t "$session" @omo_panes "$omo_panes")
+  [[ $omo_panes == "$old_panes" ]] || sets+=(';' set-option -t "$session" @omo_panes "$omo_panes")
   if ((${#herdr[@]})); then
-    sets+=(';' set-option -t "$session" @omo_herdr 1)
+    [[ $old_herdr == 1 ]] || sets+=(';' set-option -t "$session" @omo_herdr 1)
     if [[ -n $label && $label != "$old_label" ]]; then
       sets+=(';' set-option -t "$session" @omo_label "$label")
       relabel=1
@@ -712,10 +717,10 @@ show_most_urgent() {
       sets+=(';' set-option -u -t "$session" @omo_label)
       relabel=1
     fi
-  else
+  elif [[ -n $old_herdr ]]; then
     sets+=(';' set-option -u -t "$session" @omo_herdr)
   fi
-  tmux "${sets[@]}"
+  if ((${#sets[@]})); then tmux "${sets[@]:1}"; fi
   if [[ -n $relabel ]]; then label_tabs "$label" "$old_label" "${herdr[@]}" & fi
 }
 
@@ -801,21 +806,24 @@ case ${1:-} in
     pane=${2:?pane id required} state=${3:?state required}
     # Control characters would end the report early.
     message=$(tr -d '\000-\037\177' <<<"${4:-}")
-    session=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null) || exit 0
+    # The pane's options are read in one call, and only those that change are written, in one call.
+    IFS=$'\x1f' read -r session old_state old_msg task transcript < <(tmux display-message -p -t "$pane" \
+      $'#{session_id}\x1f#{@omo_state}\x1f#{@omo_msg}\x1f#{@omo_task}\x1f#{@omo_transcript}' 2>/dev/null)
+    [[ -n $session ]] || exit 0
     # A question asked without holding the turn is still open when the turn's Stop comes,
     # so "finished" must not hide it. Answering it, or a new prompt, sets working.
-    if [[ $state == "done" && $(tmux show-option -pqv -t "$pane" @omo_state) == input ]]; then
-      tmux show-option -pqv -t "$pane" @omo_msg
+    if [[ $state == "done" && $old_state == input ]]; then
+      printf '%s\n' "$old_msg"
       exit 0
     fi
     if [[ $state == "done" ]]; then
-      left=$(open_todos "$(tmux show-option -pqv -t "$pane" @omo_transcript)")
+      left=$(open_todos "$transcript")
       if [[ -n $left ]]; then state=partial message=$left; fi
     fi
-    task=$(tmux show-option -pqv -t "$pane" @omo_task)
+    sets=()
     if [[ $state == working && -n $message ]]; then
+      [[ $message == "$task" ]] || sets+=(';' set-option -p -t "$pane" @omo_task "$message")
       task=$message
-      tmux set-option -p -t "$pane" @omo_task "$task"
     fi
     message=$(message_for "$state" "$message" "$task")
     printf '%s\n' "$message"
@@ -823,12 +831,13 @@ case ${1:-} in
       state=idle
     fi
     # When the pane came into its state, for the time Herdr's panel shows.
-    [[ $state == "$(tmux show-option -pqv -t "$pane" @omo_state)" ]] || tmux set-option -p -t "$pane" @omo_since "$(date +%s)"
+    [[ $state == "$old_state" || $state == clear ]] || sets+=(';' set-option -p -t "$pane" @omo_since "$(date +%s)")
     case $state in
       clear) forget "$pane" ;;
-      idle) tmux set-option -p -t "$pane" @omo_state idle \; set-option -p -u -t "$pane" @omo_msg ;;
-      *) tmux set-option -p -t "$pane" @omo_state "$state" \; set-option -p -t "$pane" @omo_msg "$message" ;;
+      idle) [[ $old_state == idle && -z $old_msg ]] || sets+=(';' set-option -p -t "$pane" @omo_state idle ';' set-option -p -u -t "$pane" @omo_msg) ;;
+      *) [[ $old_state == "$state" && $old_msg == "$message" ]] || sets+=(';' set-option -p -t "$pane" @omo_state "$state" ';' set-option -p -t "$pane" @omo_msg "$message") ;;
     esac
+    if ((${#sets[@]})); then tmux "${sets[@]:1}"; fi
     show_most_urgent "$session"
     touch "$list_tick" 2>/dev/null || { mkdir -p "${list_tick%/*}" && touch "$list_tick"; }
     ;;
@@ -959,8 +968,10 @@ case ${1:-} in
     # every pass, for the time the goal continues.
     jobs=$(scheduled_wakeups)
     now=$(date +%s)
-    while IFS=$'\x1f' read -r pane transcript state seen old_resume goal old_mins; do
+    mkdir -p "$seen_dir"
+    while IFS=$'\x1f' read -r pane transcript state old_resume goal old_mins; do
       [[ -r $transcript ]] || continue
+      seen=$(cat "$seen_dir/${pane#%}" 2>/dev/null)
       sid=${transcript##*_} sid=${sid%.jsonl} resume="" label="" kind="" left="" mins=""
       [[ -n $jobs ]] && IFS=$'\t' read -r _ resume label < <(grep -F "$sid"$'\t' <<<"$jobs")
       [[ $goal == 1 ]] && read -r kind left < <(goal_wait "$pane")
@@ -973,12 +984,10 @@ case ${1:-} in
       fi
       size=$(($(wc -c <"$transcript")))
       if [[ "$size $state $resume $goal" != "$seen" ]]; then
-        if [[ -n $resume ]]; then
-          tmux set-option -p -t "$pane" @omo_resume "$resume"
-        elif [[ -n $old_resume ]]; then
-          tmux set-option -p -u -t "$pane" @omo_resume
+        if [[ $resume != "$old_resume" ]]; then
+          if [[ -n $resume ]]; then tmux set-option -p -t "$pane" @omo_resume "$resume"; else tmux set-option -p -u -t "$pane" @omo_resume; fi
         fi
-        goal=0
+        old_goal=$goal goal=0
         grep -Eq '"status": *"active"' "${transcript%/*}/extensions/goal/$sid.json" 2>/dev/null && goal=1
         IFS=$'\x1f' read -r lifecycle work < <(tail -c 300000 "$transcript" | grep '"customType":"session-lifecycle"' | tail -n 1 | jq -r "$background_work" 2>/dev/null)
         if [[ -n $kind ]]; then
@@ -999,13 +1008,14 @@ case ${1:-} in
         elif [[ $state == background || ($state == working && $lifecycle == waiting_*) ]]; then
           "$0" set "$pane" idle >/dev/null
         fi
-        tmux set-option -p -t "$pane" @omo_goal "$goal" \; set-option -p -t "$pane" @omo_lifecycle_seen "$size $(tmux show-option -pqv -t "$pane" @omo_state) $resume $goal"
+        [[ $goal == "$old_goal" ]] || tmux set-option -p -t "$pane" @omo_goal "$goal"
+        printf '%s\n' "$size $(tmux show-option -pqv -t "$pane" @omo_state) $resume $goal" >"$seen_dir/${pane#%}"
       fi
       if [[ $mins != "$old_mins" ]]; then
         if [[ -n $mins ]]; then tmux set-option -p -t "$pane" @omo_goal_mins "$mins"; else tmux set-option -p -u -t "$pane" @omo_goal_mins; fi
         show_most_urgent "$(tmux display-message -p -t "$pane" '#{session_id}')"
       fi
-    done < <(tmux list-panes -a -F $'#{pane_id}\x1f#{@omo_transcript}\x1f#{@omo_state}\x1f#{@omo_lifecycle_seen}\x1f#{@omo_resume}\x1f#{@omo_goal}\x1f#{@omo_goal_mins}' |
+    done < <(tmux list-panes -a -F $'#{pane_id}\x1f#{@omo_transcript}\x1f#{@omo_state}\x1f#{@omo_resume}\x1f#{@omo_goal}\x1f#{@omo_goal_mins}' |
       awk -F$'\x1f' '$2 != "" && ($3 == "working" || $3 == "background" || $3 == "idle")')
     # omo is bun running senpi's CLI (or omo's launcher) on the pane's terminal. A
     # pane omo's hooks haven't reached yet is idle; a pane connected to a server
