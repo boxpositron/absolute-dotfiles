@@ -38,13 +38,7 @@ export default class Mcp extends View {
   init(_props, cx) {
     this.data = null; this.key = null; this.error = null; this.loading = false;
     this.headless = Boolean(props()?.headless);
-    if (!this.headless) {
-      // Herdr's tabs mod brings a space's panel back on return only for the panels listed here, which
-      // its welcome sets to Files and Changes; listed, the MCP panel comes back too (tabs draws no button).
-      const panels = shared("workspace.panels") ?? ["files", "changes"];
-      if (!panels.includes("mcp")) setShared("workspace.panels", [...panels, "mcp"]);
-      return;
-    }
+    if (!this.headless) return;
     this.refresh(cx);
     cx.timer.every(REREAD, (cx) => this.refresh(cx, true));
     cx.spawn(async (cx) => {

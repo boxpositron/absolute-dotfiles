@@ -117,9 +117,6 @@ export default class OmoTmux extends View {
       });
       return;
     }
-    // Herdr's tabs mod brings a space's panel back on return only for the panels listed here.
-    const panels = shared("workspace.panels") ?? ["files", "changes"];
-    if (!panels.includes("omo")) setShared("workspace.panels", [...panels, "omo"]);
     // The times on the rows count up.
     cx.timer.every(30000, (cx) => cx.notify());
     // Scheduled wake-ups count down here, so no report is sent every second.

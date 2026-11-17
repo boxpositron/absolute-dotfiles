@@ -67,6 +67,7 @@ local_servers
 .config/herdr-app/mods/priority-queue
 .config/herdr-app/mods/preview
 .config/herdr-app/mods/focus-edge
+.config/herdr-app/mods/tabs-tmux
 .config/herdr-app/keys.json
 .config/omo/hooks.json:.omo/agent/hooks.json
 .config/omo/keybindings.json:.omo/agent/keybindings.json

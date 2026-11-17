@@ -114,9 +114,6 @@ export default class Jobs extends View {
       });
       return;
     }
-    // Herdr's tabs mod brings a space's panel back on return only for the panels listed here.
-    const panels = shared("workspace.panels") ?? ["files", "changes"];
-    if (!panels.includes("jobs")) setShared("workspace.panels", [...panels, "jobs"]);
     this.folded = new Set(JSON.parse(localStorage.getItem("folded") ?? "[]"));
     this.scope = localStorage.getItem("scope") === "here" ? "here" : "all";
     this.curSeen = null;

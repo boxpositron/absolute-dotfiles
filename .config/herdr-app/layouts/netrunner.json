@@ -85,7 +85,7 @@
           "id": "tabs",
           "type": "block",
           "content": {
-            "mod": "tabs"
+            "mod": "tabs-tmux"
           },
           "size": {
             "px": 42
