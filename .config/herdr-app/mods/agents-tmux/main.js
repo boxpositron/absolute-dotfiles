@@ -14,8 +14,8 @@ import { agents, terminals, panes, focused, spaces, run, exec, home, theme, shar
 // a remote session stands out when scanning the list.
 const REMOTE = "#fcee0a";
 const REMOTE_ROW = REMOTE + "10", REMOTE_HOVER = REMOTE + "1f", REMOTE_SELECTED = REMOTE + "38";
-// Each tmux session has a colour of its own (tmux-session-tint, which faintly colours its panes too;
-// omo-tmux publishes them as shared "tmux.tints"): its row gets a wash of it, on either machine. The
+// Each tmux session has a colour of its own (tmux-session-tint; omo-tmux publishes them as shared
+// "tmux.tints"): its row gets a wash of it, on either machine. The
 // colours come from tmux-session-tint's list in the order this tree shows the sessions (syncTints), so
 // sessions next to each other always contrast.
 const tintOf = (s) => shared("tmux.tints")?.[s.machine ? `${s.machine}/${s.name}` : s.name] ?? null;
