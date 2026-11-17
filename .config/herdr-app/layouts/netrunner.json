@@ -97,33 +97,46 @@
           "type": "row",
           "children": [
             {
-              "id": "main",
-              "type": "block",
-              "content": {
-                "tab": "active",
-                "pane": {
-                  "header": {
-                    "content": {
-                      "mod": "pane-tmux"
-                    },
-                    "reveal": "always",
-                    "height": 30,
-                    "position": "top"
+              "id": "main-row",
+              "type": "row",
+              "resizable": false,
+              "children": [
+                {
+                  "id": "main",
+                  "type": "block",
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "header": {
+                        "content": {
+                          "mod": "pane-tmux"
+                        },
+                        "reveal": "always",
+                        "height": 30,
+                        "position": "top"
+                      },
+                      "background": "background",
+                      "border": {
+                        "width": 1,
+                        "color": "border"
+                      },
+                      "radius": 3,
+                      "gap": 8,
+                      "lone": true
+                    }
+                  }
+                },
+                {
+                  "id": "focus-edge",
+                  "type": "block",
+                  "content": {
+                    "mod": "focus-edge"
                   },
-                  "background": "background",
-                  "border": {
-                    "width": 1,
-                    "color": "border"
-                  },
-                  "focus": {
-                    "width": 1,
-                    "color": "accent"
-                  },
-                  "radius": 3,
-                  "gap": 8,
-                  "lone": true
+                  "size": {
+                    "px": 3
+                  }
                 }
-              }
+              ]
             },
             {
               "id": "panel",
