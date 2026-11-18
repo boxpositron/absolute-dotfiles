@@ -233,6 +233,13 @@
                       "content": {
                         "mod": "jobs-tmux"
                       }
+                    },
+                    {
+                      "id": "prds",
+                      "type": "block",
+                      "content": {
+                        "mod": "prds-tmux"
+                      }
                     }
                   ],
                   "active": "files"
@@ -326,6 +333,19 @@
               },
               "content": {
                 "mod": "jobs-tmux",
+                "props": {
+                  "headless": true
+                }
+              }
+            },
+            {
+              "id": "data-prds-tmux",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "prds-tmux",
                 "props": {
                   "headless": true
                 }

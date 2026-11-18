@@ -44,6 +44,8 @@ export default class WorkspaceStatus extends View {
     const mcp = mine && where.tmux && shared("omo.mcp")?.terminal === where.terminal ? shared("omo.mcp") : null;
     const omo = shared("omo.tmux");
     const jobs = shared("omo.jobs");
+    const prds = shared("studio.prds");
+    const prdCount = prds?.data?.prds?.length ?? 0;
     const queue = shared("omo.queue")?.items;
     const asks = queue?.filter((i) => i.kind === "input" || i.kind === "error" || i.kind === "blocked").length ?? 0;
     const toggle = (id) => {
@@ -71,6 +73,11 @@ export default class WorkspaceStatus extends View {
         .on_click(() => toggle("jobs"))
         .child(svg("mods/workspace-chrome/clock.svg").size(13)).child(`jobs ${jobs.count}`)
         .when(jobs.count > 0, e => e.child(div().size(6).rounded(3).bg(t.working)))))
+      .when(Boolean(prds), el => el.child(h_flex().id("prds-chip").gap(6).items_center().cursor_pointer().hover(s => s.text_color(t.foreground))
+        .tooltip(prds.problem ? `Studio PRDs of omo in tmux: ${prds.problem}` : `Studio PRDs that omo panes in tmux are working on: ${prdCount}`)
+        .on_click(() => toggle("prds"))
+        .child(svg("mods/workspace-chrome/file-text.svg").size(13)).child(`PRDs ${prdCount}`)
+        .when(Boolean(prds.problem), e => e.child(div().size(6).rounded(3).bg(t.blocked)))))
       .when(Boolean(queue), el => el.child(h_flex().id("queue-chip").gap(6).items_center().cursor_pointer().hover(s => s.text_color(t.foreground))
         .tooltip(`Priority queue: ${queue.length ? `${queue.length} card${queue.length === 1 ? "" : "s"}${asks ? `, ${asks} need${asks === 1 ? "s" : ""} you` : ""}` : "nothing needs you"} (⌘⇧J)`)
         .on_click(() => run("layout.toggle", { id: "queue" }))

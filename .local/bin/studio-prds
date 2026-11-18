@@ -1,0 +1,146 @@
+#!/bin/bash
+# studio-prds: the Studio PRD behind each omo pane in tmux on this Mac, for Herdr's PRD panel
+# (mods/prds-tmux in the dotfiles' herdr-app config).
+#
+#   studio-prds            the panes and their PRDs, as JSON (below)
+#   studio-prds --rows <rows>  the same from `omo-status list-local` rows already read (the panel passes
+#                          the omo panel's shared list, so the panes aren't read twice)
+#   studio-prds prd <id>   writes PRD <id>'s current version as Markdown (title, client, status, version,
+#                          a link to Studio, then the body, with each requirement line Studio counts as
+#                          done ticked) to ~/.local/state/studio-prds/prds/ and prints the file's path;
+#                          the panel opens it in the preview mod's focus mode
+#
+# `omo-status list-local` names the panes running omo. Each pane's transcript (@omo_transcript) ends in
+# its omo session id, and omo-work keeps the session's client, its kind (billed or in-house) and the task
+# it is bound to in ~/.local/state/omo-work/sessions/<id>. Studio's get_task_prds (MCP) gives each task's PRDs with their
+# progress and requirement lines. Prints one JSON object:
+#   {read_at, studio_read_at, problem, prds: [<PRD> + {panes: [<pane> + {requirement}]}], unlinked: [<pane>]}
+# where a pane is {pane, session, window, path, state, since, msg, session_id, task, client, kind,
+# task_title, task_status}; client and kind are null for work that isn't a client's.
+#
+# Studio is asked again only when the set of bound tasks changes or its last answer is a minute old;
+# when it can't be reached, the last answer stays, with the problem named.
+#
+# The key is a read-only Studio API key in the login Keychain, service boxmarshall-studio-herdr:
+#   security add-generic-password -U -a "$USER" -s boxmarshall-studio-herdr -w '<key>'
+# STUDIO_ORIGIN and STUDIO_KEY override the address and the key (for a local Studio).
+set -uo pipefail
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH
+export LC_ALL=en_US.UTF-8
+
+origin=${STUDIO_ORIGIN:-https://studio.boxmarshall.com}
+state=${XDG_STATE_HOME:-$HOME/.local/state}
+cache=$state/studio-prds/last.json
+work=$state/omo-work/sessions
+mkdir -p "${cache%/*}"
+now=$(date +%s)
+problem=""
+answer=""
+
+# Calls Studio MCP tool $1 with the JSON arguments $2: sets answer to the tool's JSON and returns 0, or
+# sets problem and returns 1.
+mcp_call() {
+  local tool=$1 args=$2 key request raw code json why
+  answer="" problem=""
+  key=${STUDIO_KEY:-$(security find-generic-password -s boxmarshall-studio-herdr -w 2>/dev/null)}
+  if [[ -z $key ]]; then
+    problem="No Studio key in the Keychain (boxmarshall-studio-herdr). Make a read-only API key in Studio and add it with: security add-generic-password -U -a \"\$USER\" -s boxmarshall-studio-herdr -w '<key>'"
+    return 1
+  fi
+  request=$(jq -nc --arg tool "$tool" --argjson args "$args" '{jsonrpc: "2.0", id: 1, method: "tools/call", params: {name: $tool, arguments: $args}}')
+  raw=$(curl -sS --max-time 15 -X POST "$origin/mcp" -H 'accept: application/json, text/event-stream' -H 'content-type: application/json' \
+    -H "authorization: Bearer $key" --data "$request" -w $'\n%{http_code}' 2>&1)
+  code=${raw##*$'\n'} raw=${raw%$'\n'*}
+  json=$(sed -n 's/^data: //p' <<<"$raw" | tail -n 1)
+  [[ -n $json ]] || json=$raw
+  if [[ $code == 401 || $code == 403 ]]; then
+    problem="Studio refused the key ($code). Make a new read-only key and add it to the Keychain."
+    return 1
+  elif [[ $code != 200 ]]; then
+    problem="Studio didn't answer (${code:-no response}): $(head -c 200 <<<"$raw")"
+    return 1
+  elif jq -e '.result.isError != true and (.result.content[0].text | fromjson? | type == "object")' <<<"$json" >/dev/null 2>&1; then
+    answer=$(jq -c '.result.content[0].text | fromjson' <<<"$json")
+    return 0
+  fi
+  why=$(jq -r '.result.content[0].text as $t | if $t then (($t | fromjson? | .error.message?) // $t) else (.error.message // empty) end' <<<"$json" 2>/dev/null)
+  problem="Studio couldn't answer $tool: ${why:-$(head -c 200 <<<"$raw")}"
+  [[ $why == *"$tool"* && $why == *[Nn]ot\ found* ]] && problem="This Studio doesn't have $tool yet: deploy it."
+  return 1
+}
+
+if [[ ${1:-} == prd ]]; then
+  id=${2:-}
+  [[ $id =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "usage: studio-prds prd <prd id>" >&2; exit 2; }
+  mcp_call get_prd "$(jq -nc --arg id "$id" '{prd_id: $id}')" || { echo "$problem" >&2; exit 1; }
+  dir=$state/studio-prds/prds
+  mkdir -p "$dir"
+  find "$dir" -name '*.md' -mtime +7 -delete 2>/dev/null
+  name=$(jq -r '"\(.client.name) - \(.title)" | gsub(": "; " - ") | gsub("[/:]"; "-") | .[0:150]' <<<"$answer")
+  file=$dir/$name.md
+  jq -r '(reduce (.requirements[] | select(.done and (.ticked | not))) as $q (.body; split("- [ ] " + $q.text) | join("- [x] " + $q.text))) as $body
+    | "# \(.title)\n\n**Client:** \(.client.name) · **Status:** \(.status | gsub("_"; " ")) · **Version:** \(.version) · **Urgency:** \(.urgency)\n\n[Open in Studio](\(.studio_url))\n\n---\n\n\($body)\n"' <<<"$answer" >"$file.tmp" &&
+    mv "$file.tmp" "$file" && printf '%s\n' "$file"
+  exit
+fi
+
+# Panes running omo, joined to their transcript, session id and omo-work's client, kind and task. A
+# list-local row is pane|^|session|^|window|^|path|^|state|^|since|^|resume|^|message (the message may
+# hold |^| itself); only this Mac's panes (%id) count, since omo-work's bindings live where the session
+# runs. Fields arrive split on |^|, since tmux, run without a UTF-8 locale, prints control characters as _.
+[[ ${1:-} == --rows ]] && rows=${2:-}
+panes=$(
+  { tmux -u list-panes -a -F '#{pane_id}|^|#{@omo_transcript}' 2>/dev/null | sed 's/^/T|^|/'
+    { if [[ -n ${rows+set} ]]; then printf '%s\n' "$rows"; else "$HOME/.local/bin/omo-status" list-local 2>/dev/null; fi; } |
+      grep '^%' | sed 's/^/L|^|/'; } |
+  awk -F '\\|\\^\\|' -v work="$work" '
+    $1 == "T" { transcript[$2] = $3; next }
+    $1 == "L" && $2 != "" {
+      t = transcript[$2]; sid = t; sub(/^.*_/, "", sid); sub(/\.jsonl$/, "", sid); task = ""; client = ""; kind = ""
+      if (sid != "") {
+        f = work "/" sid
+        while ((getline line < f) > 0) {
+          if (line ~ /^task=/) task = substr(line, 6)
+          else if (line ~ /^client=/) client = substr(line, 8)
+          else if (line ~ /^kind=/) kind = substr(line, 6)
+        }
+        close(f)
+      }
+      msg = $9; for (i = 10; i <= NF; i++) msg = msg "|^|" $i
+      gsub(/\t/, " ", msg)
+      print $2 "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" msg "\t" sid "\t" task "\t" client "\t" kind
+    }' |
+  jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t") | {pane: .[0], session: .[1], window: .[2], path: .[3], state: .[4],
+    since: (.[5] | tonumber? // null), msg: .[6], session_id: (.[7] | select(length > 0) // null), task: (.[8] | select(length > 0) // null),
+    client: (.[9] | select(length > 0) // null), kind: (.[10] | select(length > 0) // null)})'
+)
+[[ -n $panes ]] || panes='[]'
+tasks=$(jq -r '[.[].task | select(.)] | unique | join(",")' <<<"$panes")
+
+studio=null studio_at=null
+if [[ -n $tasks ]]; then
+  if [[ -r $cache ]] && [[ $(jq -r '.tasks // ""' "$cache") == "$tasks" ]] && (( now - $(jq -r '.at // 0' "$cache") < 60 )); then
+    studio=$(jq -c '.data' "$cache") studio_at=$(jq -r '.at' "$cache")
+  else
+    if mcp_call get_task_prds "$(jq -nc --arg ids "$tasks" '{task_ids: ($ids | split(","))}')" && jq -e '.prds' <<<"$answer" >/dev/null 2>&1; then
+      studio=$answer studio_at=$now
+      jq -nc --arg tasks "$tasks" --argjson at "$now" --argjson data "$studio" '{tasks: $tasks, at: $at, data: $data}' >"$cache.tmp" && mv "$cache.tmp" "$cache"
+    fi
+    if [[ $studio == null && -r $cache ]]; then studio=$(jq -c '.data' "$cache") studio_at=$(jq -r '.at' "$cache"); fi
+  fi
+fi
+
+jq -n --argjson panes "$panes" --argjson s "$studio" --arg problem "$problem" --argjson at "$now" --argjson sat "$studio_at" '
+  ($s.tasks // [] | map({key: .task_id, value: .}) | from_entries) as $tasks
+  | [$panes[] | . + {task_title: ($tasks[.task // ""].title // null), task_status: ($tasks[.task // ""].status // null),
+      prd_ids: ($tasks[.task // ""].prd_ids // [])}] as $ps
+  | {
+      read_at: $at, studio_read_at: $sat, problem: (if $problem == "" then null else $problem end),
+      prds: [($s.prds // [])[] as $p
+        | ($p | del(.requirements)) + {
+            requirements: [$p.requirements[] | {index, text, done, task_id: (.task.task_id // null), task_status: (.task.status // null)}],
+            panes: [$ps[] as $x | select($x.prd_ids | index($p.prd_id))
+              | ($x | del(.prd_ids)) + {requirement: ([$p.requirements[] | select(.task.task_id? == $x.task) | {index, text}] | first)}]
+          }],
+      unlinked: [$ps[] | select(.prd_ids | length == 0) | del(.prd_ids)]
+    }'
