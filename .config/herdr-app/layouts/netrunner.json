@@ -29,12 +29,12 @@
               "id": "spaces",
               "type": "block",
               "content": {
-                "mod": "spaces"
+                "mod": "spaces-tmux"
               },
               "size": {
                 "weight": 0.63
               },
-              "min": 90
+              "min": 31
             },
             {
               "id": "agents",
