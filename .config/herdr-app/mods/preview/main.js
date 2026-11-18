@@ -69,6 +69,10 @@ const ICON_SHRINK = "\u{F0294}";
 // reaches the modal and the preview under it closes the modal instead of opening another.
 /** @type {string | null} */
 let zenOverlay = null;
+
+// Focus mode is a modal over the window, so it fills with the theme's background without its alpha: a
+// see-through layout (netrunner's frosted glass) clears that colour, which would show the window through it.
+const solid = (c) => (typeof c === "string" && c.length === 9 ? c.slice(0, 7) : c);
 const editorState = () => `${home()}/.local/state/herdr-files`;
 
 function findNode(node, id) {
@@ -1244,7 +1248,7 @@ export default class Preview extends View {
     }
     const body = this.body(t);
     return v_flex().id("preview").track_focus(this.handle).size_full().min_h(0).overflow_hidden().rounded(this.zen ? 10 : 8)
-      .bg(t.background).text_color(t.foreground).text_size(13)
+      .bg(this.zen ? solid(t.background) : t.background).text_color(t.foreground).text_size(13)
       .when(this.zen, (el) => el.border_1().border_color(t.accent + "99").shadow_2xl())
       .on_size_change((s, cx) => {
         if (this.size && Math.abs(this.size.width - s.width) < 1 && Math.abs(this.size.height - s.height) < 1) return;

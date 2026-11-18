@@ -83,6 +83,10 @@ function mix(a, b, f) {
 }
 const steps = (a, b, n) => Array.from({ length: n }, (_, i) => div().flex_1().h_full().bg(mix(a, b, i / (n - 1))));
 
+// The board is a modal over the window, so it fills with the theme's background without its alpha: a
+// see-through layout (netrunner's frosted glass) clears that colour, which would show the window through it.
+const solid = (c) => (typeof c === "string" && c.length === 9 ? c.slice(0, 7) : c);
+
 export default class Board extends View {
   // The last answer, kept in localStorage, shows at once; a fresh one follows. curl rather than fetch, because
   // the ETag header is how agent-state says "unchanged" (a 304 with no body) and fetch doesn't expose headers.
@@ -329,7 +333,7 @@ export default class Board extends View {
       .min_h(0)
       .rounded(6)
       .overflow_hidden()
-      .bg(t.background)
+      .bg(solid(t.background))
       .border_1()
       .border_color(t.accent + "d9")
       .shadow_2xl()
