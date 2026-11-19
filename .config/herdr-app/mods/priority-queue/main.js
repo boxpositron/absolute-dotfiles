@@ -245,10 +245,12 @@ export default class PriorityQueue extends View {
     }
     for (const s of this.sessions) {
       if (s.lifecycle !== "blocked" || covered.has(s.sid)) continue;
+      // agent-state can hold a Herdr tab's grouped session ("work~12:1.1"): its window is the same in the session it stands for.
+      const target = s.tmux?.replace(/~\d+(?=:|$)/, "") ?? null;
       items.push({
         key: `${s.machine}/${s.sid}|blocked|${s.lifecycleSince}`, kind: "blocked", pane: null, machine: s.machine === "mac" ? "" : s.machine,
-        session: s.tmux?.split(":")[0] ?? null, window: null, project: s.project ?? "", since: s.lifecycleSince ?? s.lastActivity,
-        msg: s.needsDavid ?? "", sid: s.sid, at: s.machine, name: s.name ?? null, tmux: s.tmux ?? null, host: s.host ?? null, looking: false,
+        session: target?.split(":")[0] ?? null, window: null, project: s.project ?? "", since: s.lifecycleSince ?? s.lastActivity,
+        msg: s.needsDavid ?? "", sid: s.sid, at: s.machine, name: s.name ?? null, tmux: target, host: s.host ?? null, looking: false,
       });
     }
     for (const it of items) {
