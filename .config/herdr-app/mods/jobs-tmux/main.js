@@ -175,7 +175,8 @@ export default class Jobs extends View {
     }
     if (!session && !w.on) {
       if (!this.sessionOf.has(addr)) {
-        const r = await exec("/opt/homebrew/bin/tmux", ["-u", "display-message", "-p", "-t", w.pane, "#{session_name}"]).catch(() => null);
+        // Less a tab mode tab's "~<window>": tmux names a pane's session by its tab's.
+        const r = await exec("/opt/homebrew/bin/tmux", ["-u", "display-message", "-p", "-t", w.pane, "#{s/~[0-9]+$//:session_name}"]).catch(() => null);
         if (r?.code === 0 && r.stdout.trim()) this.sessionOf.set(addr, r.stdout.trim());
       }
       session = this.sessionOf.get(addr) ?? null;

@@ -67,7 +67,8 @@ esac
 # server it is the local pane running mosh or ssh.
 pane="${OMO_NOTIFY_PANE:-}"
 own_tty=""
-panes=$(tmux list-panes -a -F '#{pane_tty} #{pane_id}' 2>/dev/null)
+# Not the sessions of tab mode's Herdr tabs ("<session>~<window>"), which list each pane again.
+panes=$(tmux list-panes -a -f '#{?#{m:*~[0-9]*,#{session_name}},0,1}' -F '#{pane_tty} #{pane_id}' 2>/dev/null)
 pid=$PPID
 while [[ -z "$pane" && "${pid:-1}" -gt 1 ]]; do
   tty=$(ps -o tty= -p "$pid" | tr -d ' ')

@@ -24,9 +24,10 @@ tmux() { command tmux -u "$@"; }
 PALETTE=("#4c8dff" "#ff8a3d" "#1fc7a6" "#e64c9a" "#9bd43a" "#9a6bff" "#e8b730" "#2bb8e0" "#ff5a5f" "#3fbf6a")
 ORDER=${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/session-order
 
-# Every session, "<id>\t<name>\t<colour now>\t<place>", in the saved order, then tmux's.
+# Every session, "<id>\t<name>\t<colour now>\t<place>", in the saved order, then tmux's. Not the sessions of tab
+# mode's Herdr tabs ("<session>~<window>", see omo-status tabs), which are their session's.
 placed() {
-  tmux list-sessions -F $'#{session_id}\t#{session_name}\t#{@tint_color}' 2>/dev/null |
+  tmux list-sessions -f '#{?#{m:*~[0-9]*,#{session_name}},0,1}' -F $'#{session_id}\t#{session_name}\t#{@tint_color}' 2>/dev/null |
     awk -F'\t' -v order="$ORDER" '
       BEGIN { n = 0; while ((getline line < order) > 0) if (line != "" && !(line in pos)) pos[line] = n++ }
       { id[NR] = $1; name[NR] = $2; now[NR] = $3; rank[NR] = ($2 in pos) ? pos[$2] : 100000 + NR; at[NR] = NR }

@@ -223,7 +223,7 @@ cmd_park() {
   unset TMUX_PANE
   if [[ ${1:-} == --all ]]; then
     local line
-    tmux list-panes -a -F '#{@omo_state} #{@omo_transcript}' | awk '($1 == "idle" || $1 == "done" || $1 == "partial") && NF == 2 { print $2 }' |
+    tmux list-panes -a -f '#{?#{m:*~[0-9]*,#{session_name}},0,1}' -F '#{@omo_state} #{@omo_transcript}' | awk '($1 == "idle" || $1 == "done" || $1 == "partial") && NF == 2 { print $2 }' |
       while read -r line; do cmd_park "$(sid_of "$line")"; done
     return
   fi
