@@ -16,13 +16,14 @@ function find(node, id) {
 // The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
 const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
-// To the rail (on macOS wide enough for the traffic lights), or back to the width it had.
+// To the rail (on macOS wide enough for the traffic lights, and for the session cards beside the scrollbar's lane), or
+// back to the width it had.
 function toggleSidebar() {
   const width = find(layout(), "sidebar")?.size?.px;
   if (!narrow()) setShared("sidebar.width", width);
   // Mods edited before the rail went by width still read the flag.
   setShared("sidebar.collapsed", !narrow());
-  run("layout.resize", { id: "sidebar", px: narrow() ? (shared("sidebar.width") ?? 268) : window()?.platform === "macos" ? 76 : 44 });
+  run("layout.resize", { id: "sidebar", px: narrow() ? (shared("sidebar.width") ?? 268) : window()?.platform === "macos" ? 84 : 44 });
 }
 
 export default class WorkspaceChrome extends View {
@@ -45,13 +46,33 @@ export default class WorkspaceChrome extends View {
         .when(collapsed, el => el.px(0).items_center())
         .child(row("settings", "settings", "Settings", false, () => run("app.settings"))
           .when(Boolean(updates().app.ready), el => el.child(collapsed ? ready.absolute().top(5).right(6) : ready)))
-        .child(row("machine", "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" })));
+        .child(row("machine", collapsed ? "server" : "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" }))
+          // On the rail a server with a + on its corner, so it doesn't pass for the spaces' new-space buttons.
+          .when(collapsed, el => el.child(div().absolute().right(5).bottom(3).size(11).rounded(6).bg(t.chrome).flex().items_center()
+            .justify_center().child(svg("mods/workspace-chrome/plus.svg").size(8)))));
     }
-    return h_flex().size_full().bg(t.chrome).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
-      .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))
-      .when(!collapsed, el => el.child(h_flex().flex_1().gap(8).items_center().child(image("frame/welcome/herdr.png").size(20).rounded(5)).child(div().font_semibold().text_color(t.foreground).child("Herdr"))))
-      .when(!collapsed, el => el.child(this.button("search", svg("mods/workspace-chrome/search.svg").size(15), () => run("mod.open", { name: "picker-tmux" }))))
-      // On the macOS rail the traffic lights fill the row; the agents list's » unfolds it.
-      .when(!(collapsed && window()?.platform === "macos"), el => el.child(this.button("sidebar-toggle", svg("mods/workspace-chrome/sidebar.svg").size(15), toggleSidebar)));
+    // Search and the sidebar toggle stay at the top either way. On the macOS rail the traffic lights fill the row's first
+    // 46 px, so the row grows to hold them underneath (a drag can make the rail too, so this is checked on each render).
+    const tall = collapsed && window()?.platform === "macos" && !window()?.fullscreen;
+    const want = tall ? 78 : 46;
+    if (Math.round(find(layout(), "brand")?.size?.px ?? want) !== want && this.asked !== want) {
+      this.asked = want;
+      run("layout.resize", { id: "brand", px: want });
+    }
+    const search = this.button("search", svg("mods/workspace-chrome/search.svg").size(15), () => run("mod.open", { name: "picker-tmux" }))
+      .tooltip("Search (\u2318P)");
+    const toggle = this.button("sidebar-toggle", svg("mods/workspace-chrome/sidebar.svg").size(15), toggleSidebar)
+      .tooltip(collapsed ? "Expand sidebar" : "Collapse sidebar");
+    if (collapsed) {
+      // The 44 px rail off macOS has room for the toggle only.
+      const roomy = (find(layout(), "sidebar")?.size?.px ?? 0) >= 60;
+      return v_flex().size_full().bg(t.chrome).items_center().when(tall, el => el.justify_end().pb(8)).when(!tall, el => el.justify_center())
+        .child(h_flex().gap(4).items_center().when(roomy, el => el.child(search)).child(toggle));
+    }
+    return h_flex().size_full().bg(t.chrome).pl(14).pr(10).gap(4).items_center().text_size(13.5)
+      .when(window()?.platform === "macos" && !window()?.fullscreen, el => el.pl(76))
+      .child(h_flex().flex_1().gap(8).items_center().child(image("frame/welcome/herdr.png").size(20).rounded(5)).child(div().font_semibold().text_color(t.foreground).child("Herdr")))
+      .child(search)
+      .child(toggle);
   }
 }

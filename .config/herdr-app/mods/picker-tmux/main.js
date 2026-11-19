@@ -18,10 +18,14 @@
 // session it is handed to. Places whose names share a word with the task come first. It runs
 // `omo-sessions start` or `omo-sessions handoff` on that machine and shows the pane.
 // ↑/↓ and Enter, or the pointer; Ctrl+D closes the selected tab; Esc leaves (or goes back from "where").
+// Tab mode (`omo-status tabs`): each tmux window has a Herdr tab, whose client is on "<session>~<window id>". The picker
+// finds the window each tab shows (shared "tmux.tabs", which the sidebar's tree keeps), so a tab matches and shows its
+// window's work, a pane its tab already shows isn't listed again, and with nothing typed only the tabs with something
+// going on (and yours) are listed, the quiet ones folded.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { agents, spaces, terminals, run, hc, exec, home, theme, settings, props, closeOverlay, shared, setShared, notify } from "herdr";
+import { agents, spaces, panes, terminals, run, hc, exec, home, theme, settings, props, closeOverlay, shared, setShared, notify } from "herdr";
 
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 // Another machine's things, as the Agents tree marks them.
@@ -194,6 +198,19 @@ export default class Picker extends View {
     });
   }
 
+  // The tmux window a tab shows in tab mode (shared "tmux.tabs"): its session (from `panes`), the window's index and
+  // its panes. Null for a tab that isn't a tab mode tab.
+  tabWindow(ctx) {
+    const tabs = shared("tmux.tabs") ?? {};
+    for (const p of panes()) {
+      const w = p.tab === ctx.id && p.terminal ? tabs[p.terminal] : null;
+      if (!w?.tabbed) continue;
+      const s = this.tmux.find((x) => x.name === w.session);
+      if (s) return { s, index: w.index, panes: s.panes.filter((x) => x.windowIndex === w.index) };
+    }
+    return null;
+  }
+
   close() {
     closeOverlay(props().overlay);
   }
@@ -220,25 +237,27 @@ export default class Picker extends View {
       addrs.forEach(walk);
       return n;
     };
-    const groups = spaces().map((w) => {
-      const ctxs = w.tabs
-        .map((ctx) => {
-          const mine = all.filter((a) => a.tab === ctx.id);
-          return { w, ctx, mine, team: teamOf(mine.map((a) => a.address)) };
-        })
-        .filter((c) => !f || [w.name, c.ctx.name, ...c.mine.map((a) => a.program?.name ?? "")].join(" ").toLowerCase().includes(f));
-      return { w, ctxs };
-    });
-    const busy = groups.filter((p) => p.w.status && p.ctxs.length);
-    const quiet = groups.filter((p) => !p.w.status && p.ctxs.length);
-    busy.sort((a, b) => (b.w.status === "blocked") - (a.w.status === "blocked"));
+    // The tmux windows tabs show (tab mode), as "<session>\0<window index>": their panes aren't listed again.
+    const tabbed = new Set();
+    const ctxs = spaces().flatMap((w) => w.tabs.map((ctx) => {
+      const mine = all.filter((a) => a.tab === ctx.id);
+      const win = this.tabWindow(ctx);
+      if (win) tabbed.add(`${win.s.name}\u0000${win.index}`);
+      return { w, ctx, mine, team: teamOf(mine.map((a) => a.address)), win, pane: win?.panes.find((p) => p.status) ?? win?.panes[0] ?? null };
+    })).filter((c) => !f || [c.w.name, c.ctx.name, ...c.mine.map((a) => a.program?.name ?? ""),
+      ...(c.win?.panes ?? []).flatMap((p) => [p.window, p.command, p.folder, p.msg])].join(" ").toLowerCase().includes(f));
+    // A tab with something going on (an agent working, finished or waiting on you) is listed, and the one you are on;
+    // the quiet ones, idle agents included, fold. What needs you comes first; otherwise Herdr's order stays.
+    const here = (c) => c.w.active && c.ctx.active;
+    const going = (c) => c.ctx.status && c.ctx.status !== "idle";
+    const busy = ctxs.filter((c) => going(c) || here(c));
+    const quiet = ctxs.filter((c) => !going(c) && !here(c));
+    busy.sort((a, b) => (b.ctx.status === "blocked") - (a.ctx.status === "blocked"));
     const out = [];
     // A sentence is most likely a task, so it leads; a single word is offered with the new things.
     const sentence = /\s/.test(typed);
     if (sentence) out.push({ kind: "section", label: "Task" }, { kind: "task", text: typed });
-    const add = (p) => {
-      for (const c of p.ctxs) out.push({ kind: "ctx", ...c });
-    };
+    const add = (c) => out.push({ kind: "ctx", ...c });
     if (busy.length || quiet.length) out.push({ kind: "section", label: "Spaces" });
     busy.forEach(add);
     if (quiet.length && f) quiet.forEach(add);
@@ -253,7 +272,8 @@ export default class Picker extends View {
     for (const machine of machines) {
       const mine = sessions.filter((s) => s.machine === machine);
       const hits = f
-        ? mine.map((s) => ({ s, named: s.name.toLowerCase().includes(f), panes: s.panes.filter((p) => [p.window, p.command, p.folder, p.msg].join(" ").toLowerCase().includes(f)) }))
+        ? mine.map((s) => ({ s, named: s.name.toLowerCase().includes(f), panes: s.panes.filter((p) => !tabbed.has(`${s.key}\u0000${p.windowIndex}`)
+          && [p.window, p.command, p.folder, p.msg].join(" ").toLowerCase().includes(f)) }))
           .filter((h) => h.named || h.panes.length)
         : mine.filter((s) => !s.shown).map((s) => ({ s, panes: [] }));
       if (!hits.length) continue;
@@ -436,7 +456,7 @@ export default class Picker extends View {
   enterLabel(r) {
     if (!r) return "open";
     if (r.kind === "ctx") return "go to tab";
-    if (r.kind === "earlier") return this.showEarlier ? "fold quiet spaces" : "show quiet spaces";
+    if (r.kind === "earlier") return this.showEarlier ? "fold quiet tabs" : "show quiet tabs";
     if (r.kind === "tsession") return r.s.shown ? "go to session" : "open in a space";
     if (r.kind === "tpane") return "go to pane";
     if (r.kind === "create") return "create and attach";
@@ -509,7 +529,7 @@ export default class Picker extends View {
       if (r.kind === "earlier") {
         return pickRow(r, "pk-earlier").pl(18).text_size(12).text_color(t.dim)
           .child(svg(this.showEarlier ? "mods/workspace-chrome/chevron-down.svg" : "mods/workspace-chrome/chevron-right.svg").size(12).flex_none())
-          .child(`${r.count} quiet space${r.count > 1 ? "s" : ""}`);
+          .child(`${r.count} quiet tab${r.count > 1 ? "s" : ""}`);
       }
       if (r.kind === "tsession") {
         const s = r.s, spinning = busyKey === rowKey(r);
@@ -580,7 +600,9 @@ export default class Picker extends View {
           .child(h_flex().w(136).flex_none().gap(7).items_center()
             .child(h_flex().size(16).flex_none().rounded(4).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(9.5).font_bold().text_color("#ffffff").child([...r.w.name][0]?.toUpperCase() ?? "?"))
             .child(div().min_w(0).truncate().text_size(12).text_color(r.w.machine ? REMOTE : t.muted).child(r.w.name)))
-          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()).child(r.ctx.name))
+          .child(h_flex().flex_1().min_w(0).gap(8).items_center()
+            .child(div().flex_none().max_w(220).truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()).child(r.ctx.name))
+            .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(r.pane?.msg || "")))
           .when(here, (el) => el.child(this.tag(t, "here", t.muted)))
           .when(r.ctx.status === "blocked", (el) => el.child(this.tag(t, "needs you", t.blocked)))
           .when(r.ctx.status === "done", (el) => el.child(this.tag(t, "finished", t.done)))

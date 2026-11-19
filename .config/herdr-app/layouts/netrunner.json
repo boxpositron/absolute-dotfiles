@@ -26,17 +26,6 @@
           "type": "column",
           "children": [
             {
-              "id": "spaces",
-              "type": "block",
-              "content": {
-                "mod": "spaces-tmux"
-              },
-              "size": {
-                "weight": 0.63
-              },
-              "min": 31
-            },
-            {
               "id": "agents",
               "type": "block",
               "content": {
