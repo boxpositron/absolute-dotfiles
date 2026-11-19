@@ -75,6 +75,7 @@ local_servers
 .config/omo/extensions/vim-quit.ts:.omo/agent/extensions/vim-quit.ts
 .config/omo/extensions/omo-working.ts:.omo/agent/extensions/omo-working.ts
 .config/omo/extensions/omo-nice.ts:.omo/agent/extensions/omo-nice.ts
+.config/omo/extensions/omo-resurrect.ts:.omo/agent/extensions/omo-resurrect.ts
 .config/omo/prompts:.omo/agent/prompts
 "
 

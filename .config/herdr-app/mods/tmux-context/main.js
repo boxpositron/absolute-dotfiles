@@ -153,6 +153,8 @@ export default class TmuxContext extends View {
     }
     this.resolve(cx);
     cx.timer.every(POLL, (cx) => this.resolve(cx));
+    // After a logout or reboot herdr-core brings the tabs back with fresh shells: this puts them back on tmux.
+    exec(`${home()}/.local/bin/omo-status`, ["reattach"], { timeout: 180000 }).catch(() => null);
     // `tmux-context.pick` (a key in keys.json, or `herdr-app do tmux-context.pick`) opens the folder list.
     cx.spawn(async () => {
       for (;;) if ((await nextCommand()) === "pick") this.openPicker();

@@ -84,6 +84,11 @@
 #                                     child, wakeup, goal), started, due, label; here and on each Herdr machine)
 #        omo-status jobs-here | jobs-remote
 #                                    (jobs in two parts: this computer's panes; the connected machines')
+#        omo-status herdr-save       (notes which tmux session each Herdr terminal shows, for reattach; run at
+#                                     each tmux-resurrect save by omo-sessions snapshot)
+#        omo-status reattach [<max age, seconds>]
+#                                    (after a logout or reboot, puts the shells Herdr's tabs are left with back
+#                                     on the tmux sessions they showed; Herdr runs it as it starts)
 #        omo-status tabs [<machine>/]<session>|--all [on|off]
 #                                    (tab mode for tmux session <session>, here or on Herdr machine <machine>: each
 #                                     of its windows gets a Herdr tab of its own, with its own status; off goes back
@@ -125,6 +130,9 @@ herdr_shown_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/herdr-shown"
 # What list-here last read for each pane ("<transcript size> <state> <resume> <goal>"), a file per
 # pane id, so a pass that finds nothing new reads no transcript. A file, as it changes on most passes.
 seen_dir="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/seen"
+# Which tmux session each Herdr terminal showed at the last tmux-resurrect save: herdr_attached's
+# "<[machine/]session>\t<terminal>" lines, for `reattach`.
+herdr_tabs_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/herdr-tabs"
 # The tmux sessions in tab mode (`tabs`), one name per line: each of their windows gets a Herdr tab of its own.
 # A tab runs a tmux client on "<session>~<window id>", a session sharing <session>'s windows (a session group)
 # that keeps its own current window, the one its tab shows.
@@ -396,6 +404,45 @@ herdr_attached() {
     [[ $window == - ]] && window=""
     printf '%s\t%s\t%s\n' "${machine:+$machine/}$session" "$term" "$window"
   done
+}
+
+# A command here, or on Herdr machine <machine> when one is named.
+on_machine() {
+  local machine=$1
+  shift
+  if [[ -n $machine ]]; then hc exec --on "$machine" --timeout 5 "$@"; else "$@"; fi
+}
+
+# Seconds since process <pid> started, here or on Herdr machine <machine>.
+age_of() {
+  local etime days=0 parts
+  etime=$(on_machine "$1" ps -o etime= -p "$2" 2>/dev/null)
+  etime=${etime//[[:space:]]/}
+  [[ -n $etime ]] || return 1
+  if [[ $etime == *-* ]]; then days=${etime%%-*} etime=${etime#*-}; fi
+  IFS=: read -r -a parts <<<"$etime"
+  while ((${#parts[@]} < 3)); do parts=(0 "${parts[@]}"); done
+  echo $((10#$days * 86400 + 10#${parts[0]} * 3600 + 10#${parts[1]} * 60 + 10#${parts[2]}))
+}
+
+# The Herdr terminals with nothing running but their shell: "<terminal>\t<space id>\t<fresh>" lines in Herdr's
+# order. Fresh (1) is a shell herdr-core gave a terminal it keeps, in place of the program it lost, in the last
+# <max age> seconds: the terminal was made well before its shell started, where a tab opened just now has a shell
+# as new as its terminal. A tab whose shell ran the tmux client (`tma`) is back at its old shell instead.
+idle_shells() {
+  local layout=$1 max=$2 term space info pid machine age made fresh
+  while IFS=$'\t' read -r term space; do
+    info=$(hc get "$term" --json 2>/dev/null) || continue
+    pid=$(jq -r 'select(.foreground.pid == .pid and (.foreground.argv[0] // "" | test("(^|/)-?(zsh|bash|fish|sh)$"))) | .pid' <<<"$info")
+    [[ -n $pid ]] || continue
+    machine="" fresh=0
+    [[ $term == */* ]] && machine=${term%%/*}
+    if [[ $(jq -r '.keep' <<<"$info") == true ]] && age=$(age_of "$machine" "$pid"); then
+      made=$(jq -r '.created_ms // 0 | floor' <<<"$info")
+      ((age <= max && made / 1000 < $(date +%s) - age - 60)) && fresh=1
+    fi
+    printf '%s\t%s\t%s\n' "$term" "$space" "$fresh"
+  done < <(jq -r '.spaces[] | .id as $s | .tabs[].terminals[].terminal | [., $s] | @tsv' <<<"$layout")
 }
 
 # The session a tmux client with pid <pid> shows: "client|^|<its pane>|^|<session name>", then for each pane
@@ -1419,6 +1466,104 @@ case ${1:-} in
     ;;
   herdr-sessions)
     herdr_sessions
+    ;;
+  herdr-save)
+    # Kept as it is while Herdr is closed or shows no tmux, so the tabs it brings back after a logout still have
+    # their sessions. The first line names the tmux server, so `reattach` can tell it has started again since.
+    attached=$(herdr_attached "$(herdr-app ls 2>/dev/null)" 2>/dev/null) && [[ -n $attached ]] || exit 0
+    # A tab mode tab's window by its index, which tmux-resurrect brings back (window ids start again).
+    attached=$(while IFS=$'\t' read -r key term window; do
+      [[ -n $window && $key != */* ]] && window=$(tmux display-message -p -t "$window" '#{window_index}' 2>/dev/null)
+      printf '%s\t%s\t%s\n' "$key" "$term" "$window"
+    done <<<"$attached")
+    mkdir -p "${herdr_tabs_file%/*}"
+    printf '#server %s\n%s\n' "$(tmux display-message -p '#{pid}')" "$attached" >"$herdr_tabs_file.$$" &&
+      mv "$herdr_tabs_file.$$" "$herdr_tabs_file"
+    ;;
+  reattach)
+    # After a logout or reboot each Herdr tab that showed tmux is left with a shell: herdr-core gives a tab whose
+    # program was the tmux client a fresh one, and a tab that ran it from its shell (`tma`) is back at that shell.
+    # This puts each back on the tmux session it showed at the last save (herdr-tabs), once that session is back: it
+    # starts this Mac's tmux when none runs (omo-sessions boot; tmux-continuum then restores it) and waits up to
+    # 90 s. Only shells with nothing running in them, and only sessions no Herdr terminal shows yet. A tab qualifies
+    # when this Mac's tmux has started again since that save; when it hasn't (Herdr alone restarted), only a fresh
+    # shell from the last <max age> seconds (10 minutes) does, and then a space's first fresh shell with none in
+    # herdr-tabs goes on the session the space was made for (the spaces file). omo-sessions resurrect runs it
+    # before it reopens omo sessions, and Herdr's tmux-context as Herdr starts. One run at a time.
+    max=${2:-600} lock="${spaces_file%/*}/reattach.lock" tries=0
+    mkdir -p "${spaces_file%/*}"
+    while ! mkdir "$lock" 2>/dev/null && ((tries++ < 1200)); do sleep 0.1; done
+    trap 'rmdir "$lock" 2>/dev/null' EXIT
+    # Herdr's mods start before it answers.
+    for ((tries = 0; tries < 30; tries++)); do
+      layout=$(herdr-app ls 2>/dev/null)
+      jq -e '.spaces' <<<"$layout" >/dev/null 2>&1 && break
+      pgrep -xq Herdr || exit 0
+      sleep 1
+    done
+    jq -e '.spaces' <<<"$layout" >/dev/null 2>&1 || exit 0
+    idle=$(idle_shells "$layout" "$max")
+    [[ -n $idle ]] || exit 0
+    tmux list-sessions >/dev/null 2>&1 || "$HOME/.local/bin/omo-sessions" boot
+    server=$(tmux display-message -p '#{pid}' 2>/dev/null)
+    saved=$(awk '$1 == "#server" { print $2; exit }' "$herdr_tabs_file" 2>/dev/null)
+    plan="" spaced=$'\n'
+    while IFS=$'\t' read -r term space fresh; do
+      IFS=$'\t' read -r key index < <(awk -F'\t' -v t="$term" '$2 == t { print $1 "\t" $3; exit }' "$herdr_tabs_file" 2>/dev/null)
+      if [[ -n $key ]]; then
+        # Another machine's tmux didn't start again with this Mac's.
+        [[ $fresh == 1 || ($key != */* && -n $saved && $saved != "$server") ]] || continue
+      elif [[ $fresh == 1 && $spaced != *$'\n'"$space"$'\n'* ]]; then
+        key=$(awk -F'\t' -v s="$space" '$2 == s { print $1; exit }' "$spaces_file" 2>/dev/null)
+        [[ -n $key ]] && spaced+="$space"$'\n'
+      fi
+      [[ -n $key ]] && plan+="$key"$'\t'"$term"$'\t'"$index"$'\n'
+    done <<<"$idle"
+    deadline=$((SECONDS + 90)) attached=0
+    while IFS=$'\t' read -r key term index; do
+      [[ -n $key ]] || continue
+      machine="" name=$key
+      [[ $key == */* ]] && machine=${key%%/*} name=${key#*/}
+      until on_machine "$machine" tmux has-session -t "=$name" >/dev/null 2>&1; do
+        ((SECONDS < deadline)) || continue 2
+        sleep 1
+      done
+      # Shown already (a tab Herdr kept, or one `spaces` opened): a second client would show it twice.
+      # A tab mode tab goes back on the window it showed, in a tab session of its own.
+      target=$name tab=""
+      if [[ -n $index && -z $machine ]] && tab_mode "$name"; then
+        tab=$(tmux display-message -p -t "=$name:$index" '#{window_id}' 2>/dev/null) || continue
+        target=$(tab_session "$name" "$(tmux display-message -p -t "=$name:" '#{session_id}')" "$tab") || continue
+      fi
+      shown=$(herdr_attached "$(herdr-app ls 2>/dev/null)" 2>/dev/null) || continue
+      if [[ -n $tab ]]; then
+        awk -F'\t' -v k="$key" -v w="$tab" '$1 == k && $3 == w { f = 1 } END { exit !f }' <<<"$shown" && continue
+      else
+        cut -f1 <<<"$shown" | grep -qxF -- "$key" && continue
+      fi
+      # In single quotes, as zsh would expand =name to the path of a command called name. Sent as from no terminal:
+      # hc wraps a send from another Herdr terminal in <hc> tags, and a tmux server started in one hands every pane
+      # its HC_TERMINAL_ID.
+      quoted=${target//\'/\'\\\'\'}
+      line="exec tmux attach-session -t '=$quoted'"
+      [[ -n $tab ]] && line+=" \\; set-option destroy-unattached on"
+      env -u HC_TERMINAL_ID -u HC_SCOPE hc send "$term" "$line" >/dev/null 2>&1 || continue
+      if [[ -n $tab ]]; then
+        tab_terminal "$name" "$tab" 5 >/dev/null && attached=$((attached + 1))
+        continue
+      fi
+      wait_attached "$key"
+      if herdr_attached "$(herdr-app ls 2>/dev/null)" 2>/dev/null | cut -f1 | grep -qxF -- "$key"; then
+        attached=$((attached + 1))
+      else
+        echo "omo-status reattach: $term didn't attach to $key" >&2
+      fi
+    done <<<"$plan"
+    # Tab mode sessions: a tab put back on the session itself becomes its window's tab, and windows with none get one.
+    while IFS= read -r name; do
+      tabs_sync "$name"
+    done < <(tab_sessions)
+    echo "reattached $attached Herdr tab(s)"
     ;;
   list-here)
     # A turn can end with work still running: a terminal monitor, a background command,

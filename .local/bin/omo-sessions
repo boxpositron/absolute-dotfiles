@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # omo-sessions: the library of omo sessions closed on purpose, reopening them or starting
-# fresh from their handoff, and handing a task from one session to another.
+# fresh from their handoff, and handing a task from one session to another. It also brings
+# back the sessions a logout, reboot or crash ended, with their tmux panes (`resurrect`).
 #
 # agent-state's collector reads library.json and handoffs.jsonl from this machine's state
 # folder. vim-quit.ts (the omo extension) calls `file`, `unfile` and `taken`, and acts on
@@ -17,6 +18,12 @@ library=$state/library.json
 handoffs=$state/handoffs.jsonl
 requests=$state/requests
 transcripts=${OMO_AGENT_DIR:-$HOME/.omo/agent}/sessions
+# The sessions running in tmux panes, so `resurrect` can reopen the ones a logout, reboot or crash ended: one
+# running/<session id>.json each, written by the omo extension omo-resurrect.ts when a session starts and removed
+# when it is closed on purpose. {sid, pid, cwd, sessionFile, name, pane, socket and server (the tmux server's socket
+# and pid), target (session:window.pane, as tmux-resurrect saves it), window, tmuxSession, startedAt, and endedBy and
+# endedAt once a signal ended it; adopted: true when `snapshot` made it}
+running=$state/running
 
 die() {
   printf 'omo-sessions: %s\n' "$*" >&2
@@ -39,9 +46,14 @@ omo-sessions: closed sessions, and work passed between sessions
                                Start omo on a task in a new window of a tmux session (made if
                                missing), named after a random city; prints the pane
   title <words>                Retitle a started task's window: one to three words naming the work
+  resurrect [--dry-run]        Reopen the sessions that ended with an earlier tmux server (a logout,
+                               reboot or crash), in their restored panes; tmux-resurrect runs it
+  snapshot                     Note where each running session's pane is; each tmux-resurrect save runs it
+  boot                         Start tmux, which restores the last save; the login agent runs it
+  install                      Install that launchd agent, on a Mac
 
 A session is an id, an id prefix or a tmux target. Machines are agent-state's names, such as mac.
-Called by other tools: file, unfile, taken, deliver.
+Called by other tools: file, unfile, taken, deliver, snapshot.
 EOF
 }
 
@@ -133,15 +145,22 @@ pane_of() {
     awk -v tail="_$1.jsonl" 'index($0, tail) { print $1; exit }'
 }
 
-is_live() {
+# The pid of the omo process holding session <sid> open. A holder left by a session a logout ended can name a pid
+# another program has since, so the process must be omo's.
+holder_pid() {
   local holder pid
   for holder in "$transcripts"/*/session-holders/"$1"/*.json; do
     [[ -r $holder ]] || continue
     pid=$(jq -r '.pid // empty' "$holder" 2>/dev/null)
-    [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null && return 0
+    [[ -n $pid ]] || continue
+    case $(ps -o command= -p "$pid" 2>/dev/null) in
+      */senpi/dist/* | */omo | */omo\ *) printf '%s\n' "$pid" && return 0 ;;
+    esac
   done
   return 1
 }
+
+is_live() { holder_pid "$1" >/dev/null; }
 
 library_entry() {
   [[ -f $library ]] && jq -c --arg sid "$1" '.sessions[] | select(.sid == $sid)' "$library"
@@ -152,17 +171,24 @@ write_request() {
   printf '%s\n' "$2" >"$requests/.$1.tmp" && mv "$requests/.$1.tmp" "$requests/$1.json"
 }
 
+# What a pane runs for omo with these arguments: the login shell starts omo and stays when it exits.
+omo_command() {
+  local command=omo arg
+  for arg in "$@"; do command+=" $(printf '%q' "$arg")"; done
+  printf '%s\n' "$command; exec ${SHELL:-/bin/sh} -l"
+}
+
 # A new tmux window running omo, left in the background. Prints its pane.
 launch() {
-  local cwd=$1 session=$2 window=$3 id=$4 command=omo arg shell=${SHELL:-/bin/sh}
+  local cwd=$1 session=$2 window=$3 id=$4 shell=${SHELL:-/bin/sh} command
   shift 4
-  for arg in "$@"; do command+=" $(printf '%q' "$arg")"; done
+  command=$(omo_command "$@")
   [[ -n $session ]] || session=$(basename "$cwd" | tr '.:' '--')
   window=${window:0:30}
   if tmux has-session -t "=$session" 2>/dev/null; then
-    tmux new-window -d -P -F '#{pane_id}' -t "=$session:" -c "$cwd" -n "$window" ${id:+-e "OMO_HANDOFF_ID=$id"} -- "$shell" -lic "$command; exec $shell -l"
+    tmux new-window -d -P -F '#{pane_id}' -t "=$session:" -c "$cwd" -n "$window" ${id:+-e "OMO_HANDOFF_ID=$id"} -- "$shell" -lic "$command"
   else
-    tmux new-session -d -P -F '#{pane_id}' -s "$session" -c "$cwd" -n "$window" ${id:+-e "OMO_HANDOFF_ID=$id"} -- "$shell" -lic "$command; exec $shell -l"
+    tmux new-session -d -P -F '#{pane_id}' -s "$session" -c "$cwd" -n "$window" ${id:+-e "OMO_HANDOFF_ID=$id"} -- "$shell" -lic "$command"
   fi
 }
 
@@ -428,6 +454,186 @@ cmd_open() {
   fi
 }
 
+# A lock for a job that runs alone: fails while another run holds it. One a killed run left lapses after $2 minutes.
+try_lock() {
+  mkdir "$1" 2>/dev/null && return 0
+  [[ -n $(find "$1" -maxdepth 0 -mmin "+$2" 2>/dev/null) ]] && rmdir "$1" 2>/dev/null && mkdir "$1" 2>/dev/null
+}
+
+note() { printf '%s %s\n' "$(date '+%F %T')" "$*"; }
+
+# A running record's fields, joined by \x1f (a field may be empty, which tab-separated reads would skip).
+record_fields() {
+  jq -r '[.sid, .pid, .socket, .server, .pane, .cwd, .sessionFile, .target, .tmuxSession, .window, .name]
+    | map(. // "" | tostring) | join("\u001f")' "$1" 2>/dev/null
+}
+
+# tmux-resurrect's post-save hook (each save, so every 15 minutes with tmux-continuum) brings the running records in
+# line with the tmux it saved. A live session's record takes its pane's place now, as windows move and get renamed. A
+# session that ended while this tmux server kept running loses its record: it didn't end with tmux (it was closed in
+# tmux, or it crashed). An omo pane with no record, a session started before omo-resurrect.ts was loaded, gets one.
+# Then `omo-status herdr-save` notes which tmux session each Herdr tab shows, for `omo-status reattach`.
+cmd_snapshot() {
+  local server socket panes file sid pid rsocket rserver pane place target tsession window transcript new
+  server=$(tmux display-message -p '#{pid}' 2>/dev/null) || return 0
+  socket=$(tmux display-message -p '#{socket_path}')
+  mkdir -p "$running"
+  # tmux-continuum can start two saves at once.
+  try_lock "$running/.snapshot" 2 || return 0
+  # Not the sessions of tab mode's Herdr tabs ("<session>~<window>"): they list each pane again, under a session
+  # tmux-resurrect doesn't bring back as such.
+  panes=$(tmux list-panes -a -f '#{?#{m:*~[0-9]*,#{session_name}},0,1}' -F $'#{pane_id}\x1f#{session_name}:#{window_index}.#{pane_index}\x1f#{session_name}\x1f#{window_name}\x1f#{@omo_transcript}')
+  for file in "$running"/*.json; do
+    [[ -f $file ]] || continue
+    IFS=$'\x1f' read -r sid pid rsocket rserver pane _ <<<"$(record_fields "$file")"
+    # A record from an earlier tmux server is resurrect's to judge.
+    [[ $rsocket == "$socket" && $rserver == "$server" ]] || continue
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$file"
+      continue
+    fi
+    place=$(awk -F$'\x1f' -v p="$pane" '$1 == p { print; exit }' <<<"$panes")
+    [[ -n $place ]] || continue
+    IFS=$'\x1f' read -r _ target tsession window _ <<<"$place"
+    new=$(jq -c --arg target "$target" --arg tmuxSession "$tsession" --arg window "$window" \
+      '.target = $target | .tmuxSession = $tmuxSession | .window = $window' "$file" 2>/dev/null) || continue
+    [[ $new == "$(jq -c . "$file" 2>/dev/null)" ]] || { printf '%s\n' "$new" >"$file.$$" && mv "$file.$$" "$file"; }
+  done
+  while IFS=$'\x1f' read -r pane target tsession window transcript; do
+    [[ -n $transcript && -r $transcript ]] || continue
+    sid=$(sid_of "$transcript")
+    [[ -f $running/$sid.json ]] && continue
+    pid=$(holder_pid "$sid") || continue
+    jq -cn --arg sid "$sid" --argjson pid "$pid" --arg cwd "$(session_cwd "$transcript")" --arg file "$transcript" \
+      --arg name "$(session_name "$transcript")" --arg pane "$pane" --arg socket "$socket" --argjson server "$server" \
+      --arg target "$target" --arg tmuxSession "$tsession" --arg window "$window" --argjson now "$(now_ms)" \
+      '{sid: $sid, pid: $pid, cwd: $cwd, sessionFile: $file, name: $name, pane: $pane, socket: $socket, server: $server,
+        target: $target, window: $window, tmuxSession: $tmuxSession, startedAt: $now, adopted: true}
+       | with_entries(select(.value != ""))' >"$running/.$sid.tmp" && mv "$running/.$sid.tmp" "$running/$sid.json"
+  done <<<"$panes"
+  rmdir "$running/.snapshot"
+  "$HOME/.local/bin/omo-status" herdr-save >/dev/null 2>&1
+  return 0
+}
+
+# Reopens the omo sessions that ended with an earlier tmux server: a logout, a reboot or a crash (a session closed on
+# purpose left no record). tmux-resurrect's restore hook runs it once the panes are back; --dry-run shows what it
+# would do. A session goes back into its restored pane when that pane is there with only a shell in the session's
+# folder, else into a new window of its tmux session, a few seconds apart so they don't all load at once. First
+# `omo-status reattach` puts Herdr's tabs back on their tmux sessions, so the space sync omo runs as it starts finds
+# them shown and opens no second tab. What it did goes to resurrect.log.
+cmd_resurrect() {
+  local dry="" server socket file sid rsocket rserver cwd sfile target tsession window name pane current folder
+  local used=$'\n' reopened=0 shell=${SHELL:-/bin/sh}
+  [[ ${1:-} == --dry-run ]] && dry=1
+  server=$(tmux display-message -p '#{pid}' 2>/dev/null) || die "no tmux server is running"
+  socket=$(tmux display-message -p '#{socket_path}')
+  if [[ -z $dry ]]; then
+    mkdir -p "$state"
+    try_lock "$state/.resurrect" 10 || die "another resurrect is running"
+    exec >>"$state/resurrect.log" 2>&1
+    note "tmux server $server is up: reattaching Herdr's tabs, then reopening sessions"
+    "$HOME/.local/bin/omo-status" reattach
+  fi
+  for file in "$running"/*.json; do
+    [[ -f $file ]] || continue
+    IFS=$'\x1f' read -r sid _ rsocket rserver _ cwd sfile target tsession window name <<<"$(record_fields "$file")"
+    [[ -n $sid && $rsocket == "$socket" && $rserver != "$server" ]] || continue
+    if is_live "$sid"; then
+      note "$sid${name:+ ($name)} is open already"
+      [[ -n $dry ]] || rm -f "$file"
+      continue
+    fi
+    if [[ ! -r $sfile || ! -d $cwd ]]; then
+      note "skipped $sid${name:+ ($name)}: $([[ -r $sfile ]] && echo "its folder $cwd is gone" || echo "its transcript is gone")"
+      [[ -n $dry ]] || rm -f "$file"
+      continue
+    fi
+    pane=""
+    if [[ -n $target ]]; then
+      IFS=$'\x1f' read -r pane current folder <<<"$(tmux display-message -p -t "=$target" $'#{pane_id}\x1f#{pane_current_command}\x1f#{pane_current_path}' 2>/dev/null)"
+      case $current in
+        zsh | bash | fish | sh | -zsh | -bash) ;;
+        *) pane="" ;;
+      esac
+      if [[ -n $pane ]] && { [[ $used == *$'\n'"$pane"$'\n'* ]] || [[ $(cd "$folder" 2>/dev/null && pwd -P) != "$(cd "$cwd" && pwd -P)" ]]; }; then
+        pane=""
+      fi
+    fi
+    if [[ -n $dry ]]; then
+      if [[ -n $pane ]]; then note "would reopen $sid${name:+ ($name)} in its pane $target ($pane)"; else note "would reopen $sid${name:+ ($name)} in a new window of ${tsession:-a new tmux session}"; fi
+      continue
+    fi
+    # Gone first: the session writes its own record as it starts.
+    rm -f "$file"
+    if [[ -n $pane ]]; then
+      tmux respawn-pane -k -t "$pane" -c "$cwd" -- "$shell" -lic "$(omo_command --session "$sid")" || pane=""
+    else
+      pane=$(launch "$cwd" "$tsession" "${window:-${name:-omo}}" "" --session "$sid")
+    fi
+    if [[ -z $pane ]]; then
+      note "couldn't reopen $sid${name:+ ($name)}: resume it with omo-sessions resume $sid"
+      continue
+    fi
+    used+="$pane"$'\n'
+    reopened=$((reopened + 1))
+    note "reopened $sid${name:+ ($name)} in $pane"
+    sleep 3
+  done
+  [[ -n $dry ]] && return 0
+  note "reopened $reopened session(s)"
+  rmdir "$state/.resurrect"
+}
+
+# The launchd agent's job at login (`install`): starts the tmux server if none runs, so tmux-continuum restores the
+# last save and tmux-resurrect's restore hook runs `resurrect`. tmux starts through the login shell, so its panes get
+# what a terminal's shell has, and in session "0", which tmux-resurrect drops once it has restored the others.
+cmd_boot() {
+  tmux list-sessions >/dev/null 2>&1 && return 0
+  "${SHELL:-/bin/zsh}" -lic 'tmux new-session -d' </dev/null >/dev/null 2>&1
+}
+
+cmd_install() {
+  [[ $(uname) == Darwin ]] || die "install sets up a launchd agent, for a Mac"
+  local label=local.omo-sessions-boot plist log=$state/boot.log
+  plist="$HOME/Library/LaunchAgents/$label.plist"
+  mkdir -p "$state" "${plist%/*}"
+  # launchd's own PATH would start this script with macOS's bash 3.2, and its environment has no locale, which tmux
+  # gives every pane it starts. AbandonProcessGroup keeps the tmux server when the job ends.
+  cat >"$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.local/bin/omo-sessions</string>
+    <string>boot</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin</string>
+    <key>LANG</key>
+    <string>${LANG:-en_US.UTF-8}</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$log</string>
+  <key>StandardErrorPath</key>
+  <string>$log</string>
+</dict>
+</plist>
+PLIST
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+  launchctl bootstrap "gui/$(id -u)" "$plist" && echo "omo-sessions: tmux starts at login and brings its sessions back ($plist)"
+}
+
 command=${1:-help}
 [[ $# -gt 0 ]] && shift
 case $command in
@@ -444,6 +650,10 @@ case $command in
   title) cmd_title "$@" ;;
   hook) cmd_hook ;;
   deliver) cmd_deliver "$@" ;;
+  snapshot) cmd_snapshot ;;
+  resurrect) cmd_resurrect "$@" ;;
+  boot) cmd_boot ;;
+  install) cmd_install ;;
   help | -h | --help) usage ;;
   *)
     usage >&2
