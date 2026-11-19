@@ -6,7 +6,7 @@
 // client shows and publishes that pane's folder as shared "tmux.where" ({terminal, tmux, cwd, on,
 // pane, pinned, branch}; tmux: false for any other terminal), which files-tmux and changes-tmux show
 // in place of Herdr's and workspace-status-tmux takes its branch from. Every tmux client in the shown
-// tab gets its folder in shared "tmux.panes" ({<terminal>: {cwd}}), for pane-tmux's headers. Herdr
+// tab gets its folder and session in shared "tmux.panes" ({<terminal>: {cwd, session}}), for pane-tmux's headers. Herdr
 // keeps this running while the panel is hidden, so the headers and the status bar don't need it open. It asks again when Herdr's focus moves, when tmux changes pane, window or
 // session (.tmux.conf's hooks touch ~/.local/state/omo-status/where/tick, which this watches), and
 // every 3 seconds, for a `cd` and for another machine's tmux, whose hooks can't reach that file.
@@ -285,14 +285,15 @@ export default class TmuxContext extends View {
     const others = panes().filter((p) => p.tab === f?.tab && p.terminal && p.terminal !== terminal).map((p) => p.terminal);
     cx.spawn(async () => {
       const map = {};
-      if (this.where?.tmux && this.where.terminal === terminal) map[terminal] = { cwd: this.where.cwd };
+      if (this.where?.tmux && this.where.terminal === terminal) map[terminal] = { cwd: this.where.cwd, session: this.where.session ?? null };
       // All at once; kept in the tab's order, so an unchanged map compares equal.
       const shown = await Promise.all(others.map(async (other) => {
         const r = await exec(`${home()}/.local/bin/omo-status`, ["where", other], { timeout: 10000 }).catch(() => null);
         const found = r?.code === 0 ? parseWhere(r.stdout) : null;
-        return found && (found.panes.find((p) => p.pane === pins[other]) ?? found.panes.find((p) => p.pane === found.client));
+        const pane = found && (found.panes.find((p) => p.pane === pins[other]) ?? found.panes.find((p) => p.pane === found.client));
+        return pane && { cwd: pane.path, session: found.session };
       }));
-      others.forEach((other, i) => { if (shown[i]) map[other] = { cwd: shown[i].path }; });
+      others.forEach((other, i) => { if (shown[i]) map[other] = shown[i]; });
       if (JSON.stringify(shared("tmux.panes")) !== JSON.stringify(map)) setShared("tmux.panes", map);
     });
   }
