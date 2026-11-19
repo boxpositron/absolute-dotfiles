@@ -2,7 +2,7 @@
 // Icons stay the shipped mod's: Herdr loads no images through the dotfiles link.
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { theme, run, props, window, shared, setShared, updates, layout } from "herdr";
+import { theme, run, props, window, updates, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -13,18 +13,13 @@ function find(node, id) {
   return null;
 }
 
-// The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
-const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
+// The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too. The copy side-fit floats over the
+// terminal (props.overlay) is the expanded sidebar, whatever the docked one's width.
+const narrow = () => !props()?.overlay && (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
-// To the rail (on macOS wide enough for the traffic lights, and for the session cards beside the scrollbar's lane), or
-// back to the width it had.
-function toggleSidebar() {
-  const width = find(layout(), "sidebar")?.size?.px;
-  if (!narrow()) setShared("sidebar.width", width);
-  // Mods edited before the rail went by width still read the flag.
-  setShared("sidebar.collapsed", !narrow());
-  run("layout.resize", { id: "sidebar", px: narrow() ? (shared("sidebar.width") ?? 268) : window()?.platform === "macos" ? 84 : 44 });
-}
+// side-fit folds the sidebar to its rail (on macOS wide enough for the traffic lights) or expands it, docked when the
+// terminal keeps room beside it, else floating over the terminal.
+const toggleSidebar = () => run("side-fit.sidebar");
 
 export default class WorkspaceChrome extends View {
   button(id, label, action) {
@@ -55,7 +50,7 @@ export default class WorkspaceChrome extends View {
     // 46 px, so the row grows to hold them underneath (a drag can make the rail too, so this is checked on each render).
     const tall = collapsed && window()?.platform === "macos" && !window()?.fullscreen;
     const want = tall ? 78 : 46;
-    if (Math.round(find(layout(), "brand")?.size?.px ?? want) !== want && this.asked !== want) {
+    if (!props()?.overlay && Math.round(find(layout(), "brand")?.size?.px ?? want) !== want && this.asked !== want) {
       this.asked = want;
       run("layout.resize", { id: "brand", px: want });
     }

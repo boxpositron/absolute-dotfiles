@@ -43,8 +43,9 @@ function find(node, id) {
   return null;
 }
 
-// The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
-const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
+// The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too. The copy side-fit floats over the
+// terminal (props.overlay) is the expanded sidebar, whatever the docked one's width.
+const narrow = () => !props()?.overlay && (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
 // Drops what an agent puts before its title: a status glyph or spinner and the separator
 // after it ("✦  Working", "⠋ - Thinking"), and Codex's blinking "[ ! ] " / "[ . ] " mark.

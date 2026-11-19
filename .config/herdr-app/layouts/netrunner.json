@@ -82,6 +82,19 @@
           "window_drag": true
         },
         {
+          "id": "fit-width",
+          "type": "block",
+          "size": {
+            "px": 0
+          },
+          "content": {
+            "mod": "side-fit",
+            "props": {
+              "measure": "width"
+            }
+          }
+        },
+        {
           "id": "work-body",
           "type": "row",
           "children": [
@@ -123,6 +136,19 @@
                   },
                   "size": {
                     "px": 3
+                  }
+                },
+                {
+                  "id": "fit-height",
+                  "type": "block",
+                  "size": {
+                    "px": 0
+                  },
+                  "content": {
+                    "mod": "side-fit",
+                    "props": {
+                      "measure": "height"
+                    }
                   }
                 }
               ]
@@ -237,7 +263,7 @@
               "size": {
                 "px": 712
               },
-              "min": 280,
+              "min": 0,
               "max": 900,
               "hidden": true
             },
@@ -250,7 +276,7 @@
               "size": {
                 "px": 460
               },
-              "min": 340,
+              "min": 0,
               "max": 760,
               "hidden": true,
               "background": "#0a0a144d",
