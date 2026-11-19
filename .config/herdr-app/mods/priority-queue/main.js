@@ -13,7 +13,9 @@
 // Text is Markdown, and Mermaid fences are drawn by herdr-render into the preview's cache. Go to, or a
 // click on a card's top line, shows the pane in Herdr (`omo-status show`). A card you answered (an option, Send
 // or Reply) greys out under a spinner, below the rest, until the agent takes the answer: its pane works again,
-// or its question closes.
+// or its question closes. agent-state hears of an answer a few seconds after the pane goes back to work, so until it
+// has, what the session asked before your answer raises no card of its own (shared "omo.queue.answered": when you
+// last answered each session).
 //
 // Which panes need you is omo-status's own state (shared "omo.list", from the hidden omo-tmux copy), so a
 // card goes once you look at its pane, however you got there, and the pane Herdr shows gets none.
@@ -112,8 +114,9 @@ function summaryOf(text) {
   return out;
 }
 
-// The questions open in an agent-state session, each {header?, question, multiSelect?, options}.
-const questionsOf = (d) => (d.openQuestions ?? []).flatMap((q) => (q.items?.length ? q.items : q.questions.map((question) => ({ question, options: [] }))));
+// The questions open in an agent-state session, each {header?, question, multiSelect?, options, askedAt}.
+const questionsOf = (d) => (d.openQuestions ?? []).flatMap((q) =>
+  (q.items?.length ? q.items : q.questions.map((question) => ({ question, options: [] }))).map((item) => ({ ...item, askedAt: q.askedAt })));
 
 // The preview's cache key, so a diagram either of them drew is drawn once.
 function hash(text) {
@@ -236,6 +239,11 @@ export default class PriorityQueue extends View {
     const panes = parse(shared("omo.list")?.out);
     await this.matchSessions(panes);
     await this.readSessions();
+    // omo-status sets a pane working the moment its question is answered; agent-state takes a few seconds more to
+    // hear it, and holds the session blocked on the question until then. So a block that began before your last
+    // answer to the session raises no card, and its questions from before then make no other card a question: the
+    // card you answered holds them until the agent takes the answer (release).
+    const answeredAt = new Map((shared("omo.queue.answered") ?? []).map((a) => [a.sid, a.at]));
     const bySid = new Map(this.sessions.map((s) => [s.sid, s]));
     const items = [], covered = new Set();
     for (const p of panes) {
@@ -248,7 +256,7 @@ export default class PriorityQueue extends View {
       });
     }
     for (const s of this.sessions) {
-      if (s.lifecycle !== "blocked" || covered.has(s.sid)) continue;
+      if (s.lifecycle !== "blocked" || covered.has(s.sid) || s.lifecycleSince < (answeredAt.get(s.sid) ?? 0)) continue;
       // agent-state can hold a Herdr tab's grouped session ("work~12:1.1"): its window is the same in the session it stands for.
       const target = s.tmux?.replace(/~\d+(?=:|$)/, "") ?? null;
       items.push({
@@ -271,7 +279,11 @@ export default class PriorityQueue extends View {
           }
         } catch {}
       }
-      if (d) Object.assign(it, { name: d.name ?? it.name, questions: d.questions, reply: d.reply, summary: summaryOf(d.reply) });
+      if (d) {
+        const before = answeredAt.get(it.sid) ?? 0;
+        const questions = it.kind === "input" ? d.questions : d.questions.filter((q) => !(q.askedAt < before));
+        Object.assign(it, { name: d.name ?? it.name, questions, reply: d.reply, summary: summaryOf(d.reply) });
+      }
       // A question still open is what the card is about, whatever the pane says: omo-status can call a pane done
       // once its turn ends after asking without holding the turn, or a blocked session can be waiting on one.
       if (it.questions?.length) it.kind = "input";
@@ -386,7 +398,9 @@ export default class PriorityQueue extends View {
     if (!it.sid || !it.at || !text.trim()) return;
     // A second click while the answer is on its way, or once it went, would send it twice.
     if (this.answered.has(it.key)) return;
-    this.answered.set(it.key, { at: Date.now(), kind: it.kind, questions: it.questions?.length ?? 0, text: text.trim() });
+    const answer = { sid: it.sid, at: Date.now() };
+    this.answered.set(it.key, { at: answer.at, kind: it.kind, questions: it.questions?.length ?? 0, text: text.trim() });
+    setShared("omo.queue.answered", [...(shared("omo.queue.answered") ?? []), answer].slice(-100));
     this.status.set(it.key, "sending");
     cx.notify();
     cx.spawn(async (cx) => {
@@ -396,7 +410,10 @@ export default class PriorityQueue extends View {
       let res = null;
       try { res = JSON.parse(r.stdout); } catch {}
       this.status.set(it.key, res?.ok ? "sent" : res?.error ?? (r.stderr.trim() || "agent-state didn't answer"));
-      if (!res?.ok) this.answered.delete(it.key);
+      if (!res?.ok) {
+        this.answered.delete(it.key);
+        setShared("omo.queue.answered", (shared("omo.queue.answered") ?? []).filter((a) => a.sid !== answer.sid || a.at !== answer.at));
+      }
       cx.notify();
     });
   }
