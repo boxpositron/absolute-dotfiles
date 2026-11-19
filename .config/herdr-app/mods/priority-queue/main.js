@@ -49,6 +49,8 @@ const KINDS = {
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
 // A reply longer than this is cut: shared values are kept on disk.
 const MAX_TEXT = 20000;
+// A read that hasn't come back in this long is left behind for a new one.
+const STALL = 60000;
 const omoStatus = () => `${home()}/.local/bin/omo-status`;
 const mono = () => settings().font_family ?? "JetBrains Mono";
 
@@ -221,16 +223,35 @@ export default class PriorityQueue extends View {
   }
 
   // A change while a read runs reads again in the same task: a task started by one that is ending is dropped.
+  // No one read can stop the queue: one that fails keeps the cards there were and says why, and one that hasn't
+  // come back in a minute (a call that never settles, or a task Herdr dropped) is left behind, its late answer
+  // ignored.
   refresh(cx) {
-    if (this.busy) { this.again = true; return; }
-    this.busy = true;
+    if (this.busy && Date.now() - this.busy < STALL) { this.again = true; return; }
+    const run = (this.run ?? 0) + 1;
+    this.run = run;
     cx.spawn(async () => {
       do {
         this.again = false;
-        await this.read();
+        this.busy = Date.now();
+        try {
+          const queue = await this.read();
+          if (this.run !== run) return;
+          this.publish(queue);
+        } catch (e) {
+          if (this.run !== run) return;
+          this.problem = `The queue couldn't read what needs you: ${e?.message ?? e}`;
+          this.publish(shared("omo.queue")?.items ?? []);
+        }
       } while (this.again);
-      this.busy = false;
+      this.busy = 0;
     });
+  }
+
+  publish(queue) {
+    const next = { items: queue, problem: this.problem };
+    if (JSON.stringify(shared("omo.queue") ?? null) !== JSON.stringify(next)) setShared("omo.queue", next);
+    this.steer(queue);
   }
 
   async read() {
@@ -294,10 +315,7 @@ export default class PriorityQueue extends View {
       .sort((a, b) => KINDS[b.kind].rank - KINDS[a.kind].rank || a.since - b.since);
     // The pane Herdr shows is in front of you: it gets no card, and won't open the column later.
     for (const it of shown) if (it.looking) this.opened.add(it.key);
-    const queue = shown.filter((it) => !it.looking);
-    const next = { items: queue, problem: this.problem };
-    if (JSON.stringify(shared("omo.queue") ?? null) !== JSON.stringify(next)) setShared("omo.queue", next);
-    this.steer(queue);
+    return shown.filter((it) => !it.looking);
   }
 
   // The omo session id in each queued pane, from its transcript's name: one tmux listing per machine.
