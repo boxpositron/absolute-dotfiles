@@ -11,7 +11,9 @@
 // Questions, failures and blocks come first, then finished turns, each the longest waiting first, as
 // `omo-status next` goes. A card names its tmux session with the session's colour (tmux-session-tint).
 // Text is Markdown, and Mermaid fences are drawn by herdr-render into the preview's cache. Go to, or a
-// click on a card's top line, shows the pane in Herdr (`omo-status show`).
+// click on a card's top line, shows the pane in Herdr (`omo-status show`). A card you answered (an option, Send
+// or Reply) greys out under a spinner, below the rest, until the agent takes the answer: its pane works again,
+// or its question closes.
 //
 // Which panes need you is omo-status's own state (shared "omo.list", from the hidden omo-tmux copy), so a
 // card goes once you look at its pane, however you got there, and the pane Herdr shows gets none.
@@ -202,6 +204,8 @@ export default class PriorityQueue extends View {
     this.expanded = new Set();
     this.picks = new Map();
     this.status = new Map();
+    // card key -> {at, kind, questions, text}: answers sent or on their way, whose cards hold until the agent takes them.
+    this.answered = new Map();
     this.replyTo = null;
     this.width = 440;
     this.diagrams = {};
@@ -381,7 +385,8 @@ export default class PriorityQueue extends View {
   reply(it, text, cx) {
     if (!it.sid || !it.at || !text.trim()) return;
     // A second click while the answer is on its way, or once it went, would send it twice.
-    if (["sending", "sent"].includes(this.status.get(it.key))) return;
+    if (this.answered.has(it.key)) return;
+    this.answered.set(it.key, { at: Date.now(), kind: it.kind, questions: it.questions?.length ?? 0, text: text.trim() });
     this.status.set(it.key, "sending");
     cx.notify();
     cx.spawn(async (cx) => {
@@ -391,11 +396,25 @@ export default class PriorityQueue extends View {
       let res = null;
       try { res = JSON.parse(r.stdout); } catch {}
       this.status.set(it.key, res?.ok ? "sent" : res?.error ?? (r.stderr.trim() || "agent-state didn't answer"));
+      if (!res?.ok) this.answered.delete(it.key);
       cx.notify();
-      // The session's board extension answers its open question as the dialog would, and agent-state hears of that
-      // a few seconds later, so the card goes once SENT has shown rather than waiting for it.
-      if (res?.ok) cx.timer.after(2500, (cx) => this.seen({ ...it, pane: null }, cx));
     });
+  }
+
+  // An answer the agent took lets its card go: the card left the queue (its pane works again), or its question
+  // closed (the session's board extension answered it, and agent-state heard) and the card fell back to what its
+  // pane says. A Seen rather than waiting, as that pane state was there before the answer.
+  release(items, cx) {
+    for (const key of [...this.answered.keys()]) {
+      if (!items.some((it) => it.key === key)) { this.answered.delete(key); this.status.delete(key); }
+    }
+    for (const it of items) {
+      const sent = this.answered.get(it.key);
+      if (!sent || sent.taken || this.status.get(it.key) !== "sent") continue;
+      if (it.kind === sent.kind && !(sent.questions && !it.questions?.length)) continue;
+      sent.taken = true;
+      cx.spawn(async () => this.seen({ ...it, pane: null }, cx));
+    }
   }
 
   openReply(it, cx) {
@@ -453,7 +472,7 @@ export default class PriorityQueue extends View {
 
   question(t, it, q, qi, count) {
     const chosen = this.picks.get(it.key)?.[qi] ?? [];
-    const can = Boolean(it.sid && it.at);
+    const known = Boolean(it.sid && it.at), can = known && !this.answered.has(it.key);
     const now = count === 1 && !q.multiSelect;
     return v_flex().gap(6)
       .when(Boolean(q.header), (el) => el.child(div().font_family(mono()).text_size(10).font_bold().text_color(t.dim).child(q.header.toUpperCase())))
@@ -463,8 +482,13 @@ export default class PriorityQueue extends View {
         return v_flex().id(`opt-${it.key}-${qi}-${oi}`).px(10).py(6).gap(2).border_1()
           .border_color(on ? t.accent : t.border).bg(on ? t.accent + "1f" : t.background)
           .when(can, (el) => el.cursor_pointer().hover((s) => s.border_color(t.accent + "b3").bg(t.accent + "14"))
-            .on_click((_e, cx) => (now ? this.reply(it, o.label, cx) : this.pick(it, qi, o.label, q.multiSelect, cx))))
-          .when(!can, (el) => el.tooltip("agent-state doesn't know this session: answer it in its pane"))
+            .on_click((_e, cx) => {
+              if (!now) return this.pick(it, qi, o.label, q.multiSelect, cx);
+              // The option stays marked on the answered card.
+              this.picks.set(it.key, { [qi]: [o.label] });
+              this.reply(it, o.label, cx);
+            }))
+          .when(!known, (el) => el.tooltip("agent-state doesn't know this session: answer it in its pane"))
           .child(h_flex().gap(7).items_center()
             .when(!now, (el) => el.child(div().size(10).flex_none().rounded(q.multiSelect ? 2 : 5).border(1.5).border_color(on ? t.accent : t.dim).when(on, (e) => e.bg(t.accent))))
             .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(o.label)))
@@ -478,7 +502,7 @@ export default class PriorityQueue extends View {
       const answer = this.answerOf(it);
       return v_flex().gap(14)
         .children(qs.map((q, i) => this.question(t, it, q, i, qs.length)))
-        .when(Boolean(answer) && (qs.length > 1 || qs[0].multiSelect), (el) => el.child(h_flex()
+        .when(Boolean(answer) && (qs.length > 1 || qs[0].multiSelect) && !this.answered.has(it.key), (el) => el.child(h_flex()
           .child(div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().bg(t.accent).text_color(solid(t.background))
             .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85))
             .tooltip(answer).on_click((_e, cx) => this.reply(it, answer, cx)).child("SEND ANSWER"))));
@@ -505,18 +529,29 @@ export default class PriorityQueue extends View {
   }
 
   actions(t, it) {
-    const st = this.status.get(it.key);
-    const canReply = Boolean(it.sid && it.at);
+    const st = this.status.get(it.key), held = this.answered.has(it.key);
+    const canReply = Boolean(it.sid && it.at) && !held;
     return h_flex().gap(6).items_center().pt(2)
       .when(Boolean(it.pane || it.tmux), (el) => el.child(this.button(t, `go-${it.key}`, "GO TO", "terminal", "Show this pane in Herdr", (cx) => this.goTo(it, cx))))
-      .when(it.kind !== "input", (el) => el.child(this.button(t, `seen-${it.key}`, "SEEN", "check",
+      .when(it.kind !== "input" && !held, (el) => el.child(this.button(t, `seen-${it.key}`, "SEEN", "check",
         it.pane ? "Clear it, as looking at the pane would" : "Hide it until it changes", (cx) => this.seen(it, cx), t.done)))
       .when(canReply, (el) => el.child(this.button(t, `reply-${it.key}`, "REPLY", "square-pen",
         it.kind === "input" ? "Type your own answer" : "Send it a message: the next prompt, or a steer while it works", (cx) => this.openReply(it, cx))))
       .child(div().flex_1())
-      .when(Boolean(st), (el) => el.child(div().min_w(0).truncate().font_family(mono()).text_size(10.5)
-        .text_color(st === "sent" ? t.done : st === "sending" ? t.dim : t.ansi1).tooltip(st)
-        .child(st === "sent" ? "SENT \u2713" : st === "sending" ? "SENDING\u2026" : st)));
+      .when(Boolean(st) && !held, (el) => el.child(div().min_w(0).truncate().font_family(mono()).text_size(10.5)
+        .text_color(t.ansi1).tooltip(st).child(st)));
+  }
+
+  // On an answered card, above the greyed-out rest: what you answered, and that the agent hasn't taken it yet.
+  heldNote(t, it, sent, now) {
+    const said = sent.text.replace(/\s*\n\s*/g, " \u00b7 ");
+    return v_flex().gap(4).px(10).py(7).border_1().border_color(t.working + "4d").bg(t.working + "0f")
+      .child(h_flex().gap(7).items_center().font_family(mono()).text_size(10.5).font_bold().text_color(t.working)
+        .child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900))
+        .child(div().flex_1().min_w(0).truncate()
+          .child(this.status.get(it.key) === "sending" ? "SENDING YOUR ANSWER\u2026" : "ANSWERED \u00b7 WAITING FOR THE AGENT"))
+        .child(div().flex_none().font_normal().text_color(t.dim).child(ago(now - sent.at))))
+      .child(div().text_size(11.5).line_height(1.4).text_color(t.muted).child(said.length > 240 ? `${said.slice(0, 239)}\u2026` : said));
   }
 
   replyBox(t, it) {
@@ -529,32 +564,36 @@ export default class PriorityQueue extends View {
 
   // A card is a block in its session's colour, as the session is in the Agents tree: a band of it across
   // the top holding the kind in a solid chip, a lighter wash of it below, and an edge of it down the left.
-  // Without a session colour the kind's stands in. Cards that need you are outlined in the kind's colour.
+  // Without a session colour the kind's stands in. Cards that need you are outlined in the kind's colour. An
+  // answered card goes grey, with a note of the answer under a spinner, until the agent takes it (release).
   card(t, it, now) {
     const kind = KINDS[it.kind], tone = t[kind.tone] ?? t.accent;
     const tint = it.session ? shared("tmux.tints")?.[it.machine ? `${it.machine}/${it.session}` : it.session] ?? null : null;
-    const band = (tint ?? tone).slice(0, 7), urgent = kind.rank === 2;
+    const sent = this.answered.get(it.key);
+    const band = (tint ?? tone).slice(0, 7), urgent = kind.rank === 2 && !sent;
     const title = it.name || it.project || "omo";
     // The header names the session, so a project of the same name isn't repeated.
     const where = [it.project !== title && it.project !== it.session ? it.project : null, it.window && !GENERIC.has(it.window) && it.window !== it.project && it.window !== title ? it.window : null]
       .filter(Boolean).join(" \u00b7 ");
     return v_flex().id(`card-${it.key}`).flex_none().overflow_hidden().bg(t.chrome).border_1().border_color(urgent ? tone : band + "59")
-      .child(h_flex().id(`head-${it.key}`).h(28).flex_none().pr(10).gap(8).items_center().bg(band + "40").font_family(mono()).text_size(10.5)
+      .child(h_flex().id(`head-${it.key}`).h(28).flex_none().pr(10).gap(8).items_center().bg(sent ? t.dim.slice(0, 7) + "26" : band + "40").font_family(mono()).text_size(10.5)
         .when(Boolean(it.pane || it.tmux), (el) => el.cursor_pointer().tooltip("Show it in Herdr").on_click((_e, cx) => this.goTo(it, cx)))
-        .child(h_flex().h_full().px(8).gap(6).flex_none().items_center().bg(tone).text_color(solid(t.background)).font_bold()
+        .child(h_flex().h_full().px(8).gap(6).flex_none().items_center().bg(sent ? t.muted : tone).text_color(solid(t.background)).font_bold()
           .when(urgent, (el) => el.child(div().size(6).bg(solid(t.background)).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
-          .child(kind.label))
+          .child(sent ? (this.status.get(it.key) === "sending" ? "SENDING" : "ANSWERED") : kind.label))
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(div().flex_none().text_color(REMOTE).child(it.machine)))
         .child(div().flex_1())
         .child(div().flex_none().text_color(t.muted).child(ago(now - it.since))))
       .child(h_flex().items_stretch().bg(mix(band, "#ffffff", 0.35) + "14")
-        .child(div().w(3).flex_none().bg(band))
+        .child(div().w(3).flex_none().bg(sent ? band + "66" : band))
         .child(v_flex().flex_1().min_w(0).px(12).py(10).gap(8)
-        .child(v_flex().gap(1)
-          .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(title))
-          .when(Boolean(where), (el) => el.child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(where))))
-        .child(this.body(t, it))
+        .when(Boolean(sent), (el) => el.child(this.heldNote(t, it, sent, now)))
+        .child(v_flex().gap(8).when(Boolean(sent), (el) => el.opacity(0.45))
+          .child(v_flex().gap(1)
+            .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(title))
+            .when(Boolean(where), (el) => el.child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(where))))
+          .child(this.body(t, it)))
         .child(this.actions(t, it))
         .when(this.replyTo === it.key, (el) => el.child(this.replyBox(t, it)))));
   }
@@ -569,11 +608,14 @@ export default class PriorityQueue extends View {
     }
     const t = theme();
     const data = shared("omo.queue");
-    const items = data?.items ?? [];
+    // Cards you answered go below the ones still waiting on you.
+    const items = [...data?.items ?? []].sort((a, b) => Number(this.answered.has(a.key)) - Number(this.answered.has(b.key)));
+    this.release(items, cx);
     this.wantDiagrams(items, cx);
     const now = Date.now();
-    const needs = items.filter((it) => KINDS[it.kind].rank === 2).length, finished = items.length - needs;
-    const count = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : null, finished ? `${finished} finished` : null].filter(Boolean).join(" \u00b7 ");
+    const held = items.filter((it) => this.answered.has(it.key)).length;
+    const needs = items.filter((it) => KINDS[it.kind].rank === 2 && !this.answered.has(it.key)).length, finished = items.length - needs - held;
+    const count = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : null, finished ? `${finished} finished` : null, held ? `${held} answered` : null].filter(Boolean).join(" \u00b7 ");
     return v_flex().id("priority-queue").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1()
       .border_color(needs ? t.accent + "99" : t.border).text_size(13).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 4) { this.width = size.width; cx.notify(); } })
