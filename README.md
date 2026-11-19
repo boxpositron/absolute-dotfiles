@@ -351,6 +351,15 @@ wget -qO ~/.tmux.conf https://raw.githubusercontent.com/boxpositron/absolute-dot
 
 If tmux is already running, reload it with `tmux source-file ~/.tmux.conf`. The copy command expects `tmux-osc52` in `~/.local/bin`; copy it from `.local/bin/` too.
 
+On a server, tmux should run as a systemd user service (`.config/systemd/user/tmux.service`), so its sessions outlive a logout, a closed terminal and the short-lived commands that open them: a tmux server started by one of those ends with it, taking every session along. The config turns `exit-empty` off, so the service keeps tmux running with no sessions.
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -s ~/dotfiles/.config/systemd/user/tmux.service ~/.config/systemd/user/
+systemctl --user enable --now tmux
+loginctl enable-linger "$USER"   # user services run without a login
+```
+
 | Binding | Action |
 |---------|--------|
 | `Ctrl+/` | Prefix key |

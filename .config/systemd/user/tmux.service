@@ -1,0 +1,18 @@
+# tmux for a server, as a systemd user service: its sessions outlive a logout, a closed terminal and the short-lived
+# commands that open them (a tmux server one of those starts ends with it). .tmux-server.conf turns exit-empty off, so
+# it keeps running with no sessions; `tmux new-session` and `tmux attach` use it as usual. Install with
+#   ln -s ~/dotfiles/.config/systemd/user/tmux.service ~/.config/systemd/user/
+#   systemctl --user enable --now tmux
+# and `loginctl enable-linger` so user services run without a login.
+[Unit]
+Description=tmux server
+
+[Service]
+Type=forking
+Environment=PATH=%h/.local/bin:%h/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env tmux start-server
+ExecStop=/usr/bin/env tmux kill-server
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
