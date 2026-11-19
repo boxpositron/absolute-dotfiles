@@ -72,6 +72,10 @@ function mix(a, b, f) {
 }
 const steps = (a, b, n) => Array.from({ length: n }, (_, i) => div().flex_1().h_full().bg(mix(a, b, i / (n - 1))));
 
+// Text and marks on a solid fill (chips, Send buttons) take the theme's background without its alpha: a
+// see-through layout (netrunner's frosted glass) clears that colour, which would leave them invisible.
+const solid = (c) => (typeof c === "string" && c.length === 9 ? c.slice(0, 7) : c);
+
 // omo-status list: pane, session, window, folder, state, since, wake-up, message. Another machine's pane
 // and session carry its name in front ("server/%3", "server/work").
 function parse(out) {
@@ -473,7 +477,7 @@ export default class PriorityQueue extends View {
       return v_flex().gap(14)
         .children(qs.map((q, i) => this.question(t, it, q, i, qs.length)))
         .when(Boolean(answer) && (qs.length > 1 || qs[0].multiSelect), (el) => el.child(h_flex()
-          .child(div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().bg(t.accent).text_color(t.background)
+          .child(div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().bg(t.accent).text_color(solid(t.background))
             .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85))
             .tooltip(answer).on_click((_e, cx) => this.reply(it, answer, cx)).child("SEND ANSWER"))));
     }
@@ -516,7 +520,7 @@ export default class PriorityQueue extends View {
   replyBox(t, it) {
     return h_flex().h(34).pl(10).pr(4).gap(6).items_center().border_1().border_color(t.accent + "b3").bg(t.background)
       .child(Input.new(this.input).flex_1().h_full().text_size(12.5).text_color(t.foreground))
-      .child(div().id(`send-${it.key}`).px(8).h(24).flex().flex_none().items_center().bg(t.accent).text_color(t.background)
+      .child(div().id(`send-${it.key}`).px(8).h(24).flex().flex_none().items_center().bg(t.accent).text_color(solid(t.background))
         .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85))
         .on_click((_e, cx) => this.sendTyped(cx)).child("SEND"));
   }
@@ -535,8 +539,8 @@ export default class PriorityQueue extends View {
     return v_flex().id(`card-${it.key}`).flex_none().overflow_hidden().bg(t.chrome).border_1().border_color(urgent ? tone : band + "59")
       .child(h_flex().id(`head-${it.key}`).h(28).flex_none().pr(10).gap(8).items_center().bg(band + "40").font_family(mono()).text_size(10.5)
         .when(Boolean(it.pane || it.tmux), (el) => el.cursor_pointer().tooltip("Show it in Herdr").on_click((_e, cx) => this.goTo(it, cx)))
-        .child(h_flex().h_full().px(8).gap(6).flex_none().items_center().bg(tone).text_color(t.background).font_bold()
-          .when(urgent, (el) => el.child(div().size(6).bg(t.background).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
+        .child(h_flex().h_full().px(8).gap(6).flex_none().items_center().bg(tone).text_color(solid(t.background)).font_bold()
+          .when(urgent, (el) => el.child(div().size(6).bg(solid(t.background)).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
           .child(kind.label))
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(div().flex_none().text_color(REMOTE).child(it.machine)))
