@@ -38,7 +38,7 @@ function scope() {
   const w = shared("tmux.where"), context = shared("tmux.context")?.where;
   const all = shared("pr.reviews.scope") === "all";
   const merged = shared("pr.reviews.filter") === "merged";
-  const dirs = w?.on ? [] : all
+  const dirs = all
     ? [...new Set((context?.terminal === w?.terminal ? context?.panes ?? [] : []).map((p) => p.path).filter(Boolean))]
     : w?.cwd ? [w.cwd] : [];
   return { dirs, merged, on: w?.on ?? null, refresh: shared("pr.reviews.refresh"), key: JSON.stringify([w, dirs, all, merged]) };
