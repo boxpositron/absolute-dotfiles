@@ -12,6 +12,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar } from "gpui-base";
 import { exec, home, shared, setShared, theme, nextCommand, props } from "herdr";
+import { isHud, display, mono, frame, caps, readout, title as hudTitle } from "./hud.js";
 
 function target() {
   const w = shared("tmux.where");
@@ -88,28 +89,41 @@ export default class Mcp extends View {
   }
 
   badge(t, text, color) {
+    if (this.hud) {
+      const c = (color ?? t.muted).slice(0, 7);
+      return h_flex().relative().h(17).px(6).flex_none().items_center().children(frame(4, { bg: c + "14", line: c + "66" }))
+        .child(caps(text, 11.5, 600).relative().text_color(c));
+    }
     return div().px(5).py(1).flex_none().rounded(4).border_1().border_color(t.border).text_size(10).text_color(color ?? t.muted).child(text);
   }
 
   note(t, text, color) {
-    return div().flex_none().px(12).py(5).bg(t.raised).border_b(1).border_color(t.border).text_size(11.5).text_color(color).child(text);
+    return div().flex_none().px(12).py(5).text_size(11.5).text_color(color)
+      .when(!this.hud, (el) => el.bg(t.raised).border_b(1).border_color(t.border))
+      .when(this.hud, (el) => el.bg(color.slice(0, 7) + "0f").border_b(1).border_color(t.accent + "33"))
+      .child(text);
   }
 
   row(t, s) {
     const dot = !s.enabled ? t.dim : s.auth === "expired" || failed(s) ? t.ansi1 : needsYou(s) ? t.blocked : t.ansi2;
     const call = s.lastCall;
     const auth = s.auth === "none" ? null : s.auth;
-    return v_flex().id(`mcp-${s.name}`).flex_none().px(8).py(6).gap(2).rounded(7).hover((st) => st.bg(t.hover))
+    const hud = this.hud, tools = !s.enabled ? "off" : s.tools === null ? "no tool list yet" : `${s.tools} tool${s.tools === 1 ? "" : "s"}`;
+    const authColor = auth === "signed in" ? t.ansi2 : auth === "expired" ? t.ansi1 : t.blocked;
+    return v_flex().id(`mcp-${s.name}`).flex_none().px(8).py(6).gap(2).hover((st) => st.bg(t.hover))
+      .when(!hud, (el) => el.rounded(7))
+      .when(hud, (el) => el.border_b(1).border_color(t.accent + "26"))
       .child(h_flex().gap(8).items_center()
-        .child(div().size(7).flex_none().rounded(4).bg(dot))
-        .child(div().min_w(0).truncate().font_medium().text_color(s.enabled ? t.foreground : t.dim).child(s.name))
+        .child(div().size(7).flex_none().rounded(hud ? 0 : 4).bg(dot))
+        .child(div().min_w(0).truncate().font_medium().text_color(s.enabled ? t.foreground : t.dim)
+          .when(hud, (el) => el.font_family(display()).font_weight(600).text_size(14.5)).child(s.name))
         .child(this.badge(t, s.source))
         .child(div().flex_1())
-        .child(div().flex_none().text_size(11).text_color(t.dim).child(!s.enabled ? "off" : s.tools === null ? "no tool list yet" : `${s.tools} tool${s.tools === 1 ? "" : "s"}`)))
+        .child(hud ? caps(tools, 12, 600).flex_none().text_color(t.dim) : div().flex_none().text_size(11).text_color(t.dim).child(tools)))
       .child(h_flex().pl(15).gap(6).text_size(11).text_color(t.dim)
-        .child(div().flex_none().child(s.kind))
-        .child(div().min_w(0).flex_1().truncate().child(s.where))
-        .when(Boolean(auth), (el) => el.child(div().flex_none().text_color(auth === "signed in" ? t.ansi2 : auth === "expired" ? t.ansi1 : t.blocked).child(auth))))
+        .child(hud ? caps(s.kind, 11.5, 600).flex_none() : div().flex_none().child(s.kind))
+        .child(div().min_w(0).flex_1().truncate().when(hud, (el) => el.font_family(mono())).child(s.where))
+        .when(Boolean(auth), (el) => el.child(hud ? caps(auth, 11.5, 600).flex_none().text_color(authColor) : div().flex_none().text_color(authColor).child(auth))))
       .when(Boolean(call), (el) => el.child(div().pl(15).text_size(11).text_color(call.ok ? t.dim : t.ansi1).when(call.ok, (e) => e.truncate())
         .child(`Last call ${ago(call.at)} (${call.tool}) ${call.ok ? "worked" : `failed: ${call.error}`}`)))
       .when(Boolean(s.issue), (el) => el.child(div().pl(15).text_size(11).text_color(t.blocked).truncate().child(`${ago(s.issue.at)}: ${s.issue.message}`)));
@@ -142,19 +156,25 @@ export default class Mcp extends View {
     this.error = mine ? s.error : null;
     this.loading = !mine || Boolean(s?.loading);
     const t = theme(), d = this.data, servers = d?.servers ?? [];
+    const hud = this.hud = isHud();
     const on = servers.filter((s) => s.enabled).length, attention = servers.filter(needsYou).length;
     const trustNote = d && (d.trust === "no" || d.trust === "ask")
       ? `This project isn't trusted${d.trust === "ask" ? " yet" : ""}, so its .omo/mcp.json is skipped${d.blocked.length ? `: ${d.blocked.join(", ")}` : ""}.` : null;
-    return v_flex().id("mcp").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().font_semibold().child("MCP"))
-        .when(Boolean(d), (el) => el.child(this.badge(t, `${on} of ${servers.length} on`)))
-        .when(attention > 0, (el) => el.child(this.badge(t, `${attention} need${attention === 1 ? "s" : ""} you`, t.blocked)))
+    return v_flex().id("mcp").size_full().min_h(0).overflow_hidden().text_color(t.foreground).text_size(13)
+      .when(!hud, (el) => el.rounded(10).bg(t.background).border_1().border_color(t.border))
+      .when(hud, (el) => el.relative().children(frame(10, { line: t.accent + "4d" })))
+      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(hud ? t.accent + "33" : t.border)
+        .child(hud ? hudTitle(t, "MCP", 17) : div().font_semibold().child("MCP"))
+        .when(Boolean(d) && !hud, (el) => el.child(this.badge(t, `${on} of ${servers.length} on`)))
+        .when(Boolean(d) && hud, (el) => el.child(readout(t, `${on}/${servers.length}`)).child(caps("on", 12, 600).text_color(t.dim)))
+        .when(attention > 0 && !hud, (el) => el.child(this.badge(t, `${attention} need${attention === 1 ? "s" : ""} you`, t.blocked)))
+        .when(attention > 0 && hud, (el) => el.child(readout(t, attention, { status: t.blocked, pulse: true }))
+          .child(caps(`need${attention === 1 ? "s" : ""} you`, 12, 600).text_color(t.blocked)))
         .child(div().flex_1())
-        .child(div().id("mcp-refresh").size(24).flex().items_center().justify_center().rounded(6).cursor_pointer().text_size(14).text_color(t.muted)
+        .child(div().id("mcp-refresh").size(24).flex().items_center().justify_center().rounded(hud ? 0 : 6).cursor_pointer().text_size(14).text_color(hud ? t.working : t.muted)
           .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Read again").on_click(() => setShared("omo.mcp.refresh", Date.now()))
           .child(this.loading ? "…" : "\u21bb")))
-      .when(Boolean(d), (el) => el.child(v_flex().flex_none().px(12).py(7).gap(2).border_b(1).border_color(t.border).text_size(11.5)
+      .when(Boolean(d), (el) => el.child(v_flex().flex_none().px(12).py(7).gap(2).border_b(1).border_color(hud ? t.accent + "33" : t.border).text_size(11.5)
         .child(h_flex().gap(6).min_w(0).child(div().flex_none().text_color(t.muted).child(`omo in ${d.target || d.pane}`)).child(div().min_w(0).truncate().text_color(t.dim).child(tilde(d.cwd))))
         .child(div().text_color(t.dim).child(`Config read ${ago(d.loadedAt)}${d.loadedAt ? "" : "?"}, at its start or last /reload`))))
       .when(Boolean(d?.configChanged), (el) => el.child(this.note(t, "An mcp.json changed after this session read it: /reload in omo to pick it up.", t.blocked)))
@@ -165,7 +185,7 @@ export default class Mcp extends View {
           .children(servers.map((s) => this.row(t, s)))
           .when(!servers.length, (el) => el.child(div().p(8).text_color(t.dim).child(this.empty()))))
         .child(Scrollbar.vertical("mcp-list").absolute().inset_0()))
-      .child(div().flex_none().px(12).py(6).border_t(1).border_color(t.border).text_size(10.5).text_color(t.dim)
+      .child(div().flex_none().px(12).py(6).border_t(1).border_color(hud ? t.accent + "33" : t.border).text_size(10.5).text_color(t.dim)
         .child("From omo's config, sign-ins and tool cache, and this session's latest call to each server. omo keeps live connections to itself."));
   }
 }

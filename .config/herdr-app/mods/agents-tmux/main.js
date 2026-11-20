@@ -9,6 +9,8 @@ import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, exec, home, readTextFile, writeTextFile, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
 import { SpaceData, MARK, spaceColors } from "./spaces.js";
+import { INK, isHud, spinner, mono, display, fill, caps, readout, modalFrame, title as hudTitle } from "./hud.js";
+import { sigil, NAMES } from "./sigils.js";
 
 // Remote tmux (.tmux-server.conf) has a Cyberpunk yellow bar. Agents on another
 // machine get a faint wash of the same yellow, and yellow hover and selection, so
@@ -203,6 +205,8 @@ export default class Agents extends View {
     // The machines' order, as you dragged their headers ([machine, ...], "" for this computer); kept across restarts.
     try { this.machineOrder = JSON.parse(localStorage.getItem("machines.order") ?? "[]"); } catch { this.machineOrder = []; }
     if (!Array.isArray(this.machineOrder)) this.machineOrder = [];
+    // Each space's sigil in the HUD, by machine and name (sigilOf); kept across restarts.
+    try { this.sigils = JSON.parse(localStorage.getItem("sigils") ?? "{}"); } catch { this.sigils = {}; }
     this.spaceData = new SpaceData(cx, {
       isFolded: (m) => this.folded.has(`srv:${m ?? ""}`),
       unfold: (m) => { this.folded.delete(`srv:${m}`); this.saveFolds(); },
@@ -273,20 +277,34 @@ export default class Agents extends View {
     return RANK[a.status] ?? 0;
   }
 
+  // netrunner's HUD squares every corner.
+  sq(n) {
+    return this.hud ? 0 : n;
+  }
+
+  // netrunner's HUD: a solid tone block with dark ink and a slanted end.
+  chip(color, text, pulse = false) {
+    return div().flex().flex_none().h(18).when(pulse, (el) => el.loop("opacity", { from: 0.55, to: 1, period: 1600 }))
+      .child(div().flex().items_center().h_full().px(6).bg(color).text_color(INK).child(caps(text, 12, 700)))
+      .child(div().relative().w(7).h_full().child(fill([[["0%", "0%"], ["100%", "0%"], ["0%", "100%"]]], color)));
+  }
+
   sortMenu(t) {
     const on = sortOf().id;
     return v_flex()
       .w_full()
       .p(5)
-      .bg(t.popover)
+      .when(!this.hud, (el) => el.bg(t.popover))
+      .when(this.hud, (el) => el.relative().size_full().p(8).children(modalFrame(t, 10)))
       .text_size(12.8)
-      .child(div().px(8).pt(4).pb(6).text_size(11).text_color(t.dim).child("Sort agents"))
+      .child(this.hud ? caps("Sort agents", 12, 600).px(8).pt(4).pb(6).text_color(t.dim)
+        : div().px(8).pt(4).pb(6).text_size(11).text_color(t.dim).child("Sort agents"))
       .children(SORTS.map((s) => h_flex()
         .id(`sort-${s.id}`)
         .h(31)
         .px(8)
         .gap(9)
-        .rounded(7)
+        .rounded(this.sq(7))
         .items_center()
         .text_color(t.foreground)
         .hover((el) => el.bg(t.hover))
@@ -295,7 +313,7 @@ export default class Agents extends View {
           closeOverlay(props().overlay);
         })
         .child(svg(`mods/workspace-chrome/${s.icon}.svg`).size(14).flex_none().text_color(t.muted))
-        .child(div().flex_1().child(s.label))
+        .child(div().flex_1().child(this.hud ? caps(s.label, 13, 600) : s.label))
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
   }
 
@@ -400,9 +418,9 @@ export default class Agents extends View {
   // The handle a row is dragged by (the whole row drags): six neon dots in the row's left gutter, on a faint pill of
   // the same colour while the row is hovered or lifted. `top`: where it sits, for a row of another height.
   grip(t, on, top = 5, color = GRIP) {
-    const dot = () => div().size(3).rounded(2).bg(color);
+    const dot = () => div().size(3).rounded(this.sq(2)).bg(color);
     const pair = () => h_flex().gap(2).child(dot()).child(dot());
-    return v_flex().absolute().left(4).top(top).p(3).gap(2).rounded(4).opacity(on ? 1 : 0.7)
+    return v_flex().absolute().left(4).top(top).p(3).gap(2).rounded(this.sq(4)).opacity(on ? 1 : 0.7)
       .when(on, (el) => el.bg(color + "26")).child(pair()).child(pair()).child(pair());
   }
 
@@ -454,21 +472,22 @@ export default class Agents extends View {
 
   // A pane's own state; compact: a ! where there is no room for "Needs you".
   paneStatus(t, state, compact = false) {
-    if (state === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
-    if (state === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.ansi5).spin(2400);
+    if (state === "working") return this.hud ? spinner(t.working, 12, 900).mx(1) : svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
+    if (state === "background") return this.hud ? spinner(t.ansi5, 12, 2400).mx(1) : svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.ansi5).spin(2400);
     if (state === "input" || state === "error") {
       // Needs you in the accent pink: yellow already marks the remote server.
       const color = state === "error" ? t.ansi1 : t.accent;
-      if (compact) return div().size(14).flex_none().rounded(4).bg(color + "26").text_size(10.5).font_bold().text_color(color).flex().items_center().justify_center().child("!");
+      if (compact) return div().size(14).flex_none().rounded(this.sq(4)).bg(color + "26").text_size(10.5).font_bold().text_color(color).flex().items_center().justify_center().child("!");
+      if (this.hud) return this.chip(color, state === "error" ? "Failed" : "Needs you", true);
       return div().flex_none().px(6).h(18).rounded(5).bg(color + "26").text_size(10.5).font_semibold().text_color(color)
         .flex().items_center().loop("opacity", { from: 0.55, to: 1, period: 1600 })
         .child(state === "error" ? "Failed" : "Needs you");
     }
-    if (state === "done") return div().size(7).mx(3).flex_none().rounded(4).bg(t.done);
+    if (state === "done") return div().size(7).mx(3).flex_none().rounded(this.sq(4)).bg(t.done);
     // A step done with tasks still open (omo-status's partial): a ring around a dot.
-    if (state === "partial") return div().size(8).mx(2.5).flex_none().rounded(4).border(1.5).border_color(t.done).flex().items_center().justify_center()
-      .child(div().size(3).rounded(2).bg(t.done));
-    return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
+    if (state === "partial") return div().size(8).mx(2.5).flex_none().rounded(this.sq(4)).border(1.5).border_color(t.done).flex().items_center().justify_center()
+      .child(div().size(3).rounded(this.sq(2)).bg(t.done));
+    return div().size(7).mx(3).flex_none().rounded(this.sq(4)).border(1.5).border_color(t.idle ?? t.dim);
   }
 
   // A tree's top level under a machine: its omo sessions no space shows, or the agents outside tmux. Folded, it shows
@@ -489,10 +508,11 @@ export default class Agents extends View {
       .hover((s) => s.text_color(t.foreground))
       .on_click((_e, cx) => this.fold(key, cx))
       .child(svg(`mods/workspace-chrome/${glyph}.svg`).size(12).flex_none().text_color(color ?? t.dim))
-      .child(div().truncate().text_color(color ?? t.dim).child(label))
-      .child(div().text_color(t.dim).child(String(count)))
-      .when(needs > 0, (el) => el.child(div().text_color(t.accent).child(`\u00b7 ${needs} need${needs === 1 ? "s" : ""} you`)))
-      .child(div().flex_1())
+      .child(this.hud ? caps(label, 12.5, 600).truncate().text_color(color ?? t.dim) : div().truncate().text_color(color ?? t.dim).child(label))
+      .child(this.hud ? readout(t, count, { status: needs > 0 ? t.blocked : null, h: 16 }) : div().text_color(t.dim).child(String(count)))
+      .when(needs > 0, (el) => el.child(this.hud ? caps(`${needs} need${needs === 1 ? "s" : ""} you`, 12, 600).text_color(t.accent)
+        : div().text_color(t.accent).child(`\u00b7 ${needs} need${needs === 1 ? "s" : ""} you`)))
+      .child(this.hud ? div().flex_1().h(1).bg(t.accent + "33") : div().flex_1())
       .when(!open, (el) => el
         .when(Boolean(top) && top !== "idle", (el) => el.child(this.paneStatus(t, top, true)))
         .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
@@ -519,8 +539,9 @@ export default class Agents extends View {
       .hover((el) => el.bg(tint ? tint + "33" : remote ? REMOTE_HOVER : t.hover))
       .on_click((_e, cx) => this.fold(s.key, cx))
       .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim))
-      .child(div().min_w(0).truncate().font_medium().text_color(top === "input" ? t.accent : top === "error" ? t.ansi1 : t.foreground).child(s.name))
-      .child(div().text_size(11).text_color(t.dim).child(String(s.panes.length)))
+      .child(div().min_w(0).truncate().font_medium().text_color(top === "input" ? t.accent : top === "error" ? t.ansi1 : t.foreground)
+        .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(14)).child(s.name))
+      .child(this.hud ? readout(t, s.panes.length, { h: 16 }) : div().text_size(11).text_color(t.dim).child(String(s.panes.length)))
       .child(div().flex_1())
       .when(!open && top !== "idle", (el) => el.child(this.paneStatus(t, top, true)));
   }
@@ -582,13 +603,14 @@ export default class Agents extends View {
       .on_click((_e, cx) => click(cx))
       .when(on, (el) => el.child(div().absolute().right(0).top(0).bottom(0).w(3).bg(FOCUS_EDGE)))
       // A short bar at the row's edge: this is waiting on you (pink) or failed (red).
-      .when(x.state === "input" || x.state === "error", (el) => el.child(div().absolute().left(3).top(6).w(2).h(16).rounded(1).bg(x.state === "error" ? t.ansi1 : t.accent)))
+      .when(x.state === "input" || x.state === "error", (el) => el.child(div().absolute().left(3).top(6).w(2).h(16).rounded(this.sq(1)).bg(x.state === "error" ? t.ansi1 : t.accent)))
       .child(this.connector(t, last))
       .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-        .child(div().min_w(0).flex_none().max_w(msg ? 130 : 220).truncate().text_color(quiet && !on ? t.muted : t.foreground).child(x.label))
+        .child(div().min_w(0).flex_none().max_w(msg ? 130 : 220).truncate().text_color(quiet && !on ? t.muted : t.foreground)
+          .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(14)).child(x.label))
         .when(Boolean(msg), (el) => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${msg}`))))
-      .when(Boolean(wake) && !goalWait, (el) => el.child(div().flex_none().ml(6).text_size(11).text_color(t.ansi5).child(countdown(x.resumeAt - now))))
-      .when(!(wake && !goalWait) && Boolean(x.since), (el) => el.child(div().flex_none().ml(6).text_size(11).text_color(t.dim).child(duration(now - x.since))))
+      .when(Boolean(wake) && !goalWait, (el) => el.child(div().flex_none().ml(6).text_size(11).text_color(t.ansi5).when(this.hud, (e) => e.font_family(mono())).child(countdown(x.resumeAt - now))))
+      .when(!(wake && !goalWait) && Boolean(x.since), (el) => el.child(div().flex_none().ml(6).text_size(11).text_color(t.dim).when(this.hud, (e) => e.font_family(mono())).child(duration(now - x.since))))
       .when(Boolean(x.state), (el) => el.child(div().ml(8).flex_none().child(this.paneStatus(t, x.state))));
   }
 
@@ -622,6 +644,7 @@ export default class Agents extends View {
     const repo = tree || same(g.name) ? "" : g.name;
     const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
     return h_flex().flex_auto().min_w(where ? SIDE_MIN : 0).gap(5).justify_end().items_center().text_size(11).text_color(t.dim)
+      .when(this.hud, (el) => el.font_family(mono()))
       .when(Boolean(where), (el) => el.child(div().min_w(0).truncate().child(where)))
       .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`\u2191${g.ahead}`)))
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
@@ -629,7 +652,8 @@ export default class Agents extends View {
 
   menu(w) {
     // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+    // netrunner opens the HUD copy of Herdr's menu, frameless since it draws its own frame.
+    openOverlay({ mod: this.hud ? "menu-tmux" : "menu", kind: "popup", width: 200, height: 260, ...(this.hud ? { frame: "none" } : {}), props: { tab: "space", target: { id: w.id } } });
   }
 
   // A machine's header (m "": this computer): its name, its spaces and how many of their tabs need you, + for a new
@@ -669,10 +693,13 @@ export default class Agents extends View {
       })
       .child(this.grip(t, ghost || this.hoverRow === key, 10, MACHINE_GRIP))
       .child(svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(12).flex_none().text_color(color ?? t.dim))
-      .child(div().truncate().text_color(color ?? t.dim).child(m || (window()?.platform === "macos" ? "This Mac" : "This computer")))
-      .child(div().text_color(t.dim).child(String(count)))
-      .when(needs > 0, (el) => el.child(div().text_color(t.accent).child(`\u00b7 ${needs} need${needs === 1 ? "s" : ""} you`)))
-      .child(div().flex_1())
+      .child(!this.hud ? div().truncate().text_color(color ?? t.dim).child(m || (window()?.platform === "macos" ? "This Mac" : "This computer"))
+        : m ? div().truncate().font_family(display()).font_weight(700).text_size(13.5).text_color(color).child(m)
+          : caps(window()?.platform === "macos" ? "This Mac" : "This computer", 13.5, 700).truncate().text_color(t.accent))
+      .child(this.hud ? readout(t, count, { status: needs > 0 ? t.blocked : null, h: 16 }) : div().text_color(t.dim).child(String(count)))
+      .when(needs > 0, (el) => el.child(this.hud ? caps(`${needs} need${needs === 1 ? "s" : ""} you`, 12, 600).text_color(t.accent)
+        : div().text_color(t.accent).child(`\u00b7 ${needs} need${needs === 1 ? "s" : ""} you`)))
+      .child(this.hud ? div().flex_1().h(1).bg(t.accent + "33") : div().flex_1())
       .when(info?.keeps_running_after_logout === false, (el) => el.child(div().id(`machine-logout-${m}`).flex_none().text_color(t.blocked)
         .tooltip("Agents stop when you disconnect. Click for the fix.")
         .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "machine-add", kind: "dialog", width: 560 }); })
@@ -683,11 +710,12 @@ export default class Agents extends View {
         .tooltip(repair?.error || "This machine was rebuilt or replaced. Click to connect to the new one.")
         .on_click((_e, cx) => { cx.stop_propagation(); d.reconnect(info, cx); })
         .child(repair?.busy ? "Connecting\u2026" : repair?.error || "rebuilt \u00b7 Connect")))
-      .when(connected, (el) => el.child(div().id(`machine-add-${m || "local"}`).flex_none().p(2).rounded(4)
+      .when(connected, (el) => el.child(div().id(`machine-add-${m || "local"}`).flex_none().p(2).rounded(this.sq(4))
+        .when(this.hud, (s) => s.text_color(t.accent))
         .tooltip(`New space on ${m || "this computer"}`).hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m }); })
         .child(svg("mods/workspace-chrome/plus.svg").size(12))))
-      .when(Boolean(m), (el) => el.child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim)))
+      .when(Boolean(m), (el) => el.child(div().size(6).rounded(this.sq(3)).flex_none().bg(connected ? t.ansi2 : t.dim)))
       .when(!open, (el) => el
         .when(Boolean(top) && top !== "idle", (el) => el.child(this.paneStatus(t, top, true)))
         .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
@@ -699,7 +727,7 @@ export default class Agents extends View {
       .child(div().text_size(11).text_color(t.blocked).child("needs a login: run"))
       .child(h_flex().gap(5).items_center()
         .child(div().flex_1().min_w(0).truncate().tooltip(login).text_size(11).text_color(t.muted).child(login))
-        .child(div().id(`machine-login-copy-${m}`).flex_none().px(5).py(2).rounded(4).text_size(11).text_color(t.foreground)
+        .child(div().id(`machine-login-copy-${m}`).flex_none().px(5).py(2).rounded(this.sq(4)).text_size(11).text_color(t.foreground)
           .bg(t.raised).cursor_pointer().hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
           .child(this.copiedLogin === login ? "Copied" : "Copy")));
@@ -717,6 +745,18 @@ export default class Agents extends View {
   // A space on a wash of its colour: its tile (a worktree: the branch sign, under its checkout), name, tab count and
   // git, and folded its most urgent state. A click goes to it, the chevron folds its tabs, right-click opens its menu,
   // and a drag (by the whole row) moves it among its machine's spaces. ghost: drawn in the lifted copy, its grip lit.
+  // A space's sigil, kept from the first time it shows: the first one no other space has, else one by the name's hash
+  // once every sigil is taken.
+  sigilOf(w) {
+    const key = `${w.machine ?? ""}/${w.name}`;
+    if (!this.sigils[key]) {
+      const used = new Set(Object.values(this.sigils));
+      this.sigils[key] = NAMES.find((n) => !used.has(n)) ?? NAMES[[...key].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7) % NAMES.length];
+      localStorage.setItem("sigils", JSON.stringify(this.sigils));
+    }
+    return this.sigils[key];
+  }
+
   spaceRow(t, r, ghost = false) {
     const { w, g, tree, color, top } = r;
     const open = !this.folded.has(r.key);
@@ -743,17 +783,20 @@ export default class Agents extends View {
         run("space.select", { id: w.id });
       })
       .child(this.grip(t, ghost || this.hoverRow === r.key))
-      .child(div().id(`fold-${r.key}`).flex_none().p(2).rounded(4).hover((s) => s.bg(t.hover))
+      .child(div().id(`fold-${r.key}`).flex_none().p(2).rounded(this.sq(4)).hover((s) => s.bg(t.hover))
         .on_click((_e, cx) => { cx.stop_propagation(); this.fold(r.key, cx); })
         .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).text_color(t.dim)))
       .child(tree
         ? svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)
+        : this.hud ? sigil(t, this.sigilOf(w), color, 18, { on: w.active, state: top })
         : h_flex().size(16).flex_none().rounded(4).bg(color).items_center().justify_center().text_size(9.5).font_bold()
           .text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?"))
       .child(h_flex().flex_initial().min_w(SIDE_MIN).gap(6).items_center()
         .child(div().min_w(0).truncate().font_medium()
+          .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(15))
           .text_color(top === "input" ? t.accent : top === "error" ? t.ansi1 : t.foreground).child(w.name))
-        .when(r.tabs.length > 1, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(String(r.tabs.length)))))
+        .when(r.tabs.length > 1, (el) => el.child(this.hud ? readout(t, r.tabs.length, { h: 16 })
+          : div().flex_none().text_size(11).text_color(t.dim).child(String(r.tabs.length)))))
       .child(g ? this.gitTail(t, g, tree, w.name) : div().flex_1())
       .when(!open && Boolean(top) && top !== "idle", (el) => el.child(this.paneStatus(t, top, true)));
   }
@@ -783,7 +826,7 @@ export default class Agents extends View {
       .py(6)
       .gap(2)
       .items_center()
-      .rounded(8)
+      .rounded(this.sq(8))
       .shadow_md()
       .border_1()
       .border_color((remote ? REMOTE : color) + (on ? "aa" : "40"))
@@ -791,14 +834,19 @@ export default class Agents extends View {
       .hover((st) => st.bg(remote ? REMOTE_HOVER : color + "2b"))
       .tooltip(`${remote ? `${w.machine}/` : ""}${w.name}${msg ? ` \u00b7 ${msg}` : ""}`)
       .on_click(() => run("space.select", { id: w.id }))
-      .child(h_flex().relative().size(26).rounded(8).items_center().justify_center()
+      .child(h_flex().relative().size(26).rounded(this.sq(8)).items_center().justify_center()
         .border_1().border_color(on ? t.accent : "#00000000")
         .when(on, (el) => el.bg(remote ? REMOTE_SELECTED : t.selected))
-        .child(h_flex().size(18).rounded(5).bg(color).items_center().justify_center().text_size(10.5).font_bold()
-          .text_color("#ffffff").opacity(on || lit ? 1 : 0.7).child([...w.name][0]?.toUpperCase() ?? "?"))
-        .when(r.tabs.length > 1, (el) => el.child(div().absolute().bottom(-3).left(-3).h(12).min_w(12).px(2).rounded(6)
-          .bg(t.chrome).border_1().border_color(t.border).flex().items_center().justify_center().text_size(8.5)
-          .text_color(t.muted).child(String(r.tabs.length)))))
+        .child(this.hud ? sigil(t, this.sigilOf(w), color, 20, { on, state: top })
+          : h_flex().size(18).rounded(5).bg(color).items_center().justify_center().text_size(10.5).font_bold()
+            .text_color("#ffffff").opacity(on || lit ? 1 : 0.7).child([...w.name][0]?.toUpperCase() ?? "?"))
+        // The tab count: in the HUD a cyan count in the sigil's cut top-right corner, clear of the glyph.
+        .when(r.tabs.length > 1, (el) => el.child(this.hud
+          ? div().absolute().top(-3).right(-3).h(12).min_w(12).px(2).bg(t.working).flex().items_center().justify_center()
+            .font_family(mono()).font_weight(700).text_size(8.5).text_color(INK).child(String(r.tabs.length))
+          : div().absolute().bottom(-3).left(-3).h(12).min_w(12).px(2).rounded(6)
+            .bg(t.chrome).border_1().border_color(t.border).flex().items_center().justify_center().text_size(8.5)
+            .text_color(t.muted).child(String(r.tabs.length)))))
       .child(div().max_w(60).truncate().text_size(9.5).text_color(on ? t.foreground : remote ? REMOTE : t.muted).child(w.name))
       .when(r.agents.length > 0, (el) => el.child(this.agentDots(t, r.agents)));
   }
@@ -809,8 +857,8 @@ export default class Agents extends View {
     const dot = (s) => {
       const color = s === "input" ? t.accent : s === "error" ? t.ansi1 : s === "working" ? t.working
         : s === "background" ? t.ansi5 : s === "done" || s === "partial" ? t.done : (t.idle ?? t.dim);
-      if (!s || s === "idle") return div().size(5).rounded(3).border_1().border_color(color);
-      return div().size(5).rounded(3).bg(color)
+      if (!s || s === "idle") return div().size(5).rounded(this.sq(3)).border_1().border_color(color);
+      return div().size(5).rounded(this.sq(3)).bg(color)
         .when(Boolean(RAIL_PULSE[s]), (el) => el.loop("opacity", { from: 0.3, to: 1, period: RAIL_PULSE[s] }));
     };
     return h_flex().flex_wrap().justify_center().gap(3).max_w(46).mt(1).children(states.map(dot));
@@ -893,23 +941,26 @@ export default class Agents extends View {
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
-      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
+      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted)
+        .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(14)).child(k.name || k.template || k.program?.name || k.address))
       .child(this.status(t, { status: st }, compact));
   }
 
   // compact: a ! for blocked where a header already says "Needs you".
   status(t, a, compact = false) {
     const color = t[a.status] ?? t.dim;
-    if (a.status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
-    if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(4).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
+    if (a.status === "working") return this.hud ? spinner(t.working, 12, 900).mx(1) : svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
+    if (a.status === "blocked" && compact) return div().size(14).flex_none().rounded(this.sq(4)).bg(t.blocked + "26").text_size(10.5).font_bold().text_color(t.blocked).flex().items_center().justify_center().child("!");
+    if (a.status === "blocked" && this.hud) return this.chip(t.blocked, "Needs you");
     if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
     // Idle: a ring; done: a dot.
-    if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
-    return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
+    if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(this.sq(4)).border(1.5).border_color(t.idle ?? t.dim);
+    return div().size(7).mx(3).flex_none().rounded(this.sq(4)).bg(a.status === "done" ? color : t.dim + "00");
   }
 
   render(cx) {
     const t = theme();
+    this.hud = isHud();
     if (props()?.sortMenu) return this.sortMenu(t);
     const collapsed = narrow();
     const sort = sortOf();
@@ -966,7 +1017,7 @@ export default class Agents extends View {
         .gap(3)
         .flex()
         .items_center()
-        .rounded(4)
+        .rounded(this.sq(4))
         .text_size(11)
         .text_color(open ? t.dim : (t[top] ?? t.dim))
         .cursor_pointer()
@@ -1025,7 +1076,7 @@ export default class Agents extends View {
         .id(`pin-${a.address}`)
         .flex_none()
         .p(2)
-        .rounded(4)
+        .rounded(this.sq(4))
         .text_color(t.dim)
         .cursor_pointer()
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
@@ -1066,7 +1117,8 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
+          .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground)
+            .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(14)).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(REMOTE + "a0").child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
@@ -1105,8 +1157,8 @@ export default class Agents extends View {
           open ? this.folded.add(g.id) : this.folded.delete(g.id);
           cx.notify();
         })
-        .child(div().truncate().text_color(t[g.status] ?? t.dim).child(g.label))
-        .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
+        .child(this.hud ? caps(g.label, 12.5, 600).truncate().text_color(t[g.status] ?? t.dim) : div().truncate().text_color(t[g.status] ?? t.dim).child(g.label))
+        .when(byPriority || !open, (el) => el.child(this.hud ? readout(t, g.members.length, { h: 16 }) : div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
         .when(!open, (el) => el
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
@@ -1285,7 +1337,7 @@ export default class Agents extends View {
       .text_size(13)
       // On the rail the list is named too; the sidebar's toggle is at its top (workspace-chrome-tmux).
       .when(collapsed, (el) => el.child(h_flex().h(31).flex_none().justify_center().items_center().text_size(9).font_semibold()
-        .text_color(t.dim).child("SPACES")))
+        .text_color(t.dim).child(this.hud ? caps("Spaces", 10.5, 700) : "SPACES")))
       .when(!collapsed, (el) =>
         el.child(
           h_flex()
@@ -1296,7 +1348,7 @@ export default class Agents extends View {
             .flex_none()
             .items_center()
             .justify_between()
-            .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Spaces"))
+            .child(this.hud ? hudTitle(t, "Spaces", 14) : div().text_size(11.5).font_medium().text_color(t.dim).child("Spaces"))
             .child(
               h_flex()
                 .gap(10)
@@ -1317,7 +1369,7 @@ export default class Agents extends View {
                     .text_size(11)
                     .text_color(t.dim)
                     .hover((s) => s.text_color(t.foreground))
-                    .on_click(() => openOverlay({ mod: "agents-tmux", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
+                    .on_click(() => openOverlay({ mod: "agents-tmux", kind: "popup", width: 200, height: 140, ...(this.hud ? { frame: "none" } : {}), props: { sortMenu: true } }))
                     .tooltip(`Sort agents outside tmux: ${sort.label}`)
                     .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
                 )),

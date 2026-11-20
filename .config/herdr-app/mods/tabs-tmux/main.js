@@ -1,6 +1,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { INK, PLATE, isHud, spinner, display, frame, button as hudButton } from "./hud.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -68,30 +69,36 @@ export default class Tabs extends View {
       this.selectedIndex = active;
       if (active >= 0) this.scroll.scroll_to_item(active);
     }
+    // netrunner's HUD: cut-corner tabs, the shown one solid yellow with dark ink, the others outlined in pink.
+    const hud = isHud();
     const stop = (_e, cx) => cx.stop_propagation();
-    const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+    const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(hud ? 0 : 6).text_color(hud ? t.accent : t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program;
       const name = label(c, lead);
-      return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
+      const ink = hud && c.active ? INK : null;
+      return h_flex().id(`tab-${c.id}`).px(10).gap(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
         .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
-        .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
-        .hover(s => s.bg(t.hover))
+        .when(!hud, el => el.h(29).rounded(7).border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
+          .hover(s => s.bg(t.hover)))
+        .when(hud, el => el.relative().h(26).children(frame(6, c.active ? { bg: t.blocked } : { bg: t.accent + "0d", line: t.accent + "59" }))
+          .text_color(ink ?? t.accent).hover(s => (c.active ? s.opacity(0.9) : s.text_color(t.foreground))))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", () => {
           const from = this.pressed; this.pressed = null;
           if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
           else run("tab.select", { id: c.id });
         })
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
-        .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
-        .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
-        .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
-        .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: hud ? "menu-tmux" : "menu", kind: "popup", width: 200, ...(hud ? { frame: "none" } : {}), props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
+        .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(ink ?? (hud ? t.accent : t.muted)) : image(program.icon).size(14)))
+        .child(div().max_w(170).truncate().when(hud, el => el.relative().font_family(display()).font_weight(c.active ? 700 : 600).text_size(14))
+          .child(c.zoomed ? `${name} Z` : name))
+        .when(c.status === "working", el => el.child(hud ? spinner(ink ?? t.working, 12, 900) : svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(ink ?? t.working).spin(900)))
+        .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(hud ? 0 : 3).bg(ink ?? t[c.status])))
+        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(ink ?? t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
@@ -105,23 +112,27 @@ export default class Tabs extends View {
     const enabled = shared("workspace.panels") ?? ["files", "changes"];
     const panelButton = (id, label, icon) => {
       const on = panel && !panel.hidden && body?.active === id;
+      const toggle = () => {
+        if (on) run("layout.hide", { id: "panel" });
+        else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+      };
+      if (hud) return hudButton(t, `panel-${id}`, label, { on, icon: svg(icon).size(13).relative(), h: 24 }).on_mouse_down("left", stop).on_click(toggle);
       return h_flex().id(`panel-${id}`).h(26).px(8).gap(5).flex_none().items_center().rounded(6)
         .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
-        .on_click(() => {
-          if (on) run("layout.hide", { id: "panel" });
-          else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
-        }).child(svg(icon).size(14)).child(label);
+        .on_click(toggle).child(svg(icon).size(14)).child(label);
     };
     // The strip is the theme's chrome made solid: a layout's translucent chrome (netrunner's frosted glass) would show
     // whatever is on the desktop behind it, off the theme's colours.
-    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome.slice(0, 7)).border_b(1).border_color(t.border)
+    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(hud ? 6 : 3).items_center()
+      .bg(hud ? PLATE.slice(0, 7) : t.chrome.slice(0, 7)).border_b(1).border_color(hud ? t.accent + "73" : t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => this.wheel(e))
-      .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
+      .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(hud ? 6 : 3).overflow_x_scrollbar().track_scroll(this.scroll)
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
-      .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      // In netrunner the menus are the HUD copies of Herdr's (menu-tmux, new-menu-tmux), frameless as they draw their own.
+      .child(button("tab-new", "+", () => openOverlay({ mod: hud ? "new-menu-tmux" : "new-menu", kind: "popup", width: 250, height: 512, ...(hud ? { frame: "none" } : {}) })))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

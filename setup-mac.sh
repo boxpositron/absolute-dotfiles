@@ -52,6 +52,8 @@ local_servers
 .config/herdr-app/themes/catppuccin-latte.json
 .config/herdr-app/themes/netrunner.json
 .config/herdr-app/layouts/netrunner.json
+.config/herdr-app/themes/ash.json
+.config/herdr-app/layouts/ash.json
 .config/herdr-app/mods/omo-tmux
 .config/herdr-app/mods/picker-tmux
 .config/herdr-app/mods/workspace-chrome-tmux
@@ -70,6 +72,9 @@ local_servers
 .config/herdr-app/mods/focus-edge
 .config/herdr-app/mods/tabs-tmux
 .config/herdr-app/mods/side-fit
+.config/herdr-app/mods/menu-tmux
+.config/herdr-app/mods/new-menu-tmux
+.config/herdr-app/mods/toast-tmux
 .config/herdr-app/keys.json
 .config/omo/hooks.json:.omo/agent/hooks.json
 .config/omo/keybindings.json:.omo/agent/keybindings.json
@@ -78,6 +83,7 @@ local_servers
 .config/omo/extensions/omo-nice.ts:.omo/agent/extensions/omo-nice.ts
 .config/omo/extensions/omo-resurrect.ts:.omo/agent/extensions/omo-resurrect.ts
 .config/omo/prompts:.omo/agent/prompts
+.config/omo/themes:.omo/agent/themes
 "
 
 say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -223,15 +229,17 @@ step_links() {
     for entry in $LINKS; do
         link "${entry%%:*}" "${entry#*:}"
     done
-    # Herdr loads a program icon only from a real file in its folder, not through a link.
-    local icon=.config/herdr-app/omo.svg
-    if ! cmp -s "$DOTFILES/$icon" "$HOME/$icon"; then
-        if $DRY_RUN; then
-            info "would copy ~/$icon"
-        else
-            mkdir -p "$(dirname "$HOME/$icon")" && cp "$DOTFILES/$icon" "$HOME/$icon" && info "copied ~/$icon"
+    # Herdr loads an image (omo's program icon, the HUD spinner) only from a real file in its folder, not through a link.
+    local icon
+    for icon in .config/herdr-app/omo.svg .config/herdr-app/hud/spinner.svg; do
+        if ! cmp -s "$DOTFILES/$icon" "$HOME/$icon"; then
+            if $DRY_RUN; then
+                info "would copy ~/$icon"
+            else
+                mkdir -p "$(dirname "$HOME/$icon")" && cp "$DOTFILES/$icon" "$HOME/$icon" && info "copied ~/$icon"
+            fi
         fi
-    fi
+    done
     for script in "$DOTFILES"/.local/bin/*; do
         name=${script##*/}
         case $name in

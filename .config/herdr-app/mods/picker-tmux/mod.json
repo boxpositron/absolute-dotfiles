@@ -6,7 +6,8 @@
     "at": "top",
     "offset": 170,
     "width": 680,
-    "height": 0.8
+    "height": 0.8,
+    "frame": "none"
   },
   "cloned_from": {
     "name": "picker",

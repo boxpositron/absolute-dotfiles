@@ -21,6 +21,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { exec, home, theme, props, settings, closeOverlay } from "herdr";
+import { INK, isHud, display, frame, fill, caps, readout, button as hudButton, title as hudTitle, modalFrame } from "./hud.js";
 
 // Live sessions only, compact (no transcripts): about 12 KB where the full list is about 700 KB.
 const SESSIONS = "http://127.0.0.1:4747/api/sessions?alive=1&compact=1";
@@ -86,6 +87,16 @@ const steps = (a, b, n) => Array.from({ length: n }, (_, i) => div().flex_1().h_
 // The board is a modal over the window, so it fills with the theme's background without its alpha: a
 // see-through layout (netrunner's frosted glass) clears that colour, which would show the window through it.
 const solid = (c) => (typeof c === "string" && c.length === 9 ? c.slice(0, 7) : c);
+
+// netrunner HUD: a state chip (solid tone, dark caps, slanted end) and a keycap (a small cut-corner outline).
+const chip = (tone, label, pulse) => h_flex().h(18).flex_none()
+  .child(h_flex().h_full().pl(7).pr(3).gap(6).items_center().bg(tone).text_color(INK)
+    .child(div().size(6).bg(INK).when(pulse, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1800 })))
+    .child(caps(label, 12, 700)))
+  .child(div().relative().w(8).h_full().child(fill([[["0%", "0%"], ["100%", "0%"], ["0%", "100%"]]], tone)));
+const keycap = (t, id, label, tone) => h_flex().id(id).relative().px(8).h(24).flex_none().items_center().cursor_pointer()
+  .children(frame(4, { line: tone + "80" })).text_color(tone).hover((st) => st.text_color(t.foreground))
+  .child(caps(label, 12, 700).relative());
 
 export default class Board extends View {
   // The last answer, kept in localStorage, shows at once; a fresh one follows. curl rather than fetch, because
@@ -238,6 +249,10 @@ export default class Board extends View {
   }
 
   shell(t, id, tone, body) {
+    if (this.hud) return h_flex().id(id).relative().items_stretch().flex_none().hover((st) => st.opacity(0.85))
+      .children(frame(8, { bg: tone + "0f", line: tone + "80" }))
+      .child(div().w(3).mb(8).flex_none().bg(tone))
+      .child(v_flex().flex_1().min_w(0).px(11).py(9).gap(4).child(body));
     return h_flex().id(id).items_stretch().flex_none().rounded(4).overflow_hidden().bg(t.chrome).border_1().border_color(t.border)
       .hover((st) => st.bg(t.hover).border_color(tone + "b3"))
       .child(div().w(3).flex_none().bg(tone))
@@ -251,17 +266,19 @@ export default class Board extends View {
   parkedCard(t, s, now) {
     const tone = t[TONE.parked], next = s.handoff?.next;
     return this.shell(t, `parked-${s.machine}-${s.sid}`, tone, v_flex().gap(4)
-      .child(div().truncate().font_semibold().text_color(t.foreground).child(s.name || s.project || "omo session"))
+      .child(div().truncate().font_semibold().text_color(t.foreground)
+        .when(this.hud, (el) => el.font_family(display()).text_size(14.5)).child(s.name || s.project || "omo session"))
       .child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(this.where(s)))
       .when(Boolean(s.excerpt), (el) => el.child(div().text_size(11.5).line_height(1.4).max_h(48).overflow_hidden().text_color(t.muted).child(s.excerpt)))
       .when(Boolean(next), (el) => el.child(div().truncate().text_size(11.5).text_color(t.muted).child(`Next: ${next}`)))
       .child(h_flex().pt(3).gap(8).items_center().font_family(mono()).text_size(10.5).text_color(t.dim)
         .child(ago(now - s.parkedAt))
         .child(div().flex_1())
-        .child(div().id(`fresh-${s.machine}-${s.sid}`).px(6).h(20).flex().items_center().rounded(3).border_1().border_color(tone + "66")
-          .text_color(tone).cursor_pointer().hover((st) => st.bg(tone + "1f")).tooltip("Start a new session from this handoff")
-          .on_click((_e, cx) => { cx.stop_propagation(); this.reopen(s, true, cx); })
-          .child("START FRESH"))))
+        .child((this.hud ? hudButton(t, `fresh-${s.machine}-${s.sid}`, "Start fresh", { tone, h: 20 })
+          : div().id(`fresh-${s.machine}-${s.sid}`).px(6).h(20).flex().items_center().rounded(3).border_1().border_color(tone + "66")
+            .text_color(tone).cursor_pointer().hover((st) => st.bg(tone + "1f")).child("START FRESH"))
+          .tooltip("Start a new session from this handoff")
+          .on_click((_e, cx) => { cx.stop_propagation(); this.reopen(s, true, cx); }))))
       .cursor_pointer().tooltip("Reopen this session").on_click((_e, cx) => this.reopen(s, false, cx));
   }
 
@@ -273,12 +290,13 @@ export default class Board extends View {
     const done = progress(s);
     const canOpen = Boolean(s.tmux);
     return this.shell(t, `card-${s.machine}-${s.sid}`, tone, v_flex().gap(4)
-      .child(div().truncate().font_semibold().text_color(t.foreground).child(s.name || s.project || "omo session"))
+      .child(div().truncate().font_semibold().text_color(t.foreground)
+        .when(this.hud, (el) => el.font_family(display()).text_size(14.5)).child(s.name || s.project || "omo session"))
       .child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(this.where(s)))
       .when(Boolean(text), (el) => el.child(div().text_size(11.5).line_height(1.4).max_h(48).overflow_hidden()
         .text_color(key === "needs" ? t.foreground : t.muted).child(text)))
       .child(h_flex().pt(3).gap(8).items_center().font_family(mono()).text_size(10.5).text_color(t.dim)
-        .child(div().size(6).flex_none().rounded(3).bg(heat))
+        .child(div().size(6).flex_none().rounded(this.hud ? 0 : 3).bg(heat))
         .child(ago(age))
         .when(Boolean(s.resumeAt), (el) => el.child(div().text_color(t.ansi5).child(`resumes ${countdown(s.resumeAt - now)}`)))
         .when(Boolean(done), (el) => el.child(h_flex().gap(4).items_center()
@@ -288,8 +306,42 @@ export default class Board extends View {
       .when(!canOpen, (el) => el.tooltip("Not in tmux, so it can't be shown from here"));
   }
 
+  // netrunner HUD header: the title, a live chip and the count line in capitals, a search button and an Esc keycap.
+  hudHeader(t, now, live, stale, machines) {
+    const status = this.problem ? "Offline" : stale ? `Stale ${ago(now - this.fetchedAt)}` : "Live";
+    const line = this.problem ?? `${this.sessions.length} sessions · ${machines} machine${machines === 1 ? "" : "s"} · ${this.parked.length} parked`;
+    return h_flex().h(62).flex_none().px(22).gap(14).items_center().border_b(1).border_color(t.accent + "33")
+      .child(v_flex().gap(4)
+        .child(h_flex().gap(12).items_center().child(hudTitle(t, "omo board", 18)).child(chip(live, status, !this.problem && !stale)))
+        .child(caps(line, 12).text_color(this.problem ? t.ansi1 : t.dim)))
+      .child(div().flex_1())
+      .child(h_flex().id("board-search").relative().px(8).h(26).gap(6).items_center().flex_none().cursor_pointer()
+        .children(frame(5, { bg: t.working + "14", line: (this.searching ? t.accent : t.working) + "b3" }))
+        .text_color(this.searching ? t.accent : t.working).hover((st) => st.text_color(t.foreground)).tooltip("Search the board (/)")
+        .on_click((_e, cx) => this.search(true, cx))
+        .child(svg("mods/workspace-chrome/search.svg").size(12).relative())
+        .child(div().relative().font_family(mono()).text_size(11).font_bold().child("/")))
+      .child(keycap(t, "board-esc", "Esc", t.working).tooltip("Close (Esc)").on_click(() => this.close()));
+  }
+
+  // The search bar in a cut-corner frame.
+  hudSearch(t, filtering, hits) {
+    return h_flex().when(!this.query, (bar) => bar.key_context("OmoBoardSearchEmpty"))
+      .on_action("omo-board-backspace", (_e, cx) => this.search(false, cx))
+      .relative().h(40).flex_none().mx(20).mt(14).pl(12).pr(10).gap(10).items_center()
+      .children(frame(8, { bg: t.accent + "0d", line: t.accent + "b3" }))
+      .child(div().font_family(mono()).text_size(13).font_bold().text_color(t.accent).child("/"))
+      .child(Input.new(this.input).flex_1().h_full().text_size(12.8).text_color(t.foreground))
+      .child(caps(filtering ? `${String(hits).padStart(2, "0")} match${hits === 1 ? "" : "es"}` : "Type to filter", 12, 700).flex_none()
+        .text_color(filtering ? (hits ? t.working : t.ansi1) : t.dim))
+      .child(keycap(t, "board-search-esc", this.query ? "Esc clear" : "Esc close", t.working)
+        .tooltip(this.query ? "Clear (Esc)" : "Close the search (Esc)")
+        .on_click((_e, cx) => (this.query ? (this.input.set_value(""), (this.query = ""), this.input.focus(), cx.notify()) : this.search(false, cx))));
+  }
+
   render() {
     const t = theme();
+    this.hud = isHud();
     const now = Date.now();
     this.paintedAt = now;
     const groups = Object.fromEntries(COLUMNS.map(([key]) => [key, []]));
@@ -314,12 +366,14 @@ export default class Board extends View {
       const list = groups[key], tone = t[TONE[key]] ?? t.dim, lit = list.length > 0;
       return v_flex().flex_1().min_w(0).h_full().gap(10)
         .child(v_flex().flex_none().gap(7)
-          .child(h_flex().h(20).gap(8).items_center()
-            .when(key === "needs" && lit, (el) => el.child(div().size(7).flex_none().rounded(4).bg(tone).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
-            .child(div().font_family(mono()).text_size(11.5).font_bold().text_color(lit ? tone : t.dim).child(title.toUpperCase()))
+          .child(h_flex().h(this.hud ? 22 : 20).gap(8).items_center()
+            .when(key === "needs" && lit && !this.hud, (el) => el.child(div().size(7).flex_none().rounded(4).bg(tone).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
+            .child(this.hud ? caps(title, 14, 700).text_color(lit ? tone : t.dim)
+              : div().font_family(mono()).text_size(11.5).font_bold().text_color(lit ? tone : t.dim).child(title.toUpperCase()))
             .child(div().flex_1())
-            .child(div().px(6).h(18).flex().items_center().rounded(3).border_1().border_color(lit ? tone + "73" : t.border)
-              .font_family(mono()).text_size(10.5).text_color(lit ? tone : t.dim).child(String(list.length).padStart(2, "0"))))
+            .child(this.hud ? readout(t, String(list.length).padStart(2, "0"), { status: lit ? tone : null, pulse: key === "needs" && lit })
+              : div().px(6).h(18).flex().items_center().rounded(3).border_1().border_color(lit ? tone + "73" : t.border)
+                .font_family(mono()).text_size(10.5).text_color(lit ? tone : t.dim).child(String(list.length).padStart(2, "0"))))
           .child(h_flex().h(2).flex_none().child(div().w(48).h_full().bg(lit ? tone : t.border)).child(div().flex_1().h_full().bg(lit ? tone + "2e" : t.border))))
         .child(v_flex().id(`col-${key}`).flex_1().min_h(0).gap(8).overflow_y_scrollbar()
           .when(!lit, (el) => el.child(div().px(2).py(4).font_family(mono()).text_size(11).text_color(t.dim).child(filtering ? "// no matches" : this.loaded ? "// empty" : "// loading")))
@@ -331,12 +385,9 @@ export default class Board extends View {
       .track_focus(this.handle)
       .size_full()
       .min_h(0)
-      .rounded(6)
       .overflow_hidden()
-      .bg(solid(t.background))
-      .border_1()
-      .border_color(t.accent + "d9")
-      .shadow_2xl()
+      .when(!this.hud, (el) => el.rounded(6).bg(solid(t.background)).border_1().border_color(t.accent + "d9").shadow_2xl())
+      .when(this.hud, (el) => el.relative().children(modalFrame(t, 16)))
       .text_size(13)
       .text_color(t.foreground)
       .key_context("OmoBoard")
@@ -349,8 +400,8 @@ export default class Board extends View {
           return this.search(true, cx);
         }
       })
-      .child(h_flex().h(3).flex_none().children(steps(t.accent.slice(0, 7), t.working.slice(0, 7), 24)))
-      .child(h_flex().h(62).flex_none().px(22).gap(14).items_center().border_b(1).border_color(t.border)
+      .child(h_flex().h(3).flex_none().when(this.hud, (el) => el.mr(16)).children(steps(t.accent.slice(0, 7), t.working.slice(0, 7), 24)))
+      .child(this.hud ? this.hudHeader(t, now, live, stale, machines) : h_flex().h(62).flex_none().px(22).gap(14).items_center().border_b(1).border_color(t.border)
         .child(h_flex().h(30).gap(3).flex_none().items_end().child(div().w(4).h(30).bg(t.accent)).child(div().w(4).h(18).bg(t.working)))
         .child(v_flex().gap(3)
           .child(h_flex().gap(10).items_center()
@@ -375,7 +426,7 @@ export default class Board extends View {
           .child("ESC")))
       // Backspace closes an empty search: its binding matches only while the field is empty, so with text
       // the field's own Backspace deletes as usual.
-      .when(this.searching, (el) => el.child(h_flex().when(!this.query, (bar) => bar.key_context("OmoBoardSearchEmpty"))
+      .when(this.searching, (el) => el.child(this.hud ? this.hudSearch(t, filtering, hits) : h_flex().when(!this.query, (bar) => bar.key_context("OmoBoardSearchEmpty"))
         .on_action("omo-board-backspace", (_e, cx) => this.search(false, cx))
         .h(40).flex_none().mx(20).mt(14).pl(12).pr(10).gap(10).items_center()
         .rounded(4).border_1().border_color(t.accent + "b3").bg(t.chrome)
@@ -389,7 +440,7 @@ export default class Board extends View {
           .on_click((_e, cx) => (this.query ? (this.input.set_value(""), (this.query = ""), this.input.focus(), cx.notify()) : this.search(false, cx)))
           .child(this.query ? "ESC CLEAR" : "ESC CLOSE"))))
       .child(h_flex().flex_1().min_h(0).px(20).pt(16).pb(14).gap(14).children(COLUMNS.map(col)))
-      .child(h_flex().h(28).flex_none().px(22).gap(8).items_center().border_t(1).border_color(t.border)
+      .child(h_flex().h(28).flex_none().px(22).gap(8).items_center().border_t(1).border_color(this.hud ? t.accent + "33" : t.border)
         .font_family(mono()).text_size(10.5).text_color(t.dim)
         .child(div().text_color(t.accent).child(">"))
         .child(this.searching ? "enter shows the first match · esc clears, then closes the search" : "click a card to show it in Herdr · a parked card reopens it · / searches")

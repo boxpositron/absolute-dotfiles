@@ -57,6 +57,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, Editor, EditorState } from "gpui-base";
 import { exec, home, appHome, theme, props, settings, fonts, watchFolder, readTextFile, notify, openOverlay, closeOverlay, nextCommand, shared, terminals, hc, layout, run as herdrRun } from "herdr";
 import { fileIcon } from "./file-icons.js";
+import { PLATE, isHud, display, frame, modalFrame, caps, button as hudButton } from "./hud.js";
 
 const EDITOR = "files-nvim";
 // Another machine's things, as the Agents tree marks them.
@@ -248,7 +249,8 @@ const monoFont = () => {
 function codeState(lang, value, size, lineNumbers, wrap = false) {
   const t = theme();
   const opts = { readonly: true, value, font_family: monoFont(), font_size: size, line_numbers: lineNumbers, folding: lineNumbers, soft_wrap: wrap,
-    syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } };
+    syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6,
+      ...(lineNumbers && isHud() ? { line_number: t.dim } : {}) } };
   try { return EditorState.new({ ...opts, language: lang ?? "text" }); } catch { return EditorState.new({ ...opts, language: "text" }); }
 }
 
@@ -932,13 +934,22 @@ export default class Preview extends View {
 
   // ---- drawing ------------------------------------------------------------
 
+  // netrunner's HUD: an icon or glyph in a cut-corner cyan frame.
+  hudSquare(t, id, tip, onClick, child) {
+    return div().id(id).relative().size(24).flex_none().flex().items_center().justify_center().cursor_pointer()
+      .children(frame(5, { bg: t.working + "14", line: t.working + "80" })).text_color(t.working).hover((s) => s.text_color(t.foreground))
+      .tooltip(tip).on_click((_e, cx) => onClick(cx)).child(child);
+  }
+
   button(t, id, icon, tip, onClick) {
+    if (this.hud) return this.hudSquare(t, id, tip, onClick, svg(icon).size(14).relative());
     return div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover)).tooltip(tip).on_click((_e, cx) => onClick(cx))
       .child(svg(icon).size(14).text_color(t.muted));
   }
 
   segment(t, id, label, on, onClick) {
+    if (this.hud) return hudButton(t, id, label, { on, h: 22 }).on_click((_e, cx) => onClick(cx));
     return div().id(id).h(22).px(8).flex().items_center().rounded(5).cursor_pointer().text_size(12)
       .text_color(on ? t.foreground : t.dim).when(on, (el) => el.bg(t.selected)).hover((s) => s.bg(on ? t.selected : t.hover))
       .on_click((_e, cx) => onClick(cx)).child(label);
@@ -946,12 +957,16 @@ export default class Preview extends View {
 
   // Where this file sits among the previewable files beside it, with arrows to the ones around it.
   navPill(t, n) {
-    const arrow = (id, icon, target, tip, delta) => div().id(id).size(20).flex_none().flex().items_center().justify_center().rounded(5)
-      .when(Boolean(target), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(`${tip}: ${target}`).on_click((_e, cx) => this.step(delta, cx)))
-      .child(svg(icon).size(12).text_color(target ? t.muted : t.border));
-    return h_flex().flex_none().items_center().gap(1).p(1).rounded(6).bg(t.surface)
+    const hud = this.hud;
+    const arrow = (id, icon, target, tip, delta) => div().id(id).size(20).flex_none().flex().items_center().justify_center().when(!hud, (el) => el.rounded(5))
+      .when(Boolean(target), (el) => el.cursor_pointer().hover((s) => (hud ? s.text_color(t.foreground) : s.bg(t.hover))).tooltip(`${tip}: ${target}`).on_click((_e, cx) => this.step(delta, cx)))
+      .when(hud, (el) => el.relative().text_color(target ? t.working : t.dim + "66"))
+      .child(svg(icon).size(12).when(!hud, (s) => s.text_color(target ? t.muted : t.border)).when(hud, (s) => s.relative()));
+    return h_flex().flex_none().items_center().gap(1)
+      .when(!hud, (el) => el.p(1).rounded(6).bg(t.surface))
+      .when(hud, (el) => el.relative().h(22).px(4).children(frame(5, { bg: t.working + "0f", line: t.working + "59" })))
       .child(arrow("pv-prev", "mods/workspace-chrome/chevron-left.svg", n.prev, "Previous file (\u2190)", -1))
-      .when(n.index >= 0, (el) => el.child(div().px(3).text_size(11).text_color(t.dim).child(`${n.index + 1} / ${n.count}`)))
+      .when(n.index >= 0, (el) => el.child(div().px(3).text_size(11).text_color(hud ? t.working : t.dim).when(hud, (e) => e.relative().font_family(monoFont())).child(`${n.index + 1} / ${n.count}`)))
       .child(arrow("pv-next", "mods/workspace-chrome/chevron-right.svg", n.next, "Next file (\u2192)", 1));
   }
 
@@ -966,38 +981,46 @@ export default class Preview extends View {
     if (v?.meta && v.kind !== "folder") meta.push(fmtSize(v.meta.size));
     if (v?.meta) meta.push(`Modified ${fmtDate(v.meta.mtime)}`);
     if (v?.formatted) meta.push("formatted");
-    return v_flex().flex_none().gap(1).px(12).py(7).border_b(1).border_color(t.border)
+    return v_flex().flex_none().gap(1).px(this.hud && this.zen ? 20 : 12).py(this.hud && this.zen ? 9 : 7).border_b(1).border_color(this.hud ? t.accent + "59" : t.border)
       .child(h_flex().h(28).gap(6).items_center()
-        .when(Boolean(this.panel), (el) => el.child(h_flex().id("pv-files").h(24).px(6).gap(4).flex_none().items_center().rounded(6).cursor_pointer()
-          .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Back to the file tree (Esc)")
-          .on_click(() => this.toTree()).child(svg("mods/workspace-chrome/chevron-left.svg").size(13)).child("Files")))
+        .when(Boolean(this.panel), (el) => el.child(this.hud
+          ? hudButton(t, "pv-files", "Files", { icon: svg("mods/workspace-chrome/chevron-left.svg").size(13).relative(), h: 24 })
+            .tooltip("Back to the file tree (Esc)").on_click(() => this.toTree())
+          : h_flex().id("pv-files").h(24).px(6).gap(4).flex_none().items_center().rounded(6).cursor_pointer()
+            .text_size(12).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Back to the file tree (Esc)")
+            .on_click(() => this.toTree()).child(svg("mods/workspace-chrome/chevron-left.svg").size(13)).child("Files")))
         .when(this.history.length > 0, (el) => el.child(this.button(t, "pv-back", "mods/workspace-chrome/chevron-left.svg", "Back (Cmd+[)", (cx) => this.back(cx))))
         .child(fileIcon(basename(path), { dir: v?.kind === "folder", open: true, size: 15, color: v?.kind === "folder" ? t.ansi4 : t.muted }))
-        .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(basename(path)))
-        .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(this.on ? dirOf(path) : tilde(dirOf(path))))
-        .child(h_flex().flex_none().gap(1)
+        .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).when(this.hud, (el) => el.font_family(display()).font_weight(700).text_size(15)).child(basename(path)))
+        .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.dim).when(this.hud, (el) => el.font_family(monoFont())).child(this.on ? dirOf(path) : tilde(dirOf(path))))
+        .child(h_flex().flex_none().gap(this.hud ? 4 : 1)
           .when(this.canEdit() && !this.zen, (el) => el.child(this.button(t, "pv-edit", "mods/workspace-chrome/square-pen.svg", "Edit in Neovim (Cmd+E)", (cx) => this.edit(cx))))
           .child(this.button(t, "pv-copy", "mods/workspace-chrome/files.svg", "Copy path (Cmd+Shift+C)", () => this.copyPath()))
           .when(!this.on, (el) => el.child(this.button(t, "pv-reveal", "mods/workspace-chrome/folder.svg", "Reveal in Finder (Cmd+Shift+R)", () => this.reveal())))
           .when(!this.on || Boolean(v?.local), (el) => el.child(this.button(t, "pv-open", "mods/workspace-chrome/monitor.svg",
             this.on ? "Open a copy with the default app (Cmd+O)" : "Open with the default app (Cmd+O)", () => this.openDefault())))
-          .child(div().id("pv-reload").size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_size(15).text_color(t.muted)
-            .hover((st) => st.bg(t.hover)).tooltip("Reload (Cmd+R)").on_click((_e, cx) => this.load(cx, true)).child("\u21bb"))
-          .child(div().id("pv-zen").size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
-            .font_family(monoFont()).text_size(15).text_color(this.zen ? t.foreground : t.muted).hover((st) => st.bg(t.hover))
-            .tooltip(this.zen ? "Close focus mode (Esc)" : "Focus mode (Cmd+Shift+F)").on_click(() => this.toggleZen())
-            .child(this.zen ? ICON_SHRINK : ICON_EXPAND))))
+          .child(this.hud
+            ? this.hudSquare(t, "pv-reload", "Reload (Cmd+R)", (cx) => this.load(cx, true), div().relative().text_size(15).child("\u21bb"))
+            : div().id("pv-reload").size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().text_size(15).text_color(t.muted)
+              .hover((st) => st.bg(t.hover)).tooltip("Reload (Cmd+R)").on_click((_e, cx) => this.load(cx, true)).child("\u21bb"))
+          .child(this.hud
+            ? this.hudSquare(t, "pv-zen", this.zen ? "Close focus mode (Esc)" : "Focus mode (Cmd+Shift+F)", () => this.toggleZen(), div().relative().font_family(monoFont()).text_size(15).child(this.zen ? ICON_SHRINK : ICON_EXPAND))
+            : div().id("pv-zen").size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+              .font_family(monoFont()).text_size(15).text_color(this.zen ? t.foreground : t.muted).hover((st) => st.bg(t.hover))
+              .tooltip(this.zen ? "Close focus mode (Esc)" : "Focus mode (Cmd+Shift+F)").on_click(() => this.toggleZen())
+              .child(this.zen ? ICON_SHRINK : ICON_EXPAND))))
       .child(h_flex().gap(8).items_center()
-        .when(Boolean(this.on), (el) => el.child(div().flex_none().text_size(11).text_color(REMOTE).child(this.on)))
-        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(meta.join("  \u00b7  ") || "\u00a0"))
+        .when(Boolean(this.on), (el) => el.child(this.hud ? caps(this.on, 12).flex_none().text_color(REMOTE) : div().flex_none().text_size(11).text_color(REMOTE).child(this.on)))
+        .child((this.hud ? caps(meta.join("  \u00b7  ") || "\u00a0", 12) : div().text_size(11).child(meta.join("  \u00b7  ") || "\u00a0")).flex_1().min_w(0).truncate().text_color(t.dim))
         // On this line, not the first, so a narrow pane (the Files panel) still has room for the name.
-        .when(Boolean(toggle), (el) => el.child(h_flex().flex_none().gap(2).p(2).rounded(7).bg(t.surface)
+        .when(Boolean(toggle), (el) => el.child(h_flex().flex_none().gap(this.hud ? 4 : 2).when(!this.hud, (e) => e.p(2).rounded(7).bg(t.surface))
           .child(this.segment(t, "pv-rendered", "Rendered", this.mode === "rendered", (cx) => this.setMode("rendered", cx)))
           .child(this.segment(t, "pv-source", "Source", this.mode === "source", (cx) => this.setMode("source", cx)))))
         .when(Boolean(nav), (el) => el.child(this.navPill(t, nav))));
   }
 
   banner(t, text) {
+    if (this.hud) return div().flex_none().px(12).py(5).bg(t.working + "0f").border_b(1).border_color(t.working + "4d").text_size(11.5).text_color(t.muted).child(text);
     return div().flex_none().px(12).py(5).bg(t.surface).border_b(1).border_color(t.border).text_size(11.5).text_color(t.muted).child(text);
   }
 
@@ -1006,6 +1029,10 @@ export default class Preview extends View {
   }
 
   card(t, title, lines, symbol) {
+    if (this.hud) return this.centered(t, v_flex().relative().items_center().gap(8).px(28).py(20).children(frame(10, { bg: t.accent + "0d", line: t.accent + "4d" }))
+      .child(svg(symbol ?? "mods/workspace-chrome/file-text.svg").size(34).relative().text_color(t.accent))
+      .child(caps(title, 15, 700).relative().text_color(t.accent))
+      .children(lines.filter(Boolean).map((l) => div().relative().max_w(460).text_size(12).text_color(t.muted).child(l))));
     return this.centered(t,
       svg(symbol ?? "mods/workspace-chrome/file-text.svg").size(34).text_color(t.dim),
       div().text_size(14).font_semibold().text_color(t.foreground).child(title),
@@ -1031,7 +1058,7 @@ export default class Preview extends View {
       this.codeKey = null;
       return;
     }
-    const t = theme(), sig = `${this.path}|${spec.lang}|${spec.wrap}|${t.background}|${t.ansi5}`;
+    const t = theme(), sig = `${this.path}|${spec.lang}|${spec.wrap}|${t.background}|${t.ansi5}|${isHud()}`;
     if (this.codeKey !== sig) {
       this.code?.release();
       this.code = codeState(spec.lang, spec.text, this.zen ? 14 : 12, true, spec.wrap);
@@ -1077,7 +1104,7 @@ export default class Preview extends View {
   body(t) {
     const v = this.v;
     if (!this.path) return this.card(t, "No file to preview", ["Open one with herdr-preview <path>"]);
-    if (!v) return this.centered(t, div().text_size(12).text_color(t.dim).child(this.loading ? "Loading\u2026" : ""));
+    if (!v) return this.centered(t, (this.hud ? caps(this.loading ? "Loading\u2026" : "", 12.5) : div().text_size(12).child(this.loading ? "Loading\u2026" : "")).text_color(t.dim));
     const dir = v.dir;
     switch (v.kind) {
       case "missing":
@@ -1194,15 +1221,20 @@ export default class Preview extends View {
 
   zoomBar(t, z) {
     const zoom = this.zoom, auto = zoom === null;
-    const button = (id, label, tip, on, act) => div().id(id).h(24).min_w(26).px(7).flex_none().flex().items_center().justify_center()
-      .rounded(6).cursor_pointer().text_size(12).text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.selected))
-      .hover((s) => s.bg(on ? t.selected : t.hover)).tooltip(tip).on_click((_e, cx) => act(cx)).child(label);
+    const button = (id, label, tip, on, act) => (this.hud
+      ? hudButton(t, id, label, { on, h: 24 }).min_w(26).justify_center()
+      : div().id(id).h(24).min_w(26).px(7).flex_none().flex().items_center().justify_center()
+        .rounded(6).cursor_pointer().text_size(12).text_color(on ? t.foreground : t.muted).when(on, (el) => el.bg(t.selected))
+        .hover((s) => s.bg(on ? t.selected : t.hover)).child(label))
+      .tooltip(tip).on_click((_e, cx) => act(cx));
     return h_flex().absolute().left(0).right(0).bottom(12).justify_center()
-      .child(h_flex().id("pv-zoom").flex_none().items_center().gap(2).p(3).rounded(9).bg(t.surface).border_1().border_color(t.border).shadow_lg()
+      .child(h_flex().id("pv-zoom").flex_none().items_center().gap(this.hud ? 4 : 2)
+        .when(!this.hud, (el) => el.p(3).rounded(9).bg(t.surface).border_1().border_color(t.border).shadow_lg())
+        .when(this.hud, (el) => el.relative().p(6).children(frame(8, { bg: PLATE, line: t.working + "80" })))
         .child(button("pv-zoom-out", "\u2212", "Zoom out (-)", false, (cx) => this.zoomStep(-1, cx)))
         .child(button("pv-zoom-actual", `${Math.round(z.s * 100)}%`, "Actual size (0)", zoom === 1 || (auto && z.fit > 1), (cx) => this.setZoom(1, cx)).min_w(52))
         .child(button("pv-zoom-in", "+", "Zoom in (+)", false, (cx) => this.zoomStep(1, cx)))
-        .child(div().w(1).h(14).mx(3).bg(t.border))
+        .child(div().w(1).h(14).mx(3).bg(this.hud ? t.accent + "59" : t.border))
         .child(button("pv-zoom-fit", "Fit", "Zoom to fit: the whole image (F)", zoom === "fit" || (auto && z.fit <= 1), (cx) => this.setZoom("fit", cx)))
         .child(button("pv-zoom-width", "Width", "Zoom to page width: fill the pane's width (W)", zoom === "width", (cx) => this.setZoom("width", cx))));
   }
@@ -1220,6 +1252,16 @@ export default class Preview extends View {
   }
 
   folder(t, v) {
+    if (this.hud) return v_flex().id("pv-folder").flex_1().min_h(0).overflow_y_scrollbar()
+      .children(v.entries.map((e) => {
+        const target = `${v.path === "/" ? "" : v.path}/${e.name}`;
+        return h_flex().id(`pv-e-${e.name}`).h(30).flex_none().px(14).gap(10).items_center().cursor_pointer()
+          .border_b(1).border_color(t.accent + "26").hover((s) => s.bg(t.accent + "14")).on_click((_e, cx) => this.navigate(target, cx))
+          .child(fileIcon(e.name, { dir: e.dir, color: e.dir ? t.ansi4 : t.muted }))
+          .child(div().flex_1().min_w(0).truncate().font_family(display()).font_weight(600).text_size(14).child(e.name));
+      }))
+      .when(v.entries.length === 0, (el) => el.child(caps("This folder is empty", 12).p(14).text_color(t.dim)))
+      .when(v.more, (el) => el.child(caps(`Showing the first ${MAX_ENTRIES} entries`, 11.5).p(14).text_color(t.dim)));
     return v_flex().id("pv-folder").flex_1().min_h(0).overflow_y_scrollbar().p(6)
       .children(v.entries.map((e) => {
         const target = `${v.path === "/" ? "" : v.path}/${e.name}`;
@@ -1234,6 +1276,7 @@ export default class Preview extends View {
 
   render(cx) {
     const t = theme();
+    this.hud = isHud();
     const o = this.panel ? shared("files.open") : null;
     // A file Files just opened. load() runs on this view's context: a task started from a spawned one
     // is dropped when that one ends, and the preview would stay on "Loading".
@@ -1247,9 +1290,12 @@ export default class Preview extends View {
       this.load(cx, true);
     }
     const body = this.body(t);
-    return v_flex().id("preview").track_focus(this.handle).size_full().min_h(0).overflow_hidden().rounded(this.zen ? 10 : 8)
-      .bg(this.zen ? solid(t.background) : t.background).text_color(t.foreground).text_size(13)
-      .when(this.zen, (el) => el.border_1().border_color(t.accent + "99").shadow_2xl())
+    return v_flex().id("preview").track_focus(this.handle).size_full().min_h(0).overflow_hidden().rounded(this.hud ? 0 : this.zen ? 10 : 8)
+      .when(!(this.hud && this.zen), (el) => el.bg(this.zen ? solid(t.background) : t.background)).text_color(t.foreground).text_size(13)
+      .when(this.zen && !this.hud, (el) => el.border_1().border_color(t.accent + "99").shadow_2xl())
+      .when(this.hud && !this.zen, (el) => el.border_1().border_color(t.accent + "4d"))
+      // Focus mode in HUD draws its own cut-corner frame (the dialog has none).
+      .when(this.hud && this.zen, (el) => el.relative().p(1).children(modalFrame(t, 16)))
       .on_size_change((s, cx) => {
         if (this.size && Math.abs(this.size.width - s.width) < 1 && Math.abs(this.size.height - s.height) < 1) return;
         this.size = s;

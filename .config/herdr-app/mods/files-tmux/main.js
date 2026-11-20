@@ -9,6 +9,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared, terminals, layout, run } from "herdr";
 import { fileIcon } from "./file-icons.js";
+import { INK, isHud, mono, display, frame, caps, title as hudTitle } from "./hud.js";
 
 function location() {
   const space = spaces().find(s => s.active), f = focused();
@@ -192,12 +193,17 @@ export default class Files extends View {
     for (const entry of this.entries.get(prefix) ?? []) {
       if (out.length >= TOTAL) break;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
-      out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
+      const tone = mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked;
+      out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().cursor_pointer()
+        .when(!this.hud, el => el.rounded(7).hover(s => s.bg(t.hover)))
+        .when(this.hud, el => el.hover(s => s.bg(t.accent + "14")))
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : this.open(path, cx))
-        .child(entry.dir ? svg(`mods/files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
+        .child(entry.dir ? svg(`mods/files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(this.hud ? t.accent : t.dim) : div().w(12).flex_none())
         .child(fileIcon(entry.name, { dir: entry.dir, open, color: entry.dir ? t.ansi4 : t.muted }))
-        .child(div().flex_1().min_w(0).truncate().child(entry.name))
-        .when(Boolean(mark), el => el.child(div().text_size(11).text_color(mark === "A" ? t.ansi2 : mark === "D" || mark === "U" ? t.ansi1 : t.blocked).child(mark))));
+        .child(div().flex_1().min_w(0).truncate().when(this.hud, el => el.font_family(display()).text_size(14)).child(entry.name))
+        .when(Boolean(mark), el => el.child(this.hud
+          ? div().size(14).flex_none().flex().items_center().justify_center().bg(tone).text_color(INK).font_family(mono()).text_size(10).font_weight(700).child(mark)
+          : div().text_size(11).text_color(tone).child(mark))));
       if (entry.dir && open) this.rows(path, depth + 1, out, t);
     }
     return out;
@@ -205,21 +211,29 @@ export default class Files extends View {
 
   render(cx) {
     if (key() !== this.context?.key) this.refresh(cx);
-    const t = theme(), picked = location().picked;
-    const button = (id, icon, tip, onClick) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
-      .hover((s) => s.bg(t.hover)).tooltip(tip).on_click(onClick).child(svg(icon).size(14).text_color(t.muted));
-    return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
-        .child(div().font_semibold().child("Files"))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
+    const t = theme(), picked = location().picked, hud = isHud();
+    this.hud = hud;
+    const button = (id, icon, tip, onClick) => hud
+      ? div().id(id).relative().size(24).flex_none().flex().items_center().justify_center().cursor_pointer()
+        .children(frame(5, { bg: t.working + "14", line: t.working + "80" })).text_color(t.working).hover((s) => s.text_color(t.foreground))
+        .tooltip(tip).on_click(onClick).child(svg(icon).size(14).relative())
+      : div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer()
+        .hover((s) => s.bg(t.hover)).tooltip(tip).on_click(onClick).child(svg(icon).size(14).text_color(t.muted));
+    return v_flex().id("files").size_full().min_h(0).rounded(hud ? 0 : 10).overflow_hidden().bg(t.background).border_1().border_color(hud ? t.accent + "4d" : t.border).text_color(t.foreground).text_size(13)
+      .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(hud ? t.accent + "59" : t.border)
+        .when(Boolean(this.file), el => el.child(div().id("files-back").w(20).cursor_pointer().text_color(hud ? t.accent : t.muted).on_click((_e, cx) => { this.show(null); cx.notify(); }).child("←")))
+        .child(hud ? hudTitle(t, "Files", 17) : div().font_semibold().child("Files"))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).when(hud, el => el.font_family(this.file ? mono() : display()).text_size(13)).child(this.file ?? this.root?.split(/[\\/]/).pop() ?? ""))
         .when(Boolean(picked) && !this.file, el => el.child(button("files-pane-folder", "mods/workspace-chrome/chevron-left.svg",
           `Back to the pane's folder (${picked.split("/").pop()})`, () => setShared("files.root", null))))
         .when(!this.on && Boolean(this.root) && !this.file, el => el.child(button("files-finder", "mods/workspace-chrome/folder.svg",
           "Open in Finder", () => exec("open", [this.root]).catch(() => {})))))
       .when(!this.file, el => el.child(v_flex().id("files-tree").flex_1().min_h(0).overflow_y_scrollbar().p(6).children(this.rows("", 0, [], t))
-        .when(Boolean(this.error) || !this.entries.get("")?.length, el => el.child(div().p(8).text_size(12).text_color(t.dim).child(this.error || (this.loading ? "Loading files…" : this.root ? "No files" : location().pending ? "Finding the tmux pane…" : "No folder"))))
-        .when(this.limited, el => el.child(div().p(8).text_size(11).text_color(t.dim).child("File list limited to 500 entries per folder and 5,000 total")))))
+        .when(Boolean(this.error) || !this.entries.get("")?.length, el => {
+          const msg = this.error || (this.loading ? "Loading files…" : this.root ? "No files" : location().pending ? "Finding the tmux pane…" : "No folder");
+          return el.child((hud && !this.error ? caps(msg, 12.5) : div().text_size(12).child(msg)).p(8).text_color(t.dim));
+        })
+        .when(this.limited, el => el.child((hud ? caps("File list limited to 500 entries per folder and 5,000 total", 12) : div().text_size(11).child("File list limited to 500 entries per folder and 5,000 total")).p(8).text_color(t.dim)))))
       .when(Boolean(this.file), el => el.child(this.code ? Editor.new(this.code).flex_1().min_h(0) : div().p(12).text_color(t.dim).child(this.fileError || "Loading file…")));
   }
 }

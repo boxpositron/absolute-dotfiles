@@ -25,6 +25,7 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { layout, run, openOverlay, closeOverlay, props, shared, setShared, window, nextCommand, checking, theme, settings } from "herdr";
+import { isHud, display, frame, caps, readout, title as hudTitle } from "./hud.js";
 
 // netrunner.json's fixed sizes: tab bar, status bar, the work row's padding and gap, the focus edge, the sidebar divider,
 // the expanded sidebar's brand row.
@@ -313,16 +314,24 @@ function bar(part) {
   const detail = queue
     ? needs ? `${needs} need${needs === 1 ? "s" : ""} you` : `${items.length} card${items.length === 1 ? "" : "s"}`
     : shared("tmux.where")?.cwd?.split("/").filter(Boolean).pop() ?? "";
-  return h_flex().id(`side-fit-${part}-bar`).size_full().px(12).gap(10).items_center().rounded(10).overflow_hidden().cursor_pointer()
-    .hover((s) => s.bg(t.hover)).tooltip(`Expand ${queue ? "the priority queue" : title}`)
+  const hud = isHud();
+  return h_flex().id(`side-fit-${part}-bar`).size_full().px(12).gap(10).items_center().overflow_hidden().cursor_pointer()
+    .when(!hud, (el) => el.rounded(10).hover((s) => s.bg(t.hover)))
+    .when(hud, (el) => el.relative().children(frame(8, { bg: t.chrome, line: (queue ? t.accent : t.working) + "4d" })).hover((s) => s.opacity(0.8)))
+    .tooltip(`Expand ${queue ? "the priority queue" : title}`)
     .on_click(() => run("layout.show", { id: part }))
-    .child(svg("mods/workspace-chrome/chevron-right.svg").size(13).flex_none().text_color(t.dim))
-    .when(queue, (el) => el.child(h_flex().h(16).gap(3).flex_none().items_end()
+    .child(svg("mods/workspace-chrome/chevron-right.svg").size(13).flex_none().text_color(t.dim).when(hud, (el) => el.relative()))
+    .when(queue && !hud, (el) => el.child(h_flex().h(16).gap(3).flex_none().items_end()
       .child(div().w(3).h(16).bg(t.accent)).child(div().w(3).h(10).bg(t.working))))
-    .child(div().flex_none().text_size(12.5).font_bold().text_color(t.foreground)
-      .when(queue, (el) => el.font_family(settings().font_family ?? "JetBrains Mono")).child(title))
-    .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(needs ? t.accent : t.dim).child(detail))
-    .child(div().id(`side-fit-${part}-close`).size(24).flex().flex_none().items_center().justify_center().rounded(4)
+    .when(!hud, (el) => el.child(div().flex_none().text_size(12.5).font_bold().text_color(t.foreground)
+      .when(queue, (el) => el.font_family(settings().font_family ?? "JetBrains Mono")).child(title)))
+    .when(hud, (el) => el.child(hudTitle(t, queue ? "Priority queue" : title, 15).relative()))
+    .when(!hud, (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(needs ? t.accent : t.dim).child(detail)))
+    .when(hud && queue, (el) => el.child(h_flex().relative().flex_1().min_w(0).gap(6).items_center()
+      .child(readout(t, needs || items.length, { status: needs ? t.accent : null, h: 18 }))
+      .child(caps(needs ? `need${needs === 1 ? "s" : ""} you` : items.length === 1 ? "card" : "cards", 12, 600).text_color(needs ? t.accent : t.dim))))
+    .when(hud && !queue, (el) => el.child(div().relative().flex_1().min_w(0).truncate().font_family(display()).font_weight(600).text_size(13.5).text_color(t.dim).child(detail)))
+    .child(div().id(`side-fit-${part}-close`).size(24).flex().flex_none().items_center().justify_center().rounded(hud ? 0 : 4).when(hud, (el) => el.relative())
       .hover((s) => s.bg(t.hover)).tooltip("Close")
       .on_click((_e, cx) => { cx.stop_propagation(); run("layout.hide", { id: `${part}-bar` }); })
       .child(svg("mods/workspace-chrome/x.svg").size(13).text_color(t.dim)));

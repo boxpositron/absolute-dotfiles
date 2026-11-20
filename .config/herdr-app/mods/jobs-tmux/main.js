@@ -16,6 +16,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, home, shared, setShared, theme, props, focused, watchFolder } from "herdr";
+import { INK, isHud, spinner, mono, display, fill, caps, readout, button as hudButton, title as hudTitle } from "./hud.js";
 
 const SEP = "|^|";
 // The remote servers' Cyberpunk yellow, as in the Agents tree.
@@ -221,10 +222,10 @@ export default class Jobs extends View {
   marker(t, kind) {
     const icon = (name, color) => svg(`mods/workspace-chrome/${name}.svg`).size(12).mx(1).flex_none().text_color(color);
     if (kind === "monitor") {
-      return div().size(10).mx(1).flex_none().rounded(5).border(1.5).border_color(t.working).flex().items_center().justify_center()
-        .loop("opacity", { from: 0.45, to: 1, period: 2200 }).child(div().size(3).rounded(2).bg(t.working));
+      return div().size(10).mx(1).flex_none().rounded(this.hud ? 0 : 5).border(1.5).border_color(t.working).flex().items_center().justify_center()
+        .loop("opacity", { from: 0.45, to: 1, period: 2200 }).child(div().size(3).rounded(this.hud ? 0 : 2).bg(t.working));
     }
-    if (kind === "command") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(2400);
+    if (kind === "command") return this.hud ? spinner(t.working, 12, 2400).mx(1) : svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(2400);
     if (kind === "cell") return icon("square", t.working);
     if (kind === "child") return icon("layers", t.ansi5);
     if (kind === "wakeup") return icon("clock", t.ansi5);
@@ -239,56 +240,66 @@ export default class Jobs extends View {
       .cursor_pointer().hover((s) => s.text_color(t.foreground))
       .on_click((_e, cx) => this.fold(srv.key, cx))
       .child(svg(`mods/workspace-chrome/${srv.machine ? "server" : "monitor"}.svg`).size(12).flex_none().text_color(color))
-      .child(div().truncate().text_color(color).child(srv.machine || "This Mac"))
-      .child(div().text_color(t.dim).child(String(srv.count)))
-      .child(div().flex_1())
+      .child(!this.hud ? div().truncate().text_color(color).child(srv.machine || "This Mac")
+        : srv.machine ? div().truncate().font_family(display()).font_weight(700).text_size(13.5).text_color(color).child(srv.machine)
+          : caps("This Mac", 13, 700).truncate().text_color(color))
+      .child(this.hud ? readout(t, srv.count, { h: 16 }) : div().text_color(t.dim).child(String(srv.count)))
+      .child(this.hud ? div().flex_1().h(1).bg(t.accent + "33") : div().flex_1())
       .when(!open, (el) => el.child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
   }
 
   sessionRow(t, s) {
     const open = !this.folded.has(s.key);
     const remote = Boolean(s.machine);
-    return h_flex().id(s.key).px(8).h(ROW_H).flex_none().rounded(8).gap(6).items_center()
+    return h_flex().id(s.key).px(8).h(ROW_H).flex_none().rounded(this.hud ? 0 : 8).gap(6).items_center()
       .when(remote, (el) => el.bg(REMOTE_ROW))
       .when(s.here, (el) => el.bg(remote ? REMOTE_SELECTED : t.selected))
       .cursor_pointer().hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
       .on_click((_e, cx) => this.fold(s.key, cx))
       .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim))
-      .child(div().min_w(0).truncate().font_medium().text_color(t.foreground).child(s.name))
-      .child(div().text_size(11).text_color(t.dim).child(String(s.count)))
+      .child(div().min_w(0).truncate().font_medium().text_color(t.foreground)
+        .when(this.hud, (el) => el.font_family(display()).font_weight(700).text_size(14)).child(s.name))
+      .child(this.hud ? readout(t, s.count, { h: 16 }) : div().text_size(11).text_color(t.dim).child(String(s.count)))
       .child(div().flex_1())
-      .when(s.here, (el) => el.child(div().flex_none().px(5).h(16).rounded(4).bg(t.accent + "26").text_size(10).font_semibold().text_color(t.accent).flex().items_center().child("here")));
+      // netrunner's HUD: a solid pink block with dark ink and a slanted end.
+      .when(s.here, (el) => el.child(this.hud
+        ? div().flex().flex_none().h(16)
+          .child(div().flex().items_center().h_full().px(5).bg(t.accent).text_color(INK).child(caps("here", 11.5, 700)))
+          .child(div().relative().w(6).h_full().child(fill([[["0%", "0%"], ["100%", "0%"], ["0%", "100%"]]], t.accent)))
+        : div().flex_none().px(5).h(16).rounded(4).bg(t.accent + "26").text_size(10).font_semibold().text_color(t.accent).flex().items_center().child("here")));
   }
 
   paneRow(t, p) {
     const open = !this.folded.has(p.key);
     const remote = Boolean(p.machine);
     const label = GENERIC.has(p.window) || p.window === p.project ? p.project : `${p.project} \u00b7 ${p.window}`;
-    return h_flex().id(p.key).pl(22).pr(8).h(ROW_H).flex_none().rounded(8).gap(6).items_center().text_size(12.5)
+    return h_flex().id(p.key).pl(22).pr(8).h(ROW_H).flex_none().rounded(this.hud ? 0 : 8).gap(6).items_center().text_size(12.5)
       .when(remote, (el) => el.bg(REMOTE_ROW))
       .when(p.here, (el) => el.bg(remote ? REMOTE_SELECTED : t.selected))
       .cursor_pointer().hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
       .on_click((_e, cx) => this.fold(p.key, cx))
       .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(10).flex_none().text_color(t.dim))
-      .child(div().min_w(0).flex_1().truncate().text_color(p.here ? t.foreground : t.muted).child(label))
-      .child(div().text_size(11).flex_none().text_color(t.dim).child(String(p.jobs.length)));
+      .child(div().min_w(0).flex_1().truncate().text_color(p.here ? t.foreground : t.muted)
+        .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(14)).child(label))
+      .child(this.hud ? readout(t, p.jobs.length, { h: 16 }) : div().text_size(11).flex_none().text_color(t.dim).child(String(p.jobs.length)));
   }
 
   jobRow(t, j, i, now) {
     const remote = Boolean(j.machine);
     const time = j.due ? countdown(j.due - now) : j.start ? duration(now - j.start) : null;
-    return h_flex().id(`job-${j.pane}-${i}`).pl(40).pr(8).h(ROW_H).flex_none().rounded(8).gap(8).items_center().text_size(12.5)
+    return h_flex().id(`job-${j.pane}-${i}`).pl(40).pr(8).h(ROW_H).flex_none().rounded(this.hud ? 0 : 8).gap(8).items_center().text_size(12.5)
       .when(remote, (el) => el.bg(REMOTE_ROW))
       .cursor_pointer().hover((el) => el.bg(remote ? REMOTE_HOVER : t.hover))
       .tooltip(`${KINDS[j.kind] ?? j.kind}: ${j.label}`)
       .on_click((_e, cx) => this.show(j, cx))
       .child(this.marker(t, j.kind))
       .child(div().min_w(0).flex_1().truncate().text_color(t.foreground).child(j.label))
-      .when(Boolean(time), (el) => el.child(div().flex_none().text_size(11).text_color(j.due ? t.ansi5 : t.dim).child(time)));
+      .when(Boolean(time), (el) => el.child(div().flex_none().text_size(11).text_color(j.due ? t.ansi5 : t.dim).when(this.hud, (e) => e.font_family(mono())).child(time)));
   }
 
   scopeButton(t, id, label) {
     const on = this.scope === id;
+    if (this.hud) return hudButton(t, `scope-${id}`, label, { on }).on_click((_e, cx) => this.setScope(id, cx));
     return div().id(`scope-${id}`).px(8).h(22).flex().items_center().text_size(11).cursor_pointer()
       .when(on, (el) => el.bg(t.selected).text_color(t.foreground).font_semibold())
       .when(!on, (el) => el.text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)))
@@ -305,6 +316,7 @@ export default class Jobs extends View {
       return div();
     }
     const t = theme();
+    this.hud = isHud();
     const data = shared("omo.jobs");
     if (data && data.out !== this.last) { this.last = data.out; this.jobs = parse(data.out); }
     const cur = data?.cur ?? null;
@@ -336,12 +348,13 @@ export default class Jobs extends View {
     this.counting = shown.some((j) => j.due);
     const empty = !data ? "Reading omo-status…" : data.problem ?? this.showProblem
       ?? (this.scope === "here" ? (cur?.session ? `No background jobs in ${cur.session}.` : "Focus a tmux client to see the jobs of its session.") : "No background jobs.");
-    return v_flex().id("jobs").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().font_semibold().child("Jobs"))
-        .child(this.badge(t, `${shown.length} job${shown.length === 1 ? "" : "s"}`))
+    const jobsText = `${shown.length} job${shown.length === 1 ? "" : "s"}`;
+    return v_flex().id("jobs").size_full().min_h(0).rounded(this.hud ? 0 : 10).overflow_hidden().bg(t.background).border_1().border_color(this.hud ? t.accent + "4d" : t.border).text_color(t.foreground).text_size(13)
+      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(this.hud ? t.accent + "33" : t.border)
+        .when(!this.hud, (el) => el.child(div().font_semibold().child("Jobs")).child(this.badge(t, jobsText)))
+        .when(this.hud, (el) => el.child(hudTitle(t, "Jobs", 16)).child(div().id("jobs-count").tooltip(jobsText).child(readout(t, shown.length))))
         .child(div().flex_1())
-        .child(h_flex().flex_none().rounded(6).border_1().border_color(t.border).overflow_hidden()
+        .child(h_flex().flex_none().when(this.hud, (el) => el.gap(4)).when(!this.hud, (el) => el.rounded(6).border_1().border_color(t.border).overflow_hidden())
           .child(this.scopeButton(t, "here", "Here"))
           .child(this.scopeButton(t, "all", "All"))))
       .when(rows.length === 0, (el) => el.child(div().px(12).py(8).text_size(12).text_color(t.dim).child(empty)))

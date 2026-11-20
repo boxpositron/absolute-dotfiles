@@ -23,6 +23,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, home, appHome, focused, panes, spaces, terminals, readTextFile, watchFolder, shared, setShared, theme, props, openOverlay, closeOverlay, notify, nextCommand, run } from "herdr";
+import { INK, isHud, spinner, display, mono, frame, caps, readout, modalFrame } from "./hud.js";
 
 const SEP = "|^|";
 const RANK = { error: 6, input: 5, done: 4, partial: 4, working: 3, background: 2, idle: 1 };
@@ -131,6 +132,8 @@ function foldersOf(list) {
 const isEditor = (terminal) => terminal === "files-nvim" || terminals().some((x) => x.address === terminal && x.name === "files-nvim");
 
 const label = (p) => p.name || (GENERIC.has(p.windowName) ? base(p.path) || "~" : p.windowName);
+// The HUD's chips are capitals.
+const word = (text) => (isHud() ? String(text).toUpperCase() : text);
 
 export default class TmuxContext extends View {
   init(_props, cx) {
@@ -363,6 +366,7 @@ export default class TmuxContext extends View {
     openOverlay({
       mod: "tmux-context",
       kind: "popup",
+      ...(isHud() ? { frame: "none" } : {}),
       width: 420,
       height: Math.min(64 + (folders.length + 1) * 46, 460),
       props: { picker: { terminal: w.terminal, session: w.session, pinned: w.pinned ? w.pane : null, shown: w.cwd, folders } },
@@ -370,48 +374,56 @@ export default class TmuxContext extends View {
   }
 
   status(t, state, size = 12) {
-    if (state === "working") return svg(ICON("spinner")).size(size).flex_none().text_color(t.working).spin(900);
-    if (state === "background") return svg(ICON("spinner")).size(size).flex_none().text_color(t.ansi5).spin(2400);
+    const hud = isHud();
+    if (state === "working") return hud ? spinner(t.working, size, 900) : svg(ICON("spinner")).size(size).flex_none().text_color(t.working).spin(900);
+    if (state === "background") return hud ? spinner(t.ansi5, size, 2400) : svg(ICON("spinner")).size(size).flex_none().text_color(t.ansi5).spin(2400);
     if (state === "input" || state === "error") {
       const color = state === "error" ? t.ansi1 : t.blocked;
+      if (hud) return div().flex_none().px(6).h(17).bg(color).text_color(INK).flex().items_center()
+        .loop("opacity", { from: 0.55, to: 1, period: 1600 }).child(caps(state === "error" ? "Failed" : "Needs you", 11, 700));
       return div().flex_none().px(6).h(17).rounded(5).bg(color + "26").text_size(10.5).font_semibold().text_color(color)
         .flex().items_center().loop("opacity", { from: 0.55, to: 1, period: 1600 }).child(state === "error" ? "Failed" : "Needs you");
     }
-    if (state === "done") return div().size(7).mx(2).flex_none().rounded(4).bg(t.done);
+    if (state === "done") return div().size(7).mx(2).flex_none().rounded(hud ? 0 : 4).bg(t.done);
     // A step done with tasks still open (omo-status's partial): a ring around a dot.
-    if (state === "partial") return div().size(8).mx(1.5).flex_none().rounded(4).border(1.5).border_color(t.done).flex().items_center().justify_center()
-      .child(div().size(3).rounded(2).bg(t.done));
-    return div().size(7).mx(2).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
+    if (state === "partial") return div().size(8).mx(1.5).flex_none().rounded(hud ? 0 : 4).border(1.5).border_color(t.done).flex().items_center().justify_center()
+      .child(div().size(3).rounded(hud ? 0 : 2).bg(t.done));
+    return div().size(7).mx(2).flex_none().rounded(hud ? 0 : 4).border(1.5).border_color(t.idle ?? t.dim);
   }
 
   chip(t, id, color, children, onClick, tip) {
-    return h_flex().id(id).h(20).px(7).gap(5).flex_none().items_center().rounded(5).bg(color + "1f").text_color(color)
+    const hud = isHud();
+    return h_flex().id(id).h(20).px(7).gap(5).flex_none().items_center().text_color(color)
       .text_size(11).font_medium()
-      .when(Boolean(onClick), (el) => el.cursor_pointer().hover((s) => s.bg(color + "38")).on_click(() => onClick()))
+      .when(!hud, (el) => el.rounded(5).bg(color + "1f"))
+      .when(hud, (el) => el.relative().children(frame(4, { bg: color + "1f", line: color + "66" })).font_family(display()).font_weight(600).text_size(12))
+      .when(Boolean(onClick), (el) => el.cursor_pointer().hover((s) => (hud ? s.opacity(0.8) : s.bg(color + "38"))).on_click(() => onClick()))
       .when(Boolean(tip), (el) => el.tooltip(tip))
-      .children(children);
+      .children(hud ? children.map((c) => c.relative()) : children);
   }
 
   titleRow(t, g, w, folder) {
     const name = folder === home() || !folder ? "~" : g?.worktree ? base(g.top) : g ? g.repo : base(folder);
     const many = w?.tmux && foldersOf(w.panes ?? []).length > 1;
     const subtitle = g?.title ?? (g?.worktree ? null : g && g.top !== folder ? tilde(folder).replace(tilde(g.top), "").replace(/^\//, "") : null);
-    const machine = w?.on ?? null;
+    const machine = w?.on ?? null, hud = isHud();
     return h_flex().h(24).gap(8).items_center().min_w(0)
-      .child(h_flex().id("tmux-context-folder").h(24).px(6).ml(-6).gap(6).flex_none().max_w(260).items_center().rounded(6)
+      .child(h_flex().id("tmux-context-folder").h(24).px(6).ml(-6).gap(6).flex_none().max_w(260).items_center().rounded(hud ? 0 : 6)
         .when(Boolean(w?.tmux), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).on_click(() => this.openPicker()))
         .tooltip(w?.pinned ? `Pinned to this pane: ${tilde(folder)}. Pick "Follow the active pane" to let go.` : tilde(folder) || "No folder")
         .child(svg(ICON(w?.pinned ? "pin" : "folder")).size(14).flex_none().text_color(w?.pinned ? t.accent : t.muted))
-        .child(div().min_w(0).truncate().font_semibold().child(name))
+        .child(div().min_w(0).truncate().font_semibold().when(hud, (el) => el.font_family(display()).font_weight(700).text_size(15)).child(name))
         .when(many || Boolean(w?.pinned), (el) => el.child(svg(ICON("chevron-down")).size(12).flex_none().text_color(t.dim))))
       .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(subtitle ?? ""))
       .when(Boolean(g?.worktree), (el) => el.child(div().flex_none().max_w(200).truncate().text_size(11.5).text_color(t.dim).child(g.repo)))
-      .when(Boolean(machine), (el) => el.child(h_flex().h(18).px(6).gap(4).flex_none().items_center().rounded(4).bg(REMOTE + "1f")
-        .text_size(10.5).font_medium().text_color(REMOTE).child(svg(ICON("server")).size(11)).child(machine)));
+      .when(Boolean(machine) && !hud, (el) => el.child(h_flex().h(18).px(6).gap(4).flex_none().items_center().rounded(4).bg(REMOTE + "1f")
+        .text_size(10.5).font_medium().text_color(REMOTE).child(svg(ICON("server")).size(11)).child(machine)))
+      .when(Boolean(machine) && hud, (el) => el.child(h_flex().relative().h(18).px(6).gap(4).flex_none().items_center().text_size(12).font_family(display()).font_weight(600).text_color(REMOTE)
+        .children(frame(4, { bg: REMOTE + "1f", line: REMOTE + "66" })).child(svg(ICON("server")).size(11).relative()).child(div().relative().child(machine))));
   }
 
   branchRow(t, g, folder) {
-    const row = h_flex().h(20).gap(10).items_center().min_w(0).text_size(11.5).text_color(t.dim);
+    const row = h_flex().h(20).gap(10).items_center().min_w(0).text_size(11.5).text_color(t.dim), hud = isHud();
     if (!folder) return row.child(div().child(""));
     if (!g) return row.child(div().child(this.ctx ? "Not a git repository" : "Reading git…"));
     const parts = [];
@@ -430,11 +442,13 @@ export default class TmuxContext extends View {
         : main.ahead ? `${main.ahead} ahead of ${name}` : main.behind ? `${main.behind} behind ${name}` : `even with ${name}`;
       parts.push(div().flex_none().tooltip(`${main.ahead} commits not on ${main.ref}, ${main.behind} of its commits not here`).child(text));
     }
-    parts.push(div().flex_none().text_color(g.changed ? t.blocked : t.dim).child(g.changed ? `${g.changed} uncommitted` : "clean"));
+    if (!hud) parts.push(div().flex_none().text_color(g.changed ? t.blocked : t.dim).child(g.changed ? `${g.changed} uncommitted` : "clean"));
+    else if (g.changed) parts.push(h_flex().flex_none().gap(5).items_center().child(readout(t, g.changed, { status: t.blocked, h: 16 })).child(caps("uncommitted", 11.5).text_color(t.blocked)));
+    else parts.push(caps("clean", 11.5).flex_none().text_color(t.dim));
     return row
       .child(h_flex().flex_1().min_w(60).gap(5).items_center()
         .child(svg(ICON("git-branch")).size(12).flex_none().text_color(t.muted))
-        .child(div().min_w(0).truncate().text_color(t.foreground).child(g.branch || g.head)))
+        .child(div().min_w(0).truncate().text_color(t.foreground).when(hud, (el) => el.font_family(mono())).child(g.branch || g.head)))
       .children(parts);
   }
 
@@ -451,12 +465,12 @@ export default class TmuxContext extends View {
     if (!pr.data) return row.child(div().child("No PR"));
     const p = pr.data;
     const color = { OPEN: t.ansi2, DRAFT: t.muted, MERGED: t.ansi5, CLOSED: t.ansi1 }[p.state] ?? t.muted;
-    row.child(this.chip(t, "tmux-context-pr", color, [div().child(`PR #${p.number}`), div().opacity(0.8).child(p.state.toLowerCase())], () => exec("open", [p.url]).catch(() => null), `Open ${p.url}`));
-    if (p.review === "APPROVED") row.child(this.chip(t, "tmux-context-review", t.ansi2, [svg(ICON("check")).size(11), div().child("approved")]));
-    if (p.review === "CHANGES_REQUESTED") row.child(this.chip(t, "tmux-context-review", t.ansi1, [div().child("changes requested")]));
-    if (p.fail) row.child(this.chip(t, "tmux-context-checks", t.ansi1, [svg(ICON("x")).size(11), div().child(`${p.fail} failing`)]));
-    else if (p.pending) row.child(this.chip(t, "tmux-context-checks", t.working, [svg(ICON("spinner")).size(11).spin(900), div().child(`${p.pending} running`)]));
-    else if (p.pass) row.child(this.chip(t, "tmux-context-checks", t.ansi2, [svg(ICON("check")).size(11), div().child(`${p.pass} passed`)]));
+    row.child(this.chip(t, "tmux-context-pr", color, [div().child(`PR #${p.number}`), div().opacity(0.8).child(word(p.state.toLowerCase()))], () => exec("open", [p.url]).catch(() => null), `Open ${p.url}`));
+    if (p.review === "APPROVED") row.child(this.chip(t, "tmux-context-review", t.ansi2, [svg(ICON("check")).size(11), div().child(word("approved"))]));
+    if (p.review === "CHANGES_REQUESTED") row.child(this.chip(t, "tmux-context-review", t.ansi1, [div().child(word("changes requested"))]));
+    if (p.fail) row.child(this.chip(t, "tmux-context-checks", t.ansi1, [svg(ICON("x")).size(11), div().child(word(`${p.fail} failing`))]));
+    else if (p.pending) row.child(this.chip(t, "tmux-context-checks", t.working, [isHud() ? spinner(t.working, 11, 900) : svg(ICON("spinner")).size(11).spin(900), div().child(word(`${p.pending} running`))]));
+    else if (p.pass) row.child(this.chip(t, "tmux-context-checks", t.ansi2, [svg(ICON("check")).size(11), div().child(word(`${p.pass} passed`))]));
     return row;
   }
 
@@ -469,10 +483,11 @@ export default class TmuxContext extends View {
     if (!here.length) return row.child(div().text_size(11.5).text_color(t.dim).child(`No omo here in tmux session ${w.session ?? ""}`));
     const p = here[0];
     return row
-      .child(h_flex().id("tmux-context-agent").flex_1().min_w(0).h(22).px(6).ml(-6).gap(8).items_center().rounded(6).cursor_pointer()
+      .child(h_flex().id("tmux-context-agent").flex_1().min_w(0).h(22).px(6).ml(-6).gap(8).items_center().rounded(isHud() ? 0 : 6).cursor_pointer()
         .hover((s) => s.bg(t.hover)).tooltip(`Show this pane (${w.session}: ${p.windowName})`).on_click(() => this.show(p))
         .child(this.status(t, p.state || "idle"))
-        .child(div().flex_none().max_w(240).truncate().text_color(p.state === "idle" || !p.state ? t.muted : t.foreground).child(label(p)))
+        .child(div().flex_none().max_w(240).truncate().text_color(p.state === "idle" || !p.state ? t.muted : t.foreground)
+          .when(isHud(), (el) => el.font_family(display()).font_weight(600).text_size(13.5)).child(label(p)))
         .when(Boolean(p.msg), (el) => el.child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(t.dim).child(p.msg))))
       .when(here.length > 1, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).tooltip(here.slice(1).map(label).join(", ")).child(`+${here.length - 1} more`)));
   }
@@ -486,14 +501,17 @@ export default class TmuxContext extends View {
       setShared("tmux.pins", pins);
       closeOverlay(props().overlay);
     };
-    const row = (id, selected, icon, title, detail, onClick) => h_flex().id(id).h(42).flex_none().px(10).gap(10).items_center().rounded(7)
-      .cursor_pointer().when(selected, (el) => el.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click(onClick)
+    const hud = isHud();
+    const row = (id, selected, icon, title, detail, onClick) => h_flex().id(id).h(42).flex_none().px(10).gap(10).items_center().rounded(hud ? 0 : 7)
+      .cursor_pointer().when(selected, (el) => el.bg(hud ? t.accent + "1f" : t.selected)).hover((s) => s.bg(hud ? t.accent + "14" : t.hover)).on_click(onClick)
       .child(icon)
       .child(v_flex().flex_1().min_w(0).gap(1)
         .child(div().truncate().child(title))
         .when(Boolean(detail), (el) => el.child(div().truncate().text_size(11.5).text_color(t.dim).child(detail))));
-    return v_flex().id("tmux-context-picker").size_full().p(6).gap(2).text_size(13).text_color(t.foreground)
-      .child(div().px(10).pt(4).pb(6).text_size(11.5).font_medium().text_color(t.dim).child(`Show in Files and Changes: tmux session ${session ?? ""}`))
+    return v_flex().id("tmux-context-picker").size_full().p(hud ? 8 : 6).gap(2).text_size(13).text_color(t.foreground)
+      .when(hud, (el) => el.relative().children(modalFrame(t, 10)))
+      .child(hud ? caps(`Show in Files and Changes: tmux session ${session ?? ""}`, 12.5).px(10).pt(4).pb(6).text_color(t.dim)
+        : div().px(10).pt(4).pb(6).text_size(11.5).font_medium().text_color(t.dim).child(`Show in Files and Changes: tmux session ${session ?? ""}`))
       .child(row("pick-follow", !pinned, svg(ICON("pin-off")).size(14).flex_none().text_color(t.muted), "Follow the active pane", "The panels go where you go in tmux", () => choose(null)))
       .children(folders.map((f) => {
         const top = f.agents[0];
@@ -521,8 +539,11 @@ export default class TmuxContext extends View {
     const folder = this.folder();
     const ctx = this.ctx?.key === this.ctxKey() ? this.ctx : null;
     const g = ctx?.git ?? null;
-    return v_flex().id("tmux-context").size_full().min_h(0).px(14).py(9).gap(4).rounded(10).overflow_hidden()
-      .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
+    const hud = isHud();
+    return v_flex().id("tmux-context").size_full().min_h(0).px(14).py(9).gap(4).overflow_hidden()
+      .when(!hud, (el) => el.rounded(10).bg(t.background).border_1().border_color(t.border))
+      .when(hud, (el) => el.relative().children(frame(10, { bg: t.chrome, line: t.accent + "4d" })))
+      .text_color(t.foreground).text_size(13)
       .when(terminal && !w, (el) => el.child(div().text_size(12).text_color(t.dim).child("Finding the tmux pane…")))
       .when(!terminal || Boolean(w), (el) => el
         .child(this.titleRow(t, g, w, folder))

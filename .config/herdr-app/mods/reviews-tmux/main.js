@@ -4,6 +4,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Button, Checkbox, TextView, Editor, EditorState, Input, InputState, Textarea, TextareaState } from "gpui-base";
 import { exec, home, theme, props, shared, setShared, checking, readTextFile, openOverlay, closeOverlay, nextCommand } from "herdr";
+import { INK, isHud, spinner, display, mono, fill, frame, modalFrame, caps, readout, button as hudButton, title as hudTitle } from "./hud.js";
 
 const COMMAND = () => [`${home()}/.bun/bin/bun`, `${home()}/.local/bin/pr-review`];
 const SEVERITIES = ["blocker", "major", "minor", "nit"];
@@ -287,7 +288,13 @@ export default class Reviews extends View {
     });
   }
 
+  // netrunner's HUD (the panel and the review dialog): the main action or the chosen option is the yellow button, a disabled
+  // one is dimmed.
   action(t, id, label, onClick, disabled = false, primary = false) {
+    if (this.hud) {
+      const b = hudButton(t, id, label, { on: primary }).on_click((_e, cx) => { if (!disabled) onClick(cx); });
+      return disabled ? b.opacity(0.4) : b;
+    }
     return Button.new(id).px(UI.gap).h(UI.control).flex_none().flex().items_center().justify_center()
       .rounded(4).border_1().border_color(primary ? t.accent : t.border).text_size(UI.small)
       .bg(primary && !disabled ? t.accent : solid(t.chrome)).text_color(disabled ? t.dim : primary ? solid(t.background) : t.foreground)
@@ -297,7 +304,37 @@ export default class Reviews extends View {
   }
 
   badge(t, text, color = t.muted) {
+    if (this.hud) return div().relative().px(6).h(16).flex_none().flex().items_center()
+      .children(frame(4, { bg: solid(color) + "14", line: solid(color) + "80" }))
+      .child(caps(text, 11, 700).relative().text_color(color));
     return div().px(5).py(1).flex_none().rounded(4).border_1().border_color(t.border).text_size(UI.small).text_color(color).child(text);
+  }
+
+  // A small state word beside a PR: HUD capitals, else the usual small text.
+  label(t, text, color) {
+    return this.hud ? caps(text, 11.5, 600).text_color(color) : div().text_size(UI.small).text_color(color).child(text);
+  }
+
+  // HUD severity chip: a solid tone block with dark capitals and a slanted end.
+  chip(t, text, color) {
+    const tone = solid(color);
+    return h_flex().h(18).flex_none()
+      .child(h_flex().h_full().pl(7).pr(3).items_center().bg(tone).text_color(INK).child(caps(text, 11.5, 700)))
+      .child(div().relative().w(7).h_full().child(fill([[["0%", "0%"], ["100%", "0%"], ["0%", "100%"]]], tone)));
+  }
+
+  // HUD close: a framed cyan square.
+  closeButton(t) {
+    return h_flex().id("review-close").relative().size(26).flex_none().items_center().justify_center().cursor_pointer()
+      .children(frame(5, { bg: t.working + "14", line: t.working + "b3" }))
+      .hover((s) => s.opacity(0.8)).tooltip("Close (Esc)")
+      .on_click(() => closeOverlay(props().overlay))
+      .child(svg("mods/workspace-chrome/x.svg").size(13).text_color(t.working));
+  }
+
+  // A form field's name: HUD capitals, else the usual small text.
+  field(t, text) {
+    return this.hud ? caps(text, 11.5, 600).text_color(t.muted) : div().text_size(UI.small).child(text);
   }
 
   prRow(t, repo, pr) {
@@ -305,28 +342,29 @@ export default class Reviews extends View {
     const automated = r?.source?.kind === "manual" ? (pr.history ?? []).find((entry) =>
       entry.source?.kind !== "manual" && entry.state === "done" && SEVERITIES.some((s) => entry.counts[s] > 0)) : null;
     const counts = [automated, r?.state === "done" ? r : null].filter(Boolean);
-    return v_flex().id(id).py(UI.gap).gap(6).border_b(1).border_color(t.border)
-      .child(div().font_semibold().text_color(t.foreground).child(`#${pr.number} ${pr.title}`))
+    return v_flex().id(id).py(UI.gap).gap(6).border_b(1).border_color(this.hud ? t.accent + "33" : t.border)
+      .child(div().font_semibold().text_color(t.foreground)
+        .when(this.hud, (el) => el.font_family(display()).font_weight(700).text_size(15)).child(`#${pr.number} ${pr.title}`))
       .child(h_flex().gap(6).flex_wrap().text_size(UI.small).text_color(t.muted)
         .child(`${pr.author} · ${elapsed(Date.now() - Date.parse(pr.updated_at))} ago`)
         .when(pr.draft, (el) => el.child(this.badge(t, "Draft")))
         .when(pr.state === "merged", (el) => el.child(this.badge(t, "merged", t.ansi5))))
       .child(div().truncate().text_size(UI.small).text_color(t.muted).tooltip(`${pr.head} → ${pr.base}`).child(`${pr.head} → ${pr.base}`))
       .child(h_flex().gap(6).flex_wrap().items_center()
-        .when(!r, (el) => el.child(div().text_size(UI.small).text_color(t.dim).child("Not reviewed")))
+        .when(!r, (el) => el.child(this.label(t, "Not reviewed", t.dim)))
         .when(r?.state === "running", (el) => el
-          .child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(1200))
-          .child(div().text_size(UI.small).text_color(t.working).child(`Reviewing ${elapsed(Date.now() - Date.parse(r.started_at))}`)))
-        .when(r?.state === "failed", (el) => el.child(div().text_size(UI.small).text_color(t.ansi1).tooltip(r.error ?? "Review failed").child("Failed")))
+          .child(this.hud ? spinner(t.working, 12, 1200) : svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(1200))
+          .child(this.label(t, `Reviewing ${elapsed(Date.now() - Date.parse(r.started_at))}`, t.working)))
+        .when(r?.state === "failed", (el) => el.child(this.label(t, "Failed", t.ansi1).tooltip(r.error ?? "Review failed")))
         .when(r?.state === "done" && Boolean(r.error), (el) => el.child(this.badge(t, "Post failed", t.ansi1).tooltip(r.error)))
         .children(counts.map((review) => h_flex().gap(6).flex_wrap().items_center()
           .when(Boolean(review.source), (el) => el.child(div().text_size(UI.small).text_color(t.muted).child(review.source.name)))
           .children(SEVERITIES.filter((s) => review.counts[s] > 0).map((s) => this.badge(t, `${review.counts[s]} ${s}`, t[TONE[s]])))
-          .when(!SEVERITIES.some((s) => review.counts[s] > 0), (el) => el.child(div().text_size(UI.small).text_color(t.muted).child("no findings")))))
+          .when(!SEVERITIES.some((s) => review.counts[s] > 0), (el) => el.child(this.label(t, "no findings", t.muted)))))
         .when(Boolean(r?.stale), (el) => el.child(this.badge(t, "Stale", t.ansi3)))
         .when(Boolean(r?.source) && r.state !== "done", (el) => el.child(div().text_size(UI.small).text_color(t.muted).child(r.source.name)))
-        .when(pr.reviews > 1, (el) => el.child(div().text_size(UI.small).text_color(t.dim).child(`${pr.reviews} reviews`)))
-        .when(r?.posted > 0, (el) => el.child(div().text_size(UI.small).text_color(t.dim).child(`${r.posted} posted`))))
+        .when(pr.reviews > 1, (el) => el.child(this.label(t, `${pr.reviews} reviews`, t.dim)))
+        .when(r?.posted > 0, (el) => el.child(this.label(t, `${r.posted} posted`, t.dim))))
       .child(h_flex().gap(6).flex_wrap()
         .child(this.action(t, `review-${id}`, this.starting === id ? "Starting..." : r ? "Re-run" : "Review", (cx) => this.start(cx, repo, pr), Boolean(this.starting) || r?.state === "running"))
         .child(this.action(t, `write-${id}`, "Write", (cx) => this.write(cx, repo, pr), Boolean(this.starting)))
@@ -358,9 +396,12 @@ export default class Reviews extends View {
   notice(t, { icon, tone, title, body = null, action = null, spin = false }) {
     const ring = solid(tone), mark = svg(`mods/workspace-chrome/${icon}.svg`).size(20).text_color(ring);
     return v_flex().id("reviews-notice").flex_1().min_h(220).items_center().justify_center().gap(10).px(24).py(28)
-      .child(div().size(46).flex_none().rounded(23).flex().items_center().justify_center().bg(`${ring}1f`).border_1().border_color(`${ring}66`)
+      .child(div().size(46).flex_none().flex().items_center().justify_center()
+        .when(!this.hud, (el) => el.rounded(23).bg(`${ring}1f`).border_1().border_color(`${ring}66`))
+        .when(this.hud, (el) => el.relative().children(frame(8, { bg: `${ring}1f`, line: `${ring}80` })))
         .child(spin ? mark.spin(1200) : mark))
-      .child(div().font_semibold().text_size(UI.body + 1).text_center().text_color(t.foreground).child(title))
+      .child(this.hud ? caps(title, 15, 700).text_center().text_color(t.foreground)
+        : div().font_semibold().text_size(UI.body + 1).text_center().text_color(t.foreground).child(title))
       .when(Boolean(body), (el) => el.child(div().max_w(340).text_size(UI.small).line_height(1.45).text_center().text_color(t.muted).child(body)))
       .when(Boolean(action), (el) => el.child(div().pt(4).child(action)));
   }
@@ -368,10 +409,12 @@ export default class Reviews extends View {
   // A repo that can't be read, among others that can: the same words as its notice, in a compact red card.
   troubleCard(t, repo) {
     const { icon, title, body } = this.trouble(repo), red = solid(t.ansi1);
-    return h_flex().mt(6).p(UI.gap).gap(UI.gap).items_start().rounded(UI.radius).border_1().border_color(`${red}55`).bg(`${red}14`)
+    return h_flex().mt(6).p(UI.gap).gap(UI.gap).items_start()
+      .when(!this.hud, (el) => el.rounded(UI.radius).border_1().border_color(`${red}55`).bg(`${red}14`))
+      .when(this.hud, (el) => el.relative().children(frame(6, { bg: `${red}14`, line: `${red}80` })))
       .child(div().mt(1).flex_none().child(svg(`mods/workspace-chrome/${icon}.svg`).size(14).text_color(red)))
       .child(v_flex().min_w(0).gap(2)
-        .child(div().font_semibold().text_size(UI.small).text_color(red).child(title))
+        .child(this.hud ? caps(title, 12.5, 700).text_color(red) : div().font_semibold().text_size(UI.small).text_color(red).child(title))
         .child(div().text_size(UI.small).line_height(1.45).text_color(t.muted).child(body)));
   }
 
@@ -404,16 +447,19 @@ export default class Reviews extends View {
         : `None of the ${repos.length} repos in this session has ${filter === "open" ? "an open" : "a merged"} pull request.`,
       action: this.action(t, "show-other", `Show ${other}`, () => setShared("pr.reviews.filter", other)),
     });
-    return v_flex().id("reviews").track_focus(this.handle).size_full().min_h(0).rounded(10).overflow_hidden()
-      .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(UI.body)
-      .child(h_flex().h(42).flex_none().px(UI.inset).gap(UI.gap).items_center().border_b(1).border_color(t.border)
-        .child(div().font_semibold().child("Reviews")).child(this.badge(t, String(count)))
+    return v_flex().id("reviews").track_focus(this.handle).size_full().min_h(0).rounded(this.hud ? 0 : 10).overflow_hidden()
+      .bg(t.background).border_1().border_color(this.hud ? t.accent + "4d" : t.border).text_color(t.foreground).text_size(UI.body)
+      .child(h_flex().h(this.hud ? 46 : 42).flex_none().px(UI.inset).gap(UI.gap).items_center().border_b(1).border_color(this.hud ? t.accent + "33" : t.border)
+        .child(this.hud ? hudTitle(t, "Reviews", 17) : div().font_semibold().child("Reviews"))
+        .child(this.hud ? readout(t, count) : this.badge(t, String(count)))
         .child(div().flex_1())
         .children(["here", "all"].map((s) => this.action(t, `scope-${s}`, s === "here" ? "Here" : "All", () => setShared("pr.reviews.scope", s), false, current === s))))
-      .child(h_flex().flex_none().px(UI.inset).py(6).gap(6).border_b(1).border_color(t.border)
+      .child(h_flex().flex_none().px(UI.inset).py(6).gap(6).border_b(1).border_color(this.hud ? t.accent + "33" : t.border)
         .children(["open", "merged"].map((s) => this.action(t, `filter-${s}`, s === "open" ? "Open" : "Merged", () => setShared("pr.reviews.filter", s), false, filter === s))))
       .when(Boolean(banner), (el) => el.child(h_flex().id("review-problem").mx(UI.inset).mt(UI.gap).px(UI.gap).py(6).gap(UI.gap).items_center()
-        .rounded(UI.radius).border_1().border_color(`${red}55`).bg(`${red}14`).cursor_pointer().tooltip("Dismiss")
+        .when(!this.hud, (el) => el.rounded(UI.radius).border_1().border_color(`${red}55`).bg(`${red}14`))
+        .when(this.hud, (el) => el.relative().children(frame(6, { bg: `${red}14`, line: `${red}80` })))
+        .cursor_pointer().tooltip("Dismiss")
         .on_click((_e, cx) => { this.actionProblem = null; cx.notify(); })
         .child(svg("mods/workspace-chrome/x.svg").size(13).flex_none().text_color(red))
         .child(div().flex_1().min_w(0).text_size(UI.small).text_color(red).child(banner))))
@@ -432,19 +478,22 @@ export default class Reviews extends View {
 
   finding(t, f, posted) {
     const done = posted.has(f.id), checked = this.selected.has(f.id);
-    return v_flex().id(`finding-${f.id}`).py(UI.inset).gap(UI.gap).border_b(1).border_color(t.border)
+    const tone = done ? t.dim : t[TONE[f.severity]];
+    return v_flex().id(`finding-${f.id}`).gap(UI.gap)
+      .when(!this.hud, (el) => el.py(UI.inset).border_b(1).border_color(t.border))
+      .when(this.hud, (el) => el.relative().p(14).children(frame(10, { bg: t.chrome, line: solid(tone) + "80" })))
       .text_color(done ? t.dim : t.foreground)
       .child(Checkbox.new(`pick-${f.id}`).checked(checked).disabled(done || this.posting).accessibility_label(`Post ${f.severity}: ${f.title}`)
-        .flex().gap(UI.gap).items_start().rounded(4).border_1().border_color(solid(t.background))
+        .flex().gap(UI.gap).items_start().rounded(this.hud ? 0 : 4).border_1().border_color(this.hud ? t.background : solid(t.background))
         .focus((s) => s.border_color(t.working)).cursor_pointer()
         .on_change((value, cx) => { if (value) this.selected.add(f.id); else this.selected.delete(f.id); cx.notify(); })
-        .child(div().size(18).mt(1).flex_none().rounded(3).border_1().border_color(done ? t.dim : checked ? t.accent : t.muted)
-          .bg(checked ? t.accent : solid(t.background)).flex().items_center().justify_center()
-          .when(checked || done, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(12).text_color(done ? t.dim : solid(t.background)))))
+        .child(div().size(18).mt(1).flex_none().rounded(this.hud ? 0 : 3).border_1().border_color(done ? t.dim : checked ? t.accent : t.muted)
+          .bg(checked ? t.accent : this.hud ? t.working + "14" : solid(t.background)).flex().items_center().justify_center()
+          .when(checked || done, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(12).text_color(done ? t.dim : this.hud ? INK : solid(t.background)))))
         .child(v_flex().min_w(0).flex_1().gap(6)
           .child(h_flex().gap(6).flex_wrap().items_center()
-            .child(this.badge(t, f.severity, done ? t.dim : t[TONE[f.severity]]))
-            .child(div().text_size(UI.small).child(`${f.path}:${f.start_line ? `${f.start_line}-` : ""}${f.line}`))
+            .child(this.hud ? this.chip(t, f.severity, tone) : this.badge(t, f.severity, tone))
+            .child(div().text_size(UI.small).when(this.hud, (el) => el.font_family(mono())).child(`${f.path}:${f.start_line ? `${f.start_line}-` : ""}${f.line}`))
             .when(done, (el) => el.child(this.badge(t, "Posted", t.dim)))
             .when(f.by === "you", (el) => el.child(this.badge(t, "you", done ? t.dim : t.working)))
             .when(!f.commentable, (el) => el.child(div().text_size(UI.small).text_color(t.muted).child("goes in the summary"))))
@@ -452,7 +501,9 @@ export default class Reviews extends View {
       .child(v_flex().ml(UI.findingIndent).gap(UI.gap)
         .child(TextView.markdown(`body-${f.id}`, f.body).selectable().w_full().text_size(UI.prose).text_color(done ? t.dim : t.foreground))
         .when(Boolean(f.suggestion), (el) => el.child(div().h(Math.min(240, f.suggestion.split("\n").length * 20 + 24)).p(UI.gap)
-          .rounded(UI.radius).bg(solid(t.chrome)).border_1().border_color(t.border).child(Editor.new(this.code.get(f.id)).size_full())))
+          .when(!this.hud, (b) => b.rounded(UI.radius).bg(solid(t.chrome)).border_1().border_color(t.border))
+          .when(this.hud, (b) => b.relative().children(frame(8, { bg: solid(t.chrome), line: t.working + "66" })))
+          .child(Editor.new(this.code.get(f.id)).size_full())))
         .when(f.by === "you" && !done, (el) => el.child(h_flex()
           .child(this.action(t, `remove-${f.id}`, "Remove", (cx) => this.remove(cx, f), this.saving || this.posting)))));
   }
@@ -464,16 +515,20 @@ export default class Reviews extends View {
       .when(Boolean(this.diff), (el) => el.child(div().text_size(UI.small).text_color(t.muted)
         .child(this.review.state === "done" ? "Click a new-side line to write a comment." : "You can write comments when this review finishes.")))
       .children((this.diff?.files ?? []).map((file, fi) => v_flex().gap(6)
-        .child(div().font_semibold().child(file.old_path && file.old_path !== file.path ? `${file.old_path} → ${file.path}` : file.path))
-        .child(div().text_size(UI.small).text_color(t.muted).child(file.skipped ? `Skipped: ${file.skipped}` : file.status))
+        .child(div().font_semibold().when(this.hud, (el) => el.font_family(mono())).child(file.old_path && file.old_path !== file.path ? `${file.old_path} → ${file.path}` : file.path))
+        .child(this.hud && !file.skipped ? this.label(t, file.status, t.muted)
+          : div().text_size(UI.small).text_color(t.muted).child(file.skipped ? `Skipped: ${file.skipped}` : file.status))
         .children(file.hunks.map((hunk, hi) => v_flex().gap(1)
-          .child(div().px(UI.gap).py(4).bg(solid(t.selected)).text_color(t.working).font_family("Menlo").text_size(UI.small).child(hunk.header))
+          .when(this.hud, (el) => el.relative().px(1).pt(1).pb(8).children(frame(8, { line: t.accent + "66" })))
+          .child(div().px(UI.gap).py(4).text_color(t.working).font_family(this.hud ? mono() : "Menlo").text_size(UI.small)
+            .when(!this.hud, (el) => el.bg(solid(t.selected)))
+            .when(this.hud, (el) => el.border_b(1).border_color(t.accent + "33")).child(hunk.header))
           .children(hunk.lines.map((line, li) => {
             const color = line.kind === "+" ? t.done : line.kind === "-" ? t.ansi1 : t.foreground;
             return Button.new(`diff-${fi}-${hi}-${li}`).w_full().min_h(24).flex().items_start().gap(UI.gap).px(6).py(2)
               .disabled(line.new === null || this.review.state !== "done" || Boolean(this.commentAt) || this.saving || this.posting)
               .bg(line.kind === "+" || line.kind === "-" ? solid(color) + "12" : solid(t.background))
-              .text_color(color).font_family("Menlo").text_size(UI.small).rounded(3).border_1().border_color(solid(t.background))
+              .text_color(color).font_family("Menlo").text_size(UI.small).rounded(this.hud ? 0 : 3).border_1().border_color(solid(t.background))
               .focus((s) => s.border_color(t.working)).when(line.new !== null, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)))
               .accessibility_label(`${file.path}, old ${line.old ?? "none"}, new ${line.new ?? "none"}: ${line.text}`)
               .on_click((_e, cx) => this.editLine(cx, file.path, line.new))
@@ -486,13 +541,15 @@ export default class Reviews extends View {
 
   commentForm(t) {
     return v_flex().flex_none().p(UI.inset).gap(UI.gap).border_t(1).border_color(t.working).bg(solid(t.chrome))
-      .child(div().font_semibold().child(`Comment on ${this.commentAt.path}:${this.commentAt.line}`))
-      .child(h_flex().gap(6).items_center().flex_wrap().child("Severity")
+      .child(this.hud ? h_flex().gap(6).items_center().child(caps("Comment on", 13, 700).text_color(t.accent))
+        .child(div().font_family(mono()).child(`${this.commentAt.path}:${this.commentAt.line}`))
+        : div().font_semibold().child(`Comment on ${this.commentAt.path}:${this.commentAt.line}`))
+      .child(h_flex().gap(6).items_center().flex_wrap().child(this.hud ? caps("Severity", 11.5, 600).text_color(t.muted) : "Severity")
         .children(SEVERITIES.map((s) => this.action(t, `severity-${s}`, s, (cx) => { this.severity = s; cx.notify(); }, this.saving, this.severity === s))))
-      .child(div().text_size(UI.small).child("Title"))
+      .child(this.field(t, "Title"))
       .child(Input.new(this.commentTitle).h(30).w_full().px(UI.gap).bg(solid(t.background)).border_1().border_color(t.border)
         .focus((s) => s.border_color(t.working)).text_color(t.foreground).accessibility_label("Comment title"))
-      .child(div().text_size(UI.small).child("Body"))
+      .child(this.field(t, "Body"))
       .child(Textarea.new(this.commentBody).h(72).w_full().px(UI.gap).bg(solid(t.background)).border_1().border_color(t.border)
         .focus((s) => s.border_color(t.working)).text_color(t.foreground).accessibility_label("Comment body"))
       .when(Boolean(this.commentProblem), (el) => el.child(div().text_color(t.ansi1).child(this.commentProblem)))
@@ -507,21 +564,31 @@ export default class Reviews extends View {
     const historyBusy = this.busy || this.posting || this.saving || Boolean(this.commentAt);
     const paths = [...new Set((r?.findings ?? []).map((f) => f.path))];
     const tone = r?.verdict === "good" ? t.done : r?.verdict === "changes" ? t.ansi1 : t.ansi3;
-    return v_flex().id("review-dialog").track_focus(this.handle).size_full().min_h(0).rounded(UI.radius).overflow_hidden()
-      .bg(solid(t.background)).border_1().border_color(t.accent).shadow_2xl().text_size(UI.prose).text_color(t.foreground)
+    const rule = this.hud ? t.accent + "33" : t.border;
+    const mark = (s) => this.hud ? div().font_family(mono()).child(s) : s;
+    return v_flex().id("review-dialog").track_focus(this.handle).size_full().min_h(0).overflow_hidden()
+      .when(!this.hud, (el) => el.rounded(UI.radius).bg(solid(t.background)).border_1().border_color(t.accent).shadow_2xl())
+      .when(this.hud, (el) => el.relative().children(modalFrame(t, 16)))
+      .text_size(UI.prose).text_color(t.foreground)
       .on_key_down((e, cx) => { if (e.keystroke === "escape") { cx.stop_propagation(); closeOverlay(props().overlay); } })
-      .child(v_flex().flex_none().p(20).gap(UI.gap).border_b(1).border_color(t.border)
+      .child(v_flex().flex_none().gap(UI.gap).border_b(1).border_color(rule)
+        .when(!this.hud, (el) => el.p(20))
+        .when(this.hud, (el) => el.px(20).pt(18).pb(14))
         .child(h_flex().gap(UI.inset).items_start()
-          .child(div().flex_1().min_w(0).font_semibold().text_size(UI.title).child(r ? `#${r.pr.number} ${r.pr.title}` : "Review"))
-          .child(this.action(t, "review-close", "Esc", () => closeOverlay(props().overlay))))
+          .child(this.hud ? h_flex().flex_1().min_w(0).gap(UI.inset).items_center()
+            .child(hudTitle(t, "Review", 16))
+            .when(Boolean(r), (el) => el.child(div().min_w(0).flex_1().truncate().font_family(display()).font_weight(700).text_size(18).text_color(t.foreground).child(`#${r.pr.number} ${r.pr.title}`)))
+            : div().flex_1().min_w(0).font_semibold().text_size(UI.title).child(r ? `#${r.pr.number} ${r.pr.title}` : "Review"))
+          .child(this.hud ? this.closeButton(t) : this.action(t, "review-close", "Esc", () => closeOverlay(props().overlay))))
         .when(Boolean(r), (el) => el.child(h_flex().gap(UI.gap).flex_wrap().text_size(UI.small).text_color(t.muted)
-          .child(`${r.pr.head} → ${r.pr.base}`).child(this.badge(t, r.repo.forge === "github" ? "GitHub" : "Gitea"))
-          .when(r.state === "done" && Boolean(r.verdict), (el) => el.child(this.badge(t, r.verdict, tone)))
+          .when(this.hud, (h) => h.items_center())
+          .child(mark(`${r.pr.head} → ${r.pr.base}`)).child(this.badge(t, r.repo.forge === "github" ? "GitHub" : "Gitea"))
+          .when(r.state === "done" && Boolean(r.verdict), (el) => el.child(this.hud ? this.chip(t, r.verdict, tone) : this.badge(t, r.verdict, tone)))
           .when(Boolean(r.source), (el) => el.child(this.badge(t, r.source.name, t.working)))
           .when(r.source?.kind === "runner", (el) => el
-            .child(r.model || "Model pending")
-            .child(elapsed(r.state === "running" ? Date.now() - Date.parse(r.started_at) : r.duration_ms))
-            .child(`$${Number(r.cost_usd ?? 0).toFixed(2)}`)))))
+            .child(mark(r.model || "Model pending"))
+            .child(mark(elapsed(r.state === "running" ? Date.now() - Date.parse(r.started_at) : r.duration_ms)))
+            .child(mark(`$${Number(r.cost_usd ?? 0).toFixed(2)}`))))))
       .when(this.history.length > 1, (el) => el.child(h_flex().flex_none().px(20).pb(UI.gap).gap(UI.gap).items_center()
         .child(this.action(t, "history-newer", "Newer", (cx) => this.selectReview(cx, this.history[index - 1].file), historyBusy || index <= 0))
         .child(div().flex_1().min_w(0).truncate().text_size(UI.small).text_color(t.muted)
@@ -533,7 +600,7 @@ export default class Reviews extends View {
         .when(Boolean(this.problem), (el) => el.child(div().text_color(t.ansi1).child(this.problem)))
         .when(!r && !this.problem, (el) => el.child(div().text_color(t.muted).child("Reading review...")))
         .when(r?.state === "running", (el) => el.child(h_flex().gap(UI.gap).items_center()
-          .child(svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).spin(1200))
+          .child(this.hud ? spinner(t.working, 14, 1200) : svg("mods/workspace-chrome/spinner.svg").size(14).text_color(t.working).spin(1200))
           .child(`${r.phase ?? "fetching"}: review running. Findings will appear here.`)))
         .when(r?.state === "failed", (el) => el.child(v_flex().gap(UI.gap)
           .child(div().text_color(t.ansi1).child(r.error || "Review failed. Re-run from the panel."))
@@ -543,12 +610,14 @@ export default class Reviews extends View {
         .when(this.tab === "findings", (el) => el
           .when(Boolean(r?.summary), (el) => el.child(TextView.markdown("review-summary", r.summary).selectable().w_full().text_size(UI.prose)))
           .when(r?.state === "done" && !r.findings.length, (el) => el.child(div().text_color(t.done).child("No findings.")))
-          .children(paths.map((path) => v_flex().gap(4).pt(UI.inset)
-          .child(TextView.markdown(`path-${path}`, path).selectable().text_size(UI.body).text_color(t.working))
+          .children(paths.map((path) => v_flex().gap(this.hud ? 10 : 4).pt(UI.inset)
+          .child(this.hud ? TextView.markdown(`path-${path}`, path).selectable().text_size(UI.body).text_color(t.working).font_family(mono())
+            : TextView.markdown(`path-${path}`, path).selectable().text_size(UI.body).text_color(t.working))
           .children(r.findings.filter((f) => f.path === path).map((f) => this.finding(t, f, posted)))))
           .when(Boolean(r?.skipped?.length), (el) => el.child(div().text_size(UI.small).text_color(t.muted).child(`Skipped: ${r.skipped.join(", ")}`)))))
       .when(Boolean(this.commentAt) && this.tab === "diff", (el) => el.child(this.commentForm(t)))
-      .child(v_flex().flex_none().px(20).py(UI.inset).gap(UI.gap).border_t(1).border_color(t.border).bg(solid(t.chrome))
+      .child(v_flex().flex_none().px(20).py(UI.inset).gap(UI.gap).border_t(1).border_color(rule)
+        .when(!this.hud, (el) => el.bg(solid(t.chrome)))
         .when(Boolean(this.postProblem), (el) => el.child(TextView.markdown("post-error", this.postProblem).selectable().text_color(t.ansi1)))
         .when(Boolean(this.postUrl), (el) => el.child(TextView.markdown("post-url", `Posted: [${this.postUrl}](${this.postUrl})`).selectable().text_color(t.done)))
         .child(h_flex().gap(UI.inset).items_center()
@@ -560,6 +629,7 @@ export default class Reviews extends View {
   render(cx) {
     if (this.headless) { if (!checking()) this.tick(cx); return div(); }
     const t = theme();
+    this.hud = isHud();
     return this.file ? this.dialog(t) : this.panel(t);
   }
 }

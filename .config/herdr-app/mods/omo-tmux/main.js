@@ -31,6 +31,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, home, nextCommand, run, theme, shared, setShared, props, focused, watchFolder } from "herdr";
+import { INK, isHud, spinner, mono, display, fill, caps, readout, button as hudButton, title as hudTitle } from "./hud.js";
 
 const listTick = () => `${home()}/.local/state/omo-status/list`;
 const remoteTick = () => `${home()}/.local/state/omo-status/remote`;
@@ -269,32 +270,42 @@ export default class OmoTmux extends View {
   }
 
   status(t, state) {
-    if (state === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
-    if (state === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.ansi5).spin(2400);
+    if (state === "working") return this.hud ? spinner(t.working, 12, 900).mx(1) : svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
+    if (state === "background") return this.hud ? spinner(t.ansi5, 12, 2400).mx(1) : svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.ansi5).spin(2400);
     if (state === "input" || state === "error") {
       const color = state === "error" ? t.ansi1 : t.blocked;
+      // netrunner's HUD: a solid tone block with dark ink and a slanted end.
+      if (this.hud) return div().flex().flex_none().h(18).loop("opacity", { from: 0.55, to: 1, period: 1600 })
+        .child(div().flex().items_center().h_full().px(6).bg(color).text_color(INK).child(caps(state === "error" ? "Failed" : "Needs you", 12, 700)))
+        .child(div().relative().w(7).h_full().child(fill([[["0%", "0%"], ["100%", "0%"], ["0%", "100%"]]], color)));
       return div().flex_none().px(6).h(18).rounded(5).bg(color + "26").text_size(10.5).font_semibold().text_color(color)
         .flex().items_center().loop("opacity", { from: 0.55, to: 1, period: 1600 })
         .child(state === "error" ? "Failed" : "Needs you");
     }
-    if (state === "done") return div().size(7).mx(3).flex_none().rounded(4).bg(t.done);
+    if (state === "done") return div().size(7).mx(3).flex_none().rounded(this.hud ? 0 : 4).bg(t.done);
     // A step done with tasks still open (omo-status's partial): a ring around a dot.
-    if (state === "partial") return div().size(8).mx(2.5).flex_none().rounded(4).border(1.5).border_color(t.done).flex().items_center().justify_center()
-      .child(div().size(3).rounded(2).bg(t.done));
-    return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
+    if (state === "partial") return div().size(8).mx(2.5).flex_none().rounded(this.hud ? 0 : 4).border(1.5).border_color(t.done).flex().items_center().justify_center()
+      .child(div().size(3).rounded(this.hud ? 0 : 2).bg(t.done));
+    return div().size(7).mx(3).flex_none().rounded(this.hud ? 0 : 4).border(1.5).border_color(t.idle ?? t.dim);
   }
 
   fold(t, idle) {
     return h_flex().id("omo-idle").px(8).h(ROW_H).flex_none().gap(6).items_center().text_size(12).text_color(t.dim)
       .cursor_pointer().hover((s) => s.text_color(t.foreground))
       .on_click((_e, cx) => { this.showIdle = !this.showIdle; cx.notify(); })
-      .child(`${idle} idle ${this.showIdle ? "▴" : "▾"}`);
+      .child(this.hud ? caps(`${idle} idle`, 12.5) : `${idle} idle ${this.showIdle ? "▴" : "▾"}`)
+      .when(this.hud, (el) => el.child(this.showIdle ? "▴" : "▾"));
   }
 
   header(t, s) {
     const top = s.panes.reduce((m, p) => ((RANK[p.state] ?? 0) > (RANK[m] ?? 0) ? p.state : m), null);
+    const urgent = top === "input" || top === "error";
+    if (this.hud) return h_flex().px(8).pt(8).h(HEAD_H).flex_none().gap(6).items_center()
+      .child(div().truncate().font_family(display()).font_weight(700).text_size(13.5).text_color(urgent ? t.blocked : t.muted).child(s.name))
+      .child(readout(t, s.panes.length, { status: urgent ? t.blocked : null, h: 16 }))
+      .child(div().flex_1().h(1).bg(t.accent + "33"));
     return h_flex().px(8).pt(8).h(HEAD_H).flex_none().gap(6).items_center().text_size(11).font_medium()
-      .child(div().truncate().text_color(top === "input" || top === "error" ? t.blocked : t.dim).child(s.name))
+      .child(div().truncate().text_color(urgent ? t.blocked : t.dim).child(s.name))
       .child(div().text_color(t.dim).child(String(s.panes.length)));
   }
 
@@ -312,19 +323,21 @@ export default class OmoTmux extends View {
       .px(8)
       .h(p.msg ? ROW_MSG_H : ROW_H)
       .flex_none()
-      .rounded(8)
+      .rounded(this.hud ? 0 : 8)
       .gap(9)
       .items_center()
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click((_e, cx) => this.open(p, cx))
-      .when(Boolean(flash), (el) => el.child(div().id(`flash-${p.pane}-${flash.gen}`).absolute().inset_0().rounded(8).bg(t.done + "38")
+      .when(this.hud, (el) => el.border_b(1).border_color(t.accent + "26"))
+      .when(Boolean(flash), (el) => el.child(div().id(`flash-${p.pane}-${flash.gen}`).absolute().inset_0().rounded(this.hud ? 0 : 8).bg(t.done + "38")
         .opacity(flash.lit ? 1 : 0).transition("opacity", { duration: 1500, easing: "ease-out" })))
       .child(v_flex().flex_1().min_w(0).gap(1)
-        .child(div().truncate().text_color(quiet ? t.muted : t.foreground).child(label))
+        .child(div().truncate().text_color(quiet ? t.muted : t.foreground)
+          .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(14)).child(label))
         .when(Boolean(p.msg), (el) => el.child(div().truncate().text_size(11.5).text_color(t.dim).child(msg))))
-      .when(Boolean(wake) && !goalWait, (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi5).child(countdown(p.resumeAt - now))))
-      .when(!wake && !quiet && Boolean(p.since), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - p.since))))
+      .when(Boolean(wake) && !goalWait, (el) => el.child(div().flex_none().text_size(11).text_color(t.ansi5).when(this.hud, (e) => e.font_family(mono())).child(countdown(p.resumeAt - now))))
+      .when(!wake && !quiet && Boolean(p.since), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).when(this.hud, (e) => e.font_family(mono())).child(duration(now - p.since))))
       .child(this.status(t, p.state));
   }
 
@@ -343,6 +356,7 @@ export default class OmoTmux extends View {
       this.noteFinished(cx);
     }
     const t = theme();
+    this.hud = isHud();
     const now = Date.now();
     const idle = this.panes.filter((p) => p.state === "idle").length;
     const sessions = sessionsWithUrgentPanesFirst(this.showIdle ? this.panes : this.panes.filter((p) => p.state !== "idle"));
@@ -376,19 +390,24 @@ export default class OmoTmux extends View {
       .opacity(m.leaving ? 0 : 1).transition("opacity", MOTION).child(x.draw());
 
     const empty = !list ? "Reading omo-status…" : this.problem ?? (idle ? "Nothing needs you." : "No omo running in tmux.");
-    return v_flex().id("omo").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().font_semibold().child("omo in tmux"))
-        .child(this.badge(t, `${this.panes.length} pane${this.panes.length === 1 ? "" : "s"}`))
-        .when(needs > 0, (el) => el.child(this.badge(t, `${needs} need${needs === 1 ? "s" : ""} you`, t.blocked)))
+    const panesText = `${this.panes.length} pane${this.panes.length === 1 ? "" : "s"}`, needsText = `${needs} need${needs === 1 ? "s" : ""} you`;
+    const spacesIcon = this.syncing
+      ? (this.hud ? spinner(t.working, 13, 900) : svg("mods/workspace-chrome/spinner.svg").size(13).text_color(t.working).spin(900))
+      : svg("mods/workspace-chrome/layers.svg").size(14);
+    return v_flex().id("omo").size_full().min_h(0).rounded(this.hud ? 0 : 10).overflow_hidden().bg(t.background).border_1().border_color(this.hud ? t.accent + "4d" : t.border).text_color(t.foreground).text_size(13)
+      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(this.hud ? t.accent + "33" : t.border)
+        .when(!this.hud, (el) => el.child(div().font_semibold().child("omo in tmux"))
+          .child(this.badge(t, panesText))
+          .when(needs > 0, (e) => e.child(this.badge(t, needsText, t.blocked))))
+        .when(this.hud, (el) => el.child(hudTitle(t, "omo in tmux", 16))
+          .child(div().id("omo-panes").tooltip(panesText).child(readout(t, this.panes.length)))
+          .when(needs > 0, (e) => e.child(div().id("omo-needs").tooltip(needsText).child(readout(t, needs, { status: t.blocked, pulse: true })))))
         .child(div().flex_1())
-        .child(div().id("omo-spaces").size(22).flex_none().flex().items_center().justify_center().rounded(5)
-          .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer()
+        .child((this.hud ? hudButton(t, "omo-spaces", "Spaces", { icon: spacesIcon.relative() })
+          : div().id("omo-spaces").size(22).flex_none().flex().items_center().justify_center().rounded(5)
+            .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)).cursor_pointer().child(spacesIcon))
           .tooltip("Give every tmux session running omo its own space")
-          .on_click((_e, cx) => this.syncSpaces(cx))
-          .child(this.syncing
-            ? svg("mods/workspace-chrome/spinner.svg").size(13).text_color(t.working).spin(900)
-            : svg("mods/workspace-chrome/layers.svg").size(14))))
+          .on_click((_e, cx) => this.syncSpaces(cx))))
       .when(sessions.length === 0, (el) => el.child(div().px(12).py(8).text_size(12).text_color(t.dim).child(empty)))
       .child(v_flex().id("omo-list").relative().flex_1().min_h(0).px(8).pb(6).overflow_y_scrollbar().mode("always")
         .children([...m.exits.map(leaving), ...items.map(fly)]));

@@ -34,6 +34,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { exec, home, appHome, theme, props, settings, shared, setShared, run, readTextFile, layout, window } from "herdr";
+import { INK, isHud, spinner, display, frame, fill, caps, button as hudButton, title as hudTitle } from "./hud.js";
 
 const SEP = "|^|";
 const AGENT_STATE = "http://127.0.0.1:4747";
@@ -511,13 +512,15 @@ export default class PriorityQueue extends View {
     const known = Boolean(it.sid && it.at), can = known && !this.answered.has(it.key);
     const now = count === 1 && !q.multiSelect;
     return v_flex().gap(6)
-      .when(Boolean(q.header), (el) => el.child(div().font_family(mono()).text_size(10).font_bold().text_color(t.dim).child(q.header.toUpperCase())))
+      .when(Boolean(q.header), (el) => el.child(this.hud ? caps(q.header, 12, 700).text_color(t.dim)
+        : div().font_family(mono()).text_size(10).font_bold().text_color(t.dim).child(q.header.toUpperCase())))
       .child(this.markdown(t, `q-${it.key}-${qi}`, q.question))
       .children((q.options ?? []).map((o, oi) => {
         const on = chosen.includes(o.label);
-        return v_flex().id(`opt-${it.key}-${qi}-${oi}`).px(10).py(6).gap(2).border_1()
-          .border_color(on ? t.accent : t.border).bg(on ? t.accent + "1f" : t.background)
-          .when(can, (el) => el.cursor_pointer().hover((s) => s.border_color(t.accent + "b3").bg(t.accent + "14"))
+        return v_flex().id(`opt-${it.key}-${qi}-${oi}`).px(10).py(6).gap(2)
+          .when(!this.hud, (el) => el.border_1().border_color(on ? t.accent : t.border).bg(on ? t.accent + "1f" : t.background))
+          .when(this.hud, (el) => el.relative().children(frame(6, { bg: on ? t.accent + "1f" : t.accent + "08", line: on ? t.accent : t.accent + "4d" })))
+          .when(can, (el) => el.cursor_pointer().hover((s) => (this.hud ? s.bg(t.accent + "0d") : s.border_color(t.accent + "b3").bg(t.accent + "14")))
             .on_click((_e, cx) => {
               if (!now) return this.pick(it, qi, o.label, q.multiSelect, cx);
               // The option stays marked on the answered card.
@@ -526,7 +529,7 @@ export default class PriorityQueue extends View {
             }))
           .when(!known, (el) => el.tooltip("agent-state doesn't know this session: answer it in its pane"))
           .child(h_flex().gap(7).items_center()
-            .when(!now, (el) => el.child(div().size(10).flex_none().rounded(q.multiSelect ? 2 : 5).border(1.5).border_color(on ? t.accent : t.dim).when(on, (e) => e.bg(t.accent))))
+            .when(!now, (el) => el.child(div().size(10).flex_none().rounded(this.hud ? 0 : q.multiSelect ? 2 : 5).border(1.5).border_color(on ? t.accent : t.dim).when(on, (e) => e.bg(t.accent))))
             .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(o.label)))
           .when(Boolean(o.description), (el) => el.child(div().text_size(11.5).line_height(1.4).text_color(t.muted).child(o.description)));
       }));
@@ -539,9 +542,10 @@ export default class PriorityQueue extends View {
       return v_flex().gap(14)
         .children(qs.map((q, i) => this.question(t, it, q, i, qs.length)))
         .when(Boolean(answer) && (qs.length > 1 || qs[0].multiSelect) && !this.answered.has(it.key), (el) => el.child(h_flex()
-          .child(div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().bg(t.accent).text_color(solid(t.background))
-            .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85))
-            .tooltip(answer).on_click((_e, cx) => this.reply(it, answer, cx)).child("SEND ANSWER"))));
+          .child((this.hud ? hudButton(t, `picks-${it.key}`, "Send answer", { on: true, h: 26 })
+            : div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().bg(t.accent).text_color(solid(t.background))
+              .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85)).child("SEND ANSWER"))
+            .tooltip(answer).on_click((_e, cx) => this.reply(it, answer, cx)))));
     }
     if (it.kind === "blocked") return this.markdown(t, `b-${it.key}`, it.msg || "Blocked.");
     const summary = it.summary || it.msg;
@@ -557,6 +561,8 @@ export default class PriorityQueue extends View {
   }
 
   button(t, id, label, icon, tip, onClick, tone) {
+    if (this.hud) return hudButton(t, id, label, { tone, icon: svg(`mods/workspace-chrome/${icon}.svg`).size(12).relative() })
+      .tooltip(tip).on_click((_e, cx) => onClick(cx));
     return h_flex().id(id).px(8).h(24).gap(5).flex_none().items_center().border_1().border_color(t.border).bg(t.background)
       .font_family(mono()).text_size(10.5).font_bold().text_color(tone ?? t.muted).cursor_pointer()
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(tip).on_click((_e, cx) => onClick(cx))
@@ -581,9 +587,11 @@ export default class PriorityQueue extends View {
   // On an answered card, above the greyed-out rest: what you answered, and that the agent hasn't taken it yet.
   heldNote(t, it, sent, now) {
     const said = sent.text.replace(/\s*\n\s*/g, " \u00b7 ");
-    return v_flex().gap(4).px(10).py(7).border_1().border_color(t.working + "4d").bg(t.working + "0f")
+    return v_flex().gap(4).px(10).py(7)
+      .when(!this.hud, (el) => el.border_1().border_color(t.working + "4d").bg(t.working + "0f"))
+      .when(this.hud, (el) => el.relative().children(frame(6, { bg: t.working + "0f", line: t.working + "80" })))
       .child(h_flex().gap(7).items_center().font_family(mono()).text_size(10.5).font_bold().text_color(t.working)
-        .child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900))
+        .child(this.hud ? spinner(t.working, 12, 900) : svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900))
         .child(div().flex_1().min_w(0).truncate()
           .child(this.status.get(it.key) === "sending" ? "SENDING YOUR ANSWER\u2026" : "ANSWERED \u00b7 WAITING FOR THE AGENT"))
         .child(div().flex_none().font_normal().text_color(t.dim).child(ago(now - sent.at))))
@@ -591,11 +599,14 @@ export default class PriorityQueue extends View {
   }
 
   replyBox(t, it) {
-    return h_flex().h(34).pl(10).pr(4).gap(6).items_center().border_1().border_color(t.accent + "b3").bg(t.background)
+    return h_flex().h(34).pl(10).pr(4).gap(6).items_center()
+      .when(!this.hud, (el) => el.border_1().border_color(t.accent + "b3").bg(t.background))
+      .when(this.hud, (el) => el.relative().children(frame(6, { bg: t.accent + "0d", line: t.accent + "b3" })))
       .child(Input.new(this.input).flex_1().h_full().text_size(12.5).text_color(t.foreground))
-      .child(div().id(`send-${it.key}`).px(8).h(24).flex().flex_none().items_center().bg(t.accent).text_color(solid(t.background))
-        .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85))
-        .on_click((_e, cx) => this.sendTyped(cx)).child("SEND"));
+      .child((this.hud ? hudButton(t, `send-${it.key}`, "Send", { on: true, h: 24 })
+        : div().id(`send-${it.key}`).px(8).h(24).flex().flex_none().items_center().bg(t.accent).text_color(solid(t.background))
+          .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85)).child("SEND"))
+        .on_click((_e, cx) => this.sendTyped(cx)));
   }
 
   // A card is a block in its session's colour, as the session is in the Agents tree: a band of it across
@@ -611,6 +622,7 @@ export default class PriorityQueue extends View {
     // The header names the session, so a project of the same name isn't repeated.
     const where = [it.project !== title && it.project !== it.session ? it.project : null, it.window && !GENERIC.has(it.window) && it.window !== it.project && it.window !== title ? it.window : null]
       .filter(Boolean).join(" \u00b7 ");
+    if (this.hud) return this.hudCard(t, it, now, { kind, tone, band, urgent, title, where, sent });
     return v_flex().id(`card-${it.key}`).flex_none().overflow_hidden().bg(t.chrome).border_1().border_color(urgent ? tone : band + "59")
       .child(h_flex().id(`head-${it.key}`).h(28).flex_none().pr(10).gap(8).items_center().bg(sent ? t.dim.slice(0, 7) + "26" : band + "40").font_family(mono()).text_size(10.5)
         .when(Boolean(it.pane || it.tmux), (el) => el.cursor_pointer().tooltip("Show it in Herdr").on_click((_e, cx) => this.goTo(it, cx)))
@@ -623,15 +635,44 @@ export default class PriorityQueue extends View {
         .child(div().flex_none().text_color(t.muted).child(ago(now - it.since))))
       .child(h_flex().items_stretch().bg(mix(band, "#ffffff", 0.35) + "14")
         .child(div().w(3).flex_none().bg(sent ? band + "66" : band))
-        .child(v_flex().flex_1().min_w(0).px(12).py(10).gap(8)
-        .when(Boolean(sent), (el) => el.child(this.heldNote(t, it, sent, now)))
-        .child(v_flex().gap(8).when(Boolean(sent), (el) => el.opacity(0.45))
-          .child(v_flex().gap(1)
-            .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground).child(title))
-            .when(Boolean(where), (el) => el.child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(where))))
-          .child(this.body(t, it)))
-        .child(this.actions(t, it))
-        .when(this.replyTo === it.key, (el) => el.child(this.replyBox(t, it)))));
+        .child(this.inside(t, it, now, title, where, sent)));
+  }
+
+  // netrunner's HUD card: a cut-corner frame lined in the session's colour (the kind's while it needs you), the kind as
+  // a solid chip with a slanted end, a rule of the session's colour under the header and an edge of it down the left,
+  // stopping short of the cut corner.
+  hudCard(t, it, now, { kind, tone, band, urgent, title, where, sent }) {
+    const C = 10, chip = sent ? t.muted : tone;
+    return v_flex().id(`card-${it.key}`).relative().flex_none()
+      .children(frame(C, { bg: t.chrome, line: urgent ? tone : band + "99" }))
+      .child(h_flex().id(`head-${it.key}`).h(32).flex_none().pl(8).pr(C + 4).gap(8).items_center().border_b(1).border_color(band + "66")
+        .when(Boolean(it.pane || it.tmux), (el) => el.cursor_pointer().tooltip("Show it in Herdr").on_click((_e, cx) => this.goTo(it, cx)))
+        .child(h_flex().h(20).flex_none()
+          .child(h_flex().h_full().pl(7).pr(3).gap(6).items_center().bg(chip).text_color(INK)
+            .when(urgent, (el) => el.child(div().size(6).bg(INK).loop("opacity", { from: 0.3, to: 1, period: 1400 })))
+            .child(caps(sent ? (this.status.get(it.key) === "sending" ? "Sending" : "Answered") : kind.label, 12.5, 700)))
+          .child(div().relative().w(8).h_full().child(fill([[["0%", "0%"], ["100%", "0%"], ["0%", "100%"]]], chip))))
+        .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_family(display()).font_weight(600).text_size(14.5).text_color(t.foreground).child(it.session)))
+        .when(Boolean(it.machine), (el) => el.child(caps(it.machine, 12.5).flex_none().text_color(REMOTE)))
+        .child(div().flex_1())
+        .child(div().flex_none().font_family(mono()).text_size(10.5).text_color(t.muted).child(ago(now - it.since))))
+      .child(h_flex().items_stretch()
+        .child(div().w(3).mb(C).flex_none().bg(sent ? band + "66" : band))
+        .child(this.inside(t, it, now, title, where, sent)));
+  }
+
+  // A card below its header: your answer while it is held, the title and where, the body, actions and reply box.
+  inside(t, it, now, title, where, sent) {
+    return v_flex().flex_1().min_w(0).px(12).py(10).gap(8)
+      .when(Boolean(sent), (el) => el.child(this.heldNote(t, it, sent, now)))
+      .child(v_flex().gap(8).when(Boolean(sent), (el) => el.opacity(0.45))
+        .child(v_flex().gap(1)
+          .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground)
+            .when(this.hud, (el) => el.font_family(display()).text_size(15.5)).child(title))
+          .when(Boolean(where), (el) => el.child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(where))))
+        .child(this.body(t, it)))
+      .child(this.actions(t, it))
+      .when(this.replyTo === it.key, (el) => el.child(this.replyBox(t, it)));
   }
 
   render(cx) {
@@ -643,6 +684,7 @@ export default class PriorityQueue extends View {
       return div();
     }
     const t = theme();
+    this.hud = isHud();
     const data = shared("omo.queue");
     // Cards you answered go below the ones still waiting on you.
     const items = [...data?.items ?? []].sort((a, b) => Number(this.answered.has(a.key)) - Number(this.answered.has(b.key)));
@@ -652,15 +694,17 @@ export default class PriorityQueue extends View {
     const held = items.filter((it) => this.answered.has(it.key)).length;
     const needs = items.filter((it) => KINDS[it.kind].rank === 2 && !this.answered.has(it.key)).length, finished = items.length - needs - held;
     const count = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : null, finished ? `${finished} finished` : null, held ? `${held} answered` : null].filter(Boolean).join(" \u00b7 ");
-    return v_flex().id("priority-queue").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1()
-      .border_color(needs ? t.accent + "99" : t.border).text_size(13).text_color(t.foreground)
+    return v_flex().id("priority-queue").size_full().min_h(0).rounded(this.hud ? 0 : 10).overflow_hidden().bg(t.background).border_1()
+      .border_color(needs ? t.accent + "99" : this.hud ? t.accent + "4d" : t.border).text_size(13).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 4) { this.width = size.width; cx.notify(); } })
       .child(h_flex().h(3).flex_none().children(steps(t.accent.slice(0, 7), t.working.slice(0, 7), 16)))
       .child(h_flex().h(46).flex_none().px(14).gap(10).items_center().border_b(1).border_color(t.border)
-        .child(h_flex().h(22).gap(3).flex_none().items_end().child(div().w(3).h(22).bg(t.accent)).child(div().w(3).h(13).bg(t.working)))
-        .child(v_flex().gap(2).min_w(0)
-          .child(div().font_family(mono()).text_size(13).font_bold().child("PRIORITY QUEUE"))
-          .child(div().font_family(mono()).text_size(10.5).text_color(needs ? t.accent : t.dim).child(count || "all clear")))
+        .when(this.hud, (el) => el.child(v_flex().gap(3).min_w(0).child(hudTitle(t, "Priority queue", 17))
+          .child(caps(count || "all clear", 12.5).pl(12).text_color(needs ? t.accent : t.dim))))
+        .when(!this.hud, (el) => el.child(h_flex().h(22).gap(3).flex_none().items_end().child(div().w(3).h(22).bg(t.accent)).child(div().w(3).h(13).bg(t.working)))
+          .child(v_flex().gap(2).min_w(0)
+            .child(div().font_family(mono()).text_size(13).font_bold().child("PRIORITY QUEUE"))
+            .child(div().font_family(mono()).text_size(10.5).text_color(needs ? t.accent : t.dim).child(count || "all clear"))))
         .child(div().flex_1())
         .child(div().id("queue-hide").size(24).flex().flex_none().items_center().justify_center().rounded(4).cursor_pointer()
           .hover((s) => s.bg(t.hover)).tooltip("Hide (\u2318\u21e7J)").on_click(() => run("layout.hide", { id: "queue" }))

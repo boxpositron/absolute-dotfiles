@@ -3,6 +3,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, run, props, window, updates, layout } from "herdr";
+import { isHud, frame, caps } from "./hud.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -22,28 +23,32 @@ const narrow = () => !props()?.overlay && (find(layout(), "sidebar")?.size?.px ?
 const toggleSidebar = () => run("side-fit.sidebar");
 
 export default class WorkspaceChrome extends View {
+  // netrunner's HUD (props {style: "cyberpunk"}): framed cyan icon squares, pink capitals and pink rules.
   button(id, label, action) {
     const t = theme();
-    return div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground))
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(action).child(label);
+    return div().id(id).size(26).flex_none().flex().items_center().justify_center()
+      .when(!this.hud, el => el.rounded(6).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)))
+      .when(this.hud, el => el.relative().children(frame(5, { bg: t.working + "14", line: t.working + "b3" })).text_color(t.working).hover(s => s.text_color(t.foreground)))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(action).child(div().relative().flex().child(label));
   }
   render() {
     const t = theme();
     const collapsed = narrow();
+    const hud = this.hud = isHud();
     if (props()?.footer) {
-      const row = (id, icon, label, dim, action) => h_flex().id(id).h(28).px(8).gap(9).items_center().rounded(8)
+      const row = (id, icon, label, dim, action) => h_flex().id(id).h(28).px(8).gap(9).items_center().rounded(hud ? 0 : 8)
         .when(collapsed, el => el.relative().w(32).px(0).justify_center().tooltip(label))
-        .text_color(dim ? t.dim : t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).cursor_pointer()
-        .on_click(action).child(svg(`mods/workspace-chrome/${icon}.svg`).size(14))
-        .when(!collapsed, el => el.child(label));
-      const ready = div().size(6).rounded_full().bg(t.accent);
-      return v_flex().size_full().bg(t.chrome).border_t(1).border_color(t.border).px(8).pt(4).pb(8).text_size(13)
+        .text_color(dim ? t.dim : t.muted).hover(s => s.bg(hud ? t.accent + "1a" : t.hover).text_color(t.foreground)).cursor_pointer()
+        .on_click(action).child(svg(`mods/workspace-chrome/${icon}.svg`).size(14).when(hud, el => el.text_color(t.working)))
+        .when(!collapsed, el => el.child(hud ? caps(label, 14) : label));
+      const ready = div().size(6).when(!hud, el => el.rounded_full()).bg(t.accent);
+      return v_flex().size_full().bg(t.chrome).border_t(1).border_color(hud ? t.accent + "59" : t.border).px(8).pt(4).pb(8).text_size(13)
         .when(collapsed, el => el.px(0).items_center())
         .child(row("settings", "settings", "Settings", false, () => run("app.settings"))
           .when(Boolean(updates().app.ready), el => el.child(collapsed ? ready.absolute().top(5).right(6) : ready)))
         .child(row("machine", collapsed ? "server" : "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" }))
           // On the rail a server with a + on its corner, so it doesn't pass for the spaces' new-space buttons.
-          .when(collapsed, el => el.child(div().absolute().right(5).bottom(3).size(11).rounded(6).bg(t.chrome).flex().items_center()
+          .when(collapsed, el => el.child(div().absolute().right(5).bottom(3).size(11).rounded(hud ? 0 : 6).bg(t.chrome).flex().items_center()
             .justify_center().child(svg("mods/workspace-chrome/plus.svg").size(8)))));
     }
     // Search and the sidebar toggle stay at the top either way. On the macOS rail the traffic lights fill the row's first
@@ -64,9 +69,11 @@ export default class WorkspaceChrome extends View {
       return v_flex().size_full().bg(t.chrome).items_center().when(tall, el => el.justify_end().pb(8)).when(!tall, el => el.justify_center())
         .child(h_flex().gap(4).items_center().when(roomy, el => el.child(search)).child(toggle));
     }
-    return h_flex().size_full().bg(t.chrome).pl(14).pr(10).gap(4).items_center().text_size(13.5)
+    return h_flex().size_full().bg(t.chrome).pl(14).pr(10).gap(hud ? 6 : 4).items_center().text_size(13.5)
+      .when(hud, el => el.border_b(1).border_color(t.accent + "59"))
       .when(window()?.platform === "macos" && !window()?.fullscreen, el => el.pl(76))
-      .child(h_flex().flex_1().gap(8).items_center().child(image("frame/welcome/herdr.png").size(20).rounded(5)).child(div().font_semibold().text_color(t.foreground).child("Herdr")))
+      .child(h_flex().flex_1().gap(8).items_center().child(image("frame/welcome/herdr.png").size(20).rounded(hud ? 0 : 5))
+        .child(hud ? caps("Herdr", 17, 700).text_color(t.accent) : div().font_semibold().text_color(t.foreground).child("Herdr")))
       .child(search)
       .child(toggle);
   }

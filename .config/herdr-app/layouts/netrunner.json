@@ -171,8 +171,7 @@
                     "px": 40
                   },
                   "hidden": true,
-                  "background": "#0a0a144d",
-                  "radius": 10
+                  "radius": 0
                 },
                 {
                   "id": "queue",
@@ -182,7 +181,7 @@
                   },
                   "hidden": true,
                   "background": "#0a0a144d",
-                  "radius": 10
+                  "radius": 0
                 },
                 {
                   "id": "panel-bar",
@@ -197,8 +196,7 @@
                     "px": 40
                   },
                   "hidden": true,
-                  "background": "#0a0a144d",
-                  "radius": 10
+                  "radius": 0
                 },
                 {
                   "id": "panel",
@@ -215,14 +213,13 @@
                       "size": {
                         "px": 116
                       },
-                      "background": "#0a0a144d",
-                      "radius": 10
+                      "radius": 0
                     },
                     {
                       "id": "panel-body",
                       "type": "stack",
                       "background": "#0a0a144d",
-                      "radius": 10,
+                      "radius": 0,
                       "children": [
                         {
                           "id": "files",
@@ -249,7 +246,7 @@
                                 "width": 1,
                                 "color": "border"
                               },
-                              "radius": 10
+                              "radius": 0
                             },
                             {
                               "id": "files-edit",
@@ -262,7 +259,7 @@
                                 "width": 1,
                                 "color": "border"
                               },
-                              "radius": 10,
+                              "radius": 0,
                               "padding": 6
                             }
                           ],
@@ -467,5 +464,7 @@
   "traffic_lights": [
     12,
     16
-  ]
+  ],
+  "terminal_menu": "menu-tmux",
+  "toast": "toast-tmux"
 }

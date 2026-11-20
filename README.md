@@ -120,7 +120,7 @@ It creates individual relative symlinks, skips links that are already correct, a
 
 Credentials, `settings.local.json`, plugin installations, unrelated user skills, histories, caches and runtime state are not copied into this repository or managed by this script. Install other plugins and portable skills separately. OmO's MCP servers live in `~/.omo/agent/mcp.json`, which this repository does not manage; the local ones (headroom, agcanvas, uvx, ast-grep-mcp, portfolio-mcp) must be installed on a new machine before they resolve.
 
-OmO's hooks, keys, extensions and slash commands (`~/.omo/agent/hooks.json`, `keybindings.json`, `extensions/` and `prompts`) and the scripts in `~/.local/bin` are linked by the `links` step of `setup-mac.sh` instead.
+OmO's hooks, keys, extensions, slash commands and themes (`~/.omo/agent/hooks.json`, `keybindings.json`, `extensions/`, `prompts` and `themes`) and the scripts in `~/.local/bin` are linked by the `links` step of `setup-mac.sh` instead.
 
 Restart OmO and Claude Code after applying changes. On first use, Claude may ask you to approve the shared preferences import. Updates can rewrite generated configuration or replace symlinks, so review the live files and the repository diff before rerunning the link script, which backs up divergent live files rather than merging them. This step changes no plugin versions or model choices.
 
@@ -149,7 +149,7 @@ The Neovim config is [absolute-vim](https://github.com/boxpositron/absolute-vim)
 
 Herdr's desktop app is the window around tmux: each tab runs a tmux client, and Herdr adds the theme, agent status, sounds and toasts around it. Everything below is described in full in [its README](.config/herdr-app/README.md).
 
-- The `netrunner` layout, in a cyberpunk theme that tmux's bar matches. Other layouts use Catppuccin Mocha and Latte, following the system appearance. JetBrainsMono Nerd Font 14, omo's own sounds, telemetry off.
+- The `netrunner` layout, in a cyberpunk theme that tmux's bar matches, and `ash`, the same layout in dark grey with cream outlines. Other layouts use Catppuccin Mocha and Latte, following the system appearance. JetBrainsMono Nerd Font 14, omo's own sounds, telemetry off.
 - The Agents tab lists every tmux server (this Mac and each connected machine), its sessions and the omo panes in them, each with its state and message. Drag a session to put it where you want it.
 - The side panel shows Files, Changes, MCP, "omo in tmux" and Jobs for the tmux pane you are in. Cmd+Alt+B collapses it and brings it back, as Cmd+B does the sidebar.
 - Cmd+P searches tabs, spaces, and the tmux sessions and panes on every machine, and starts a new tmux session by name. Cmd+J shows the pane that most needs you, and Cmd+Shift+B opens the omo board.
@@ -208,6 +208,7 @@ OpenCode is retired. Its agents, commands and plugins are left in `.config/openc
 - `omo.jsonc` (linked as `~/.omo/omo.jsonc`): model routing for the main session, task categories and curated agents. `design-critique-a` and `design-critique-b` are the two lanes the Impeccable critique delegates its assessments to.
 - `hooks.json` (linked as `~/.omo/agent/hooks.json`): runs `omo-notify` when a session starts, when you send a prompt, when a session stops and when it asks you something, for the sound, the notification, the coloured tab marker and the status Herdr shows. It also runs `owt hook` with each prompt, which tells an agent in an `owt` workspace its current tab title so it retitles the tab as the work changes. omo runs a new hook only after you approve it with `/hooks trust <id>` (the ids are in `/hooks list`).
 - `keybindings.json` (linked as `~/.omo/agent/keybindings.json`): interrupt on Ctrl+G and the external editor on Ctrl+Q.
+- `themes/` (linked as `~/.omo/agent/themes`): `netrunner.json`, omo's TUI in Herdr's netrunner palette: hot pink accent, borders and inline code, cyan tool titles and links, yellow headings, green success and code blocks on dark tool and prompt blocks, and the input border going blue, cyan, violet, pink, yellow as the thinking level rises. Pick it with `/settings` or `"theme": "netrunner"` in `~/.omo/agent/settings.json`; while it is the active theme, edits to the file show at once.
 - `sounds/`: omo's own notification sounds, rendered offline by `sfx` from `recipes.toml`. They are pure synthesis, so they contain no third-party audio and play on Linux too. `omo-sound` plays them for `omo-notify` and `omo-remote`. Edit a recipe, run `sfx recipes.toml` in that folder, and the next notification uses the new sound.
 - `prompts/` (linked as `~/.omo/agent/prompts`): slash commands.
   - `/linear-sync [notes]` posts a progress comment on the workspace's Linear issues and sets them to In Progress, or In Review once a PR is open.
@@ -394,7 +395,7 @@ Terminal themes are set in:
 
 - Ghostty: `.config/ghostty/colorscheme`
 - WezTerm: `.config/wezterm/wezterm.lua`
-- Herdr: `.config/herdr-app/themes/`, with `netrunner.json` for the `netrunner` layout and tmux's bar matching it
+- Herdr: `.config/herdr-app/themes/`, with `netrunner.json` for the `netrunner` layout and tmux's bar matching it, and `ash.json` for the `ash` layout
 
 ## Secrets and local files
 

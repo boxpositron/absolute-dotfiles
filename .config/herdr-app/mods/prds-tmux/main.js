@@ -16,6 +16,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { exec, home, shared, setShared, theme, props, focused, checking, openOverlay, nextCommand } from "herdr";
+import { INK, isHud, display, frame, caps, readout, button as hudButton, title as hudTitle } from "./hud.js";
 
 const GENERIC = new Set(["bun", "node", "omo", "zsh", "bash", "fish", "sh", "mosh-client", "ssh"]);
 const studioPrds = () => `${home()}/.local/bin/studio-prds`;
@@ -45,6 +46,9 @@ function duration(ms) {
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
+
+// A theme colour with an alpha: the muted and dim colours may carry one already.
+const tint = (c, a) => (c.length === 9 ? c.slice(0, 7) : c) + a;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const day = (s) => {
@@ -178,17 +182,22 @@ export default class Prds extends View {
   }
 
   action(t, id, label, onClick) {
+    if (this.hud) return hudButton(t, id, label, { h: 20 }).on_click((_e, cx) => onClick(cx));
     return div().id(id).px(7).h(20).flex().items_center().rounded(4).border_1().border_color(t.border).text_color(t.muted).cursor_pointer()
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => onClick(cx)).child(label);
   }
 
+  // netrunner's HUD: a small cut-corner chip of the colour, its words in capitals.
   badge(t, text, color) {
+    if (this.hud) return div().relative().px(6).h(16).flex_none().flex().items_center()
+      .children(frame(4, { bg: tint(color ?? t.muted, "14"), line: tint(color ?? t.muted, "80") }))
+      .child(caps(text, 11, 700).relative().text_color(color ?? t.muted));
     return div().px(5).py(1).flex_none().rounded(4).border_1().border_color(t.border).text_size(10).text_color(color ?? t.muted).child(text);
   }
 
   bar(t, reqs) {
-    if (reqs.length === 0) return div().h(6).rounded(3).bg(t.border);
-    return h_flex().h(6).gap(2).children(reqs.map((q, i) => div().id(`seg-${i}`).flex_1().h_full().rounded(2)
+    if (reqs.length === 0) return div().h(6).rounded(this.hud ? 0 : 3).bg(t.border);
+    return h_flex().h(6).gap(2).children(reqs.map((q, i) => div().id(`seg-${i}`).flex_1().h_full().rounded(this.hud ? 0 : 2)
       .bg(q.done ? t.done : q.task_status === "in_progress" ? t.working : t.border)
       .tooltip(`R${q.index} \u00b7 ${q.done ? "done" : q.task_status === "in_progress" ? "in progress" : "open"}: ${q.text}`)));
   }
@@ -200,18 +209,21 @@ export default class Prds extends View {
       : p.task_title ? `${p.task_title}${unlinked ? " \u00b7 not on a PRD" : ""}`
       : p.task ? (unlinked ? "Its task is on no PRD" : "Bound to a task Studio didn't return")
       : unlinked && p.client ? "No task bound: omo-work bind <task>" : "No task bound";
-    return h_flex().id(`${key}-${p.pane}`).px(6).py(4).gap(8).items_start().rounded(6)
+    return h_flex().id(`${key}-${p.pane}`).px(6).py(4).gap(8).items_start().rounded(this.hud ? 0 : 6)
       .when(here, (el) => el.bg(t.selected))
       .cursor_pointer().hover((el) => el.bg(t.hover))
       .tooltip(p.msg || `${paneLabel(p)}: ${s.label}`)
       .on_click((_e, cx) => this.run(cx, omoStatus(), ["show", p.pane, "exact"]))
-      .child(div().mt(5).size(7).flex_none().rounded(4).bg(s.color))
+      .child(div().mt(5).size(7).flex_none().rounded(this.hud ? 0 : 4).bg(s.color))
       .child(v_flex().min_w(0).flex_1().gap(1)
         .child(h_flex().gap(6).items_center()
-          .child(div().min_w(0).flex_1().truncate().text_size(12.5).text_color(here ? t.foreground : t.muted).child(paneLabel(p)))
-          .child(div().flex_none().text_size(10.5).text_color(s.color).child(s.label))
+          .child(div().min_w(0).flex_1().truncate().text_size(12.5).text_color(here ? t.foreground : t.muted)
+            .when(this.hud, (el) => el.font_family(display()).font_weight(600).text_size(14)).child(paneLabel(p)))
+          .child(this.hud ? caps(s.label, 11.5, 700).flex_none().text_color(s.color)
+            : div().flex_none().text_size(10.5).text_color(s.color).child(s.label))
           .when(Boolean(p.since), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(duration(Date.now() - p.since * 1000))))
-          .when(here, (el) => el.child(div().flex_none().px(5).h(16).rounded(4).bg(t.accent + "26").text_size(10).font_semibold().text_color(t.accent).flex().items_center().child("here"))))
+          .when(here, (el) => el.child(this.hud ? div().flex_none().px(5).h(16).bg(t.accent).text_color(INK).flex().items_center().child(caps("here", 11, 700))
+            : div().flex_none().px(5).h(16).rounded(4).bg(t.accent + "26").text_size(10).font_semibold().text_color(t.accent).flex().items_center().child("here"))))
         .child(div().truncate().text_size(11.5).text_color(t.dim).child(detail)));
   }
 
@@ -221,11 +233,15 @@ export default class Prds extends View {
     const here = Boolean(cur && prd.panes.some((p) => p.pane === cur.pane));
     const panes = [...prd.panes].sort((a, b) => stateOf(t, a.state).rank - stateOf(t, b.state).rank);
     const date = when(t, prd);
-    return v_flex().id(`prd-${prd.prd_id}`).mt(8).p(10).gap(6).rounded(8).border_1().border_color(here ? t.accent : t.border)
+    return v_flex().id(`prd-${prd.prd_id}`).mt(8).p(10).gap(6)
+      .when(!this.hud, (el) => el.rounded(8).border_1().border_color(here ? t.accent : t.border))
+      .when(this.hud, (el) => el.relative().children(frame(8, { bg: t.chrome, line: here ? t.accent : t.accent + "59" })))
       .child(h_flex().gap(8).items_center()
-        .child(div().min_w(0).flex_1().truncate().text_size(11.5).font_semibold().text_color(t.accent).child(prd.client?.name ?? "No client"))
+        .child(div().min_w(0).flex_1().truncate().text_size(11.5).font_semibold().text_color(t.accent)
+          .when(this.hud, (el) => el.font_family(display()).font_weight(700).text_size(13)).child(prd.client?.name ?? "No client"))
         .child(this.badge(t, STATUS[prd.status] ?? prd.status, prd.status === "approved" ? t.done : prd.status === "in_review" ? t.working : t.muted)))
       .child(div().id(`title-${prd.prd_id}`).font_semibold().text_color(t.foreground).cursor_pointer()
+        .when(this.hud, (el) => el.font_family(display()).font_weight(700).text_size(16))
         .hover((s) => s.text_color(t.accent)).tooltip("Read the whole PRD")
         .on_click((_e, cx) => this.read(cx, prd))
         .child(prd.title))
@@ -237,22 +253,28 @@ export default class Prds extends View {
         .child(this.action(t, `studio-${prd.prd_id}`, "Studio", (cx) => this.run(cx, "open", [prd.studio_url])))
         .when(Boolean(prd.linear?.url), (el) => el.child(this.action(t, `linear-${prd.prd_id}`, "Linear", (cx) => this.run(cx, "open", [prd.linear.url])))))
       .child(this.bar(t, reqs))
-      .child(div().text_size(11.5).text_color(t.muted).child(`${pr.requirements.done} of ${pr.requirements.total} requirements done \u00b7 ${pr.tasks.done} of ${pr.tasks.total} tasks`))
-      .child(v_flex().gap(1).children(panes.map((p) => this.paneRow(t, p, cur, `p-${prd.prd_id}`))));
+      .child((this.hud ? caps(`${pr.requirements.done} of ${pr.requirements.total} requirements done \u00b7 ${pr.tasks.done} of ${pr.tasks.total} tasks`, 12)
+        : div().text_size(11.5).child(`${pr.requirements.done} of ${pr.requirements.total} requirements done \u00b7 ${pr.tasks.done} of ${pr.tasks.total} tasks`)).text_color(t.muted))
+      .child(v_flex().gap(1).when(this.hud, (el) => el.pt(6).border_t(1).border_color(t.accent + "33")).children(panes.map((p) => this.paneRow(t, p, cur, `p-${prd.prd_id}`))));
   }
 
   // A client's panes on no PRD: work that should have one (omo-work bind <task> to a PRD's task).
   clientGroup(t, g, cur) {
-    return v_flex().id(`client-${g.name}`).mt(6).p(8).gap(4).rounded(8).border_1().border_color(t.border)
+    return v_flex().id(`client-${g.name}`).mt(6).p(8).gap(4)
+      .when(!this.hud, (el) => el.rounded(8).border_1().border_color(t.border))
+      .when(this.hud, (el) => el.relative().children(frame(8, { bg: t.chrome, line: t.accent + "33" })))
       .child(h_flex().gap(8).items_center()
-        .child(div().min_w(0).flex_1().truncate().text_size(11.5).font_semibold().text_color(t.accent).child(g.name))
+        .child(div().min_w(0).flex_1().truncate().text_size(11.5).font_semibold().text_color(t.accent)
+          .when(this.hud, (el) => el.font_family(display()).font_weight(700).text_size(13)).child(g.name))
         .when(Boolean(g.kind), (el) => el.child(this.badge(t, g.kind === "billed" ? "Billed" : "In-house", g.kind === "billed" ? t.blocked : t.muted)))
-        .child(div().flex_none().text_size(11).text_color(t.dim).child(`${g.panes.length} pane${g.panes.length === 1 ? "" : "s"}`)))
+        .child(this.hud ? readout(t, g.panes.length)
+          : div().flex_none().text_size(11).text_color(t.dim).child(`${g.panes.length} pane${g.panes.length === 1 ? "" : "s"}`)))
       .child(v_flex().gap(1).children(g.panes.map((p) => this.paneRow(t, p, cur, `c-${g.name}`, true))));
   }
 
   scopeButton(t, id, label) {
     const on = this.scope === id;
+    if (this.hud) return hudButton(t, `scope-${id}`, label, { on }).on_click((_e, cx) => this.setScope(id, cx));
     return div().id(`scope-${id}`).px(8).h(22).flex().items_center().text_size(11).cursor_pointer()
       .when(on, (el) => el.bg(t.selected).text_color(t.foreground).font_semibold())
       .when(!on, (el) => el.text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground)))
@@ -268,6 +290,7 @@ export default class Prds extends View {
       return div();
     }
     const t = theme();
+    this.hud = isHud();
     const shared_ = shared("studio.prds");
     const data = shared_?.data ?? null;
     const cur = shared_?.cur ?? null;
@@ -283,28 +306,34 @@ export default class Prds extends View {
     const empty = !shared_ ? "Reading studio-prds\u2026"
       : this.scope === "here" ? (session ? `No omo pane in ${session} is working on a PRD.` : "Focus a tmux pane running omo to see its PRD.")
       : "No omo pane is bound to a task that belongs to a PRD. Agents bind with omo-work bind <task>.";
-    return v_flex().id("prds").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().font_semibold().child("PRDs"))
-        .child(this.badge(t, `${prds.length} PRD${prds.length === 1 ? "" : "s"}`))
+    return v_flex().id("prds").size_full().min_h(0).rounded(this.hud ? 0 : 10).overflow_hidden().bg(t.background).border_1().border_color(this.hud ? t.accent + "4d" : t.border).text_color(t.foreground).text_size(13)
+      .child(h_flex().h(this.hud ? 46 : 42).flex_none().px(12).gap(8).items_center().border_b(1).border_color(this.hud ? t.accent + "33" : t.border)
+        .child(this.hud ? hudTitle(t, "PRDs", 17) : div().font_semibold().child("PRDs"))
+        .child(this.hud ? readout(t, prds.length) : this.badge(t, `${prds.length} PRD${prds.length === 1 ? "" : "s"}`))
         .child(div().flex_1())
-        .child(h_flex().flex_none().rounded(6).border_1().border_color(t.border).overflow_hidden()
+        .child(h_flex().flex_none().gap(this.hud ? 4 : 0)
+          .when(!this.hud, (el) => el.rounded(6).border_1().border_color(t.border).overflow_hidden())
           .child(this.scopeButton(t, "here", "Here"))
           .child(this.scopeButton(t, "all", "All"))))
-      .when(Boolean(problem), (el) => el.child(div().id("problem").px(12).py(6).text_size(11.5).text_color(t.blocked).border_b(1).border_color(t.border)
+      .when(Boolean(problem), (el) => el.child(div().id("problem").px(12).py(6).text_size(11.5).text_color(t.blocked)
+        .when(!this.hud, (el) => el.border_b(1).border_color(t.border))
+        .when(this.hud, (el) => el.relative().mx(8).mt(6).children(frame(6, { bg: t.blocked + "0f", line: t.blocked + "80" })))
         .when(Boolean(this.actionProblem), (el) => el.cursor_pointer().tooltip("Click to dismiss").on_click((_e, cx) => { this.actionProblem = null; cx.notify(); }))
         .child(problem)))
       .child(v_flex().id("prds-list").relative().flex_1().min_h(0).px(8).pb(8).overflow_y_scrollbar().mode("always")
         .when(prds.length === 0, (el) => el.child(div().px(4).py(8).text_size(12).text_color(t.dim).child(empty)))
         .children(prds.map((p) => this.card(t, p, cur)))
         .when(clients.length > 0, (el) => el
-          .child(div().mt(14).px(4).text_size(11).text_color(t.dim).child("Client work on no PRD"))
+          .child(this.hud ? h_flex().mt(14).px(4).gap(8).items_center().child(caps("Client work on no PRD", 12.5, 700).flex_none().text_color(t.dim))
+              .child(div().flex_1().h(1).bg(t.accent + "33"))
+            : div().mt(14).px(4).text_size(11).text_color(t.dim).child("Client work on no PRD"))
           .children(clients.map((g) => this.clientGroup(t, g, cur))))
         .when(others.length > 0, (el) => el
-          .child(h_flex().id("unlinked").mt(10).px(6).h(26).gap(6).items_center().rounded(6).cursor_pointer().hover((s) => s.bg(t.hover))
+          .child(h_flex().id("unlinked").mt(10).px(6).h(26).gap(6).items_center().rounded(this.hud ? 0 : 6).cursor_pointer().hover((s) => s.bg(t.hover))
             .on_click((_e, cx) => this.toggleUnlinked(cx))
             .child(svg(`mods/workspace-chrome/chevron-${this.unlinkedOpen ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim))
-            .child(div().text_size(12).text_color(t.dim).child(`${others.length} pane${others.length === 1 ? "" : "s"} not on client work`)))
+            .child(this.hud ? caps(`${others.length} pane${others.length === 1 ? "" : "s"} not on client work`, 12.5).text_color(t.dim)
+              : div().text_size(12).text_color(t.dim).child(`${others.length} pane${others.length === 1 ? "" : "s"} not on client work`)))
           .when(this.unlinkedOpen, (el2) => el2.child(v_flex().gap(1).children(others.map((p) => this.paneRow(t, p, cur, "u", true)))))));
   }
 }

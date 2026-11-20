@@ -26,6 +26,10 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, spaces, panes, terminals, run, hc, exec, home, theme, settings, props, closeOverlay, shared, setShared, notify } from "herdr";
+import { INK, isHud, spinner, display, frame, modalFrame, caps, title as hudTitle } from "./hud.js";
+
+// The popup's own fill in ash: the theme's popover without its alpha, so the list never shows through.
+const solid = (c) => (typeof c === "string" && c.length === 9 ? c.slice(0, 7) : c);
 
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 // Another machine's things, as the Agents tree marks them.
@@ -428,29 +432,43 @@ export default class Picker extends View {
   }
 
   spinner(t, color) {
-    return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(color ?? t.dim).spin(900);
+    return this.hud ? spinner(color ?? t.dim, 12, 900) : svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(color ?? t.dim).spin(900);
   }
 
   glyph(t, st) {
-    if (st === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
-    if (st === "background") return svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.ansi5).spin(2400);
+    if (st === "working") return this.hud ? spinner(t.working, 12, 900) : svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900);
+    if (st === "background") return this.hud ? spinner(t.ansi5, 12, 2400) : svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.ansi5).spin(2400);
     // partial: a step done with tasks still open (omo-status).
     return div().w(12).flex_none().text_color(st === "partial" ? t.done : t[st] ?? t.dim)
       .when(st === "blocked", (el) => el.loop("opacity", { from: 0.45, to: 1, period: 1600 }))
       .child(st === "idle" ? "\u25cb" : st === "partial" ? "\u25c9" : st ? "\u25cf" : "\u00b7");
   }
 
+  // Names people chose, in the HUD's display face (keeping their case).
+  disp(el, size, weight = 600) {
+    return this.hud ? el.font_family(display()).font_weight(weight).text_size(size) : el;
+  }
+
+  // "on <machine>" at a row's end.
+  onMachine(color, text) {
+    return this.hud ? caps(text, 12, 600).flex_none().text_color(color) : div().flex_none().text_size(11).text_color(color).child(text);
+  }
+
   tag(t, text, color) {
+    if (this.hud) return div().relative().flex_none().h(18).px(7).flex().items_center().text_color(color)
+      .children(frame(4, { line: color + "80" })).child(caps(text, 11.5, 700).relative());
     return div().flex_none().h(18).px(6).flex().items_center().rounded(4).border_1().border_color(t.border).text_size(10.5).text_color(color).child(text);
   }
 
   keycap(t, text) {
+    if (this.hud) return div().relative().flex_none().h(18).min_w(18).px(5).flex().items_center().justify_center().text_color(t.muted)
+      .children(frame(4, { line: t.working + "99" })).child(caps(text, 11.5, 700).relative());
     return div().flex_none().h(18).min_w(18).px(4).flex().items_center().justify_center().rounded(4).border_1().border_color(t.border)
       .bg(t.background).text_size(10.5).text_color(t.muted).child(text);
   }
 
   hint(t, keys, label) {
-    return h_flex().flex_none().gap(4).items_center().children(keys.map((k) => this.keycap(t, k))).child(div().pl(2).child(label));
+    return h_flex().flex_none().gap(4).items_center().children(keys.map((k) => this.keycap(t, k))).child(div().pl(2).child(this.hud ? caps(label, 12, 600) : label));
   }
 
   enterLabel(r) {
@@ -469,6 +487,7 @@ export default class Picker extends View {
 
   render() {
     const t = theme();
+    this.hud = isHud();
     const rows = this.rows();
     const pickable = rows.filter((r) => PICK.has(r.kind));
     // Opens on where you are.
@@ -503,16 +522,24 @@ export default class Picker extends View {
     };
     const busyKey = this.busy;
     // One highlight for the selection, sliding to it, with an accent edge.
-    const highlight = si >= 0 && div().id("pk-sel").absolute().left(6).right(6).h(H[sel.kind] - 4).rounded(7).bg(t.selected)
+    const highlight = si >= 0 && div().id("pk-sel").absolute().left(this.hud ? 0 : 6).right(this.hud ? 0 : 6).h(H[sel.kind] - 4).rounded(this.hud ? 0 : 7).bg(this.hud ? t.accent + "24" : t.selected)
       .top(tops[si] + 2 - this.scroll)
       .transition("top", { duration: 120, easing: "ease-out" })
-      .child(div().absolute().left(0).top(8).bottom(8).w(2).rounded(1).bg(t.accent));
+      .child(div().absolute().left(0).top(this.hud ? 0 : 8).bottom(this.hud ? 0 : 8).w(this.hud ? 3 : 2).rounded(this.hud ? 0 : 1).bg(t.accent));
 
     const pickRow = (r, id) => h_flex().id(id).size_full().pr(16).gap(10).items_center().cursor_pointer()
       .on_mouse_move(point(r)).on_click((_e, cx) => this.go(r, cx));
 
     const row = (r) => {
       if (r.kind === "section") {
+        if (this.hud) return h_flex().relative().size_full().px(16).pt(10).gap(8).items_center()
+          .child(caps(r.label, 12.5, 700).text_color(t.muted))
+          .when(r.machine !== undefined, (el) => el
+            .child(div().w(1).h(11).bg(t.accent + "66"))
+            .child(caps(r.machine ?? "This Mac", 12.5, 700).text_color(r.machine ? REMOTE : t.muted)))
+          .child(div().flex_1())
+          .when(Boolean(r.note), (el) => el.child(caps(r.note, 12, 600).text_color(t.dim)))
+          .child(div().absolute().left(16).right(16).bottom(0).h(1).bg(t.accent + "26"));
         return h_flex().size_full().px(16).pt(10).gap(6).items_center().text_size(10.5).text_color(t.dim)
           .child(div().font_semibold().child(r.label.toUpperCase()))
           .when(r.machine !== undefined, (el) => el
@@ -529,13 +556,13 @@ export default class Picker extends View {
       if (r.kind === "earlier") {
         return pickRow(r, "pk-earlier").pl(18).text_size(12).text_color(t.dim)
           .child(svg(this.showEarlier ? "mods/workspace-chrome/chevron-down.svg" : "mods/workspace-chrome/chevron-right.svg").size(12).flex_none())
-          .child(`${r.count} quiet tab${r.count > 1 ? "s" : ""}`);
+          .child(this.hud ? caps(`${r.count} quiet tab${r.count > 1 ? "s" : ""}`, 12.5, 600) : `${r.count} quiet tab${r.count > 1 ? "s" : ""}`);
       }
       if (r.kind === "tsession") {
         const s = r.s, spinning = busyKey === rowKey(r);
         return pickRow(r, `pk-ts-${s.key}`).pl(18)
           .child(spinning ? this.spinner(t, t.accent) : s.status ? this.glyph(t, s.status) : svg("mods/workspace-chrome/terminal.svg").size(12).flex_none().text_color(t.dim))
-          .child(div().flex_none().max_w(220).truncate().text_color(t.foreground).child(s.name))
+          .child(this.disp(div().flex_none().max_w(220).truncate().text_color(t.foreground), 14.5).child(s.name))
           .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim)
             .child(`${s.windows} window${s.windows === 1 ? "" : "s"}${s.folder ? `  \u00b7  ${shortPath(s.folder, s.machine)}` : ""}`))
           .when(s.shown, (el) => el.child(this.tag(t, "in Herdr", t.done)))
@@ -547,7 +574,7 @@ export default class Picker extends View {
         const detail = [p.folder, p.command].filter((x) => x && x !== p.window).join(" \u00b7 ");
         return pickRow(r, `pk-tp-${p.pane}`).pl(40).gap(8)
           .child(spinning ? this.spinner(t, t.accent) : this.glyph(t, p.status))
-          .child(div().flex_none().max_w(180).truncate().text_size(12.5).text_color(t.foreground).child(p.window))
+          .child(this.disp(div().flex_none().max_w(180).truncate().text_size(12.5).text_color(t.foreground), 14).child(p.window))
           .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(p.msg || ""))
           .when(Boolean(detail), (el) => el.child(div().flex_none().max_w(150).truncate().text_size(11).text_color(t.dim).child(detail)))
           .child(div().flex_none().text_size(10.5).text_color(t.dim).child(`${r.s.name}:${p.windowIndex}.${p.paneIndex}`));
@@ -555,30 +582,31 @@ export default class Picker extends View {
       if (r.kind === "create") {
         const spinning = busyKey === rowKey(r);
         return pickRow(r, `pk-create-${r.machine ?? "here"}`).pl(14)
-          .child(h_flex().size(22).flex_none().rounded(6).items_center().justify_center().bg((r.machine ? REMOTE : t.accent) + "26")
+          .child(h_flex().size(22).flex_none().rounded(this.hud ? 0 : 6).items_center().justify_center().bg((r.machine ? REMOTE : t.accent) + "26")
             .child(spinning ? this.spinner(t, r.machine ? REMOTE : t.accent) : svg("mods/workspace-chrome/plus.svg").size(13).text_color(r.machine ? REMOTE : t.accent)))
           .child(h_flex().flex_1().min_w(0).gap(6).items_center()
-            .child(div().flex_none().text_color(t.muted).child("Create tmux session"))
-            .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(r.name)))
-          .child(div().flex_none().text_size(11).text_color(r.machine ? REMOTE : t.dim).child(`on ${r.machine ?? "This Mac"}`));
+            .child(this.hud ? caps("Create tmux session", 13, 700).flex_none().text_color(t.muted) : div().flex_none().text_color(t.muted).child("Create tmux session"))
+            .child(this.disp(div().min_w(0).truncate().font_semibold().text_color(t.foreground), 14.5).child(r.name)))
+          .child(this.onMachine(r.machine ? REMOTE : t.dim, `on ${r.machine ?? "This Mac"}`));
       }
       if (r.kind === "task" || r.kind === "tnew") {
         const spinning = busyKey === rowKey(r), color = r.machine ? REMOTE : t.accent;
         return pickRow(r, r.kind === "task" ? "pk-task" : `pk-tnew-${r.machine ?? "here"}`).pl(14)
-          .child(h_flex().size(22).flex_none().rounded(6).items_center().justify_center().bg(color + "26")
+          .child(h_flex().size(22).flex_none().rounded(this.hud ? 0 : 6).items_center().justify_center().bg(color + "26")
             .child(spinning ? this.spinner(t, color) : svg(r.kind === "task" ? "mods/workspace-chrome/terminal.svg" : "mods/workspace-chrome/plus.svg").size(13).text_color(color)))
           .child(h_flex().flex_1().min_w(0).gap(6).items_center()
-            .child(div().flex_none().text_color(t.muted).child(r.kind === "task" ? "Start an omo task" : "New tmux session"))
-            .child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(r.kind === "task" ? `\u201c${r.text}\u201d` : r.name)))
+            .child(this.hud ? caps(r.kind === "task" ? "Start an omo task" : "New tmux session", 13, 700).flex_none().text_color(r.kind === "task" ? color : t.muted)
+              : div().flex_none().text_color(t.muted).child(r.kind === "task" ? "Start an omo task" : "New tmux session"))
+            .child((r.kind === "task" ? div() : this.disp(div(), 14.5)).min_w(0).truncate().font_semibold().text_color(t.foreground).child(r.kind === "task" ? `\u201c${r.text}\u201d` : r.name)))
           .child(r.kind === "task"
-            ? h_flex().flex_none().gap(4).items_center().text_size(11).text_color(t.dim).child("where").child(svg("mods/workspace-chrome/chevron-right.svg").size(11))
-            : div().flex_none().text_size(11).text_color(r.machine ? REMOTE : t.dim).child(`on ${r.machine ?? "This Mac"}`));
+            ? h_flex().flex_none().gap(4).items_center().text_size(11).text_color(t.dim).child(this.hud ? caps("where", 12, 600) : "where").child(svg("mods/workspace-chrome/chevron-right.svg").size(11))
+            : this.onMachine(r.machine ? REMOTE : t.dim, `on ${r.machine ?? "This Mac"}`));
       }
       if (r.kind === "tstart") {
         const s = r.s, spinning = busyKey === rowKey(r);
         return pickRow(r, `pk-tstart-${s.key}`).pl(18)
           .child(spinning ? this.spinner(t, t.accent) : svg("mods/workspace-chrome/terminal.svg").size(12).flex_none().text_color(s.machine ? REMOTE : t.dim))
-          .child(div().flex_none().max_w(220).truncate().text_color(t.foreground).child(s.name))
+          .child(this.disp(div().flex_none().max_w(220).truncate().text_color(t.foreground), 14.5).child(s.name))
           .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(s.folder ? shortPath(s.folder, s.machine) : ""))
           .child(this.tag(t, "new omo window", t.muted))
           .when(Boolean(s.machine), (el) => el.child(div().flex_none().text_size(11).text_color(REMOTE).child(s.machine)));
@@ -587,7 +615,7 @@ export default class Picker extends View {
         const p = r.p, spinning = busyKey === rowKey(r);
         return pickRow(r, `pk-thand-${p.pane}`).pl(18).gap(8)
           .child(spinning ? this.spinner(t, t.accent) : this.glyph(t, p.status))
-          .child(div().flex_none().max_w(180).truncate().text_size(12.5).text_color(t.foreground).child(p.window))
+          .child(this.disp(div().flex_none().max_w(180).truncate().text_size(12.5).text_color(t.foreground), 14).child(p.window))
           .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(p.msg || p.folder))
           .child(this.tag(t, "hand over", t.muted))
           .child(div().flex_none().text_size(10.5).text_color(r.s.machine ? REMOTE : t.dim).child(`${r.s.machine ? `${r.s.machine} ` : ""}${r.s.name}:${p.windowIndex}.${p.paneIndex}`));
@@ -598,10 +626,10 @@ export default class Picker extends View {
         return pickRow(r, `pk-${r.ctx.id}`).pl(18)
           .child(this.glyph(t, r.ctx.status))
           .child(h_flex().w(136).flex_none().gap(7).items_center()
-            .child(h_flex().size(16).flex_none().rounded(4).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(9.5).font_bold().text_color("#ffffff").child([...r.w.name][0]?.toUpperCase() ?? "?"))
-            .child(div().min_w(0).truncate().text_size(12).text_color(r.w.machine ? REMOTE : t.muted).child(r.w.name)))
+            .child(this.disp(h_flex().size(16).flex_none().rounded(this.hud ? 0 : 4).bg(spaceColor(t, r.w)).items_center().justify_center().text_size(9.5).font_bold().text_color(this.hud ? INK : "#ffffff"), 12, 700).child([...r.w.name][0]?.toUpperCase() ?? "?"))
+            .child(this.disp(div().min_w(0).truncate().text_size(12).text_color(r.w.machine ? REMOTE : t.muted), 14).child(r.w.name)))
           .child(h_flex().flex_1().min_w(0).gap(8).items_center()
-            .child(div().flex_none().max_w(220).truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()).child(r.ctx.name))
+            .child(this.disp(div().flex_none().max_w(220).truncate().text_color(t.foreground).when(here, (d) => d.font_semibold()), 15, here ? 700 : 600).child(r.ctx.name))
             .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.muted).child(r.pane?.msg || "")))
           .when(here, (el) => el.child(this.tag(t, "here", t.muted)))
           .when(r.ctx.status === "blocked", (el) => el.child(this.tag(t, "needs you", t.blocked)))
@@ -610,18 +638,28 @@ export default class Picker extends View {
       }
       return pickRow(r, r.what === "tab" ? "pk-new" : `pk-space-${r.machine ?? "here"}`).pl(18).text_color(t.muted)
         .child(svg(r.what === "tab" ? "mods/workspace-chrome/plus.svg" : "mods/workspace-chrome/folder-plus.svg").size(13).flex_none().text_color(t.dim))
-        .child(div().flex_1().child(r.what === "tab" ? "New tab" : "New space"))
-        .when(Boolean(r.machine), (el) => el.child(div().flex_none().text_size(11).text_color(REMOTE).child(`on ${r.machine}`)));
+        .child((this.hud ? caps(r.what === "tab" ? "New tab" : "New space", 13, 600) : div().child(r.what === "tab" ? "New tab" : "New space")).flex_1())
+        .when(Boolean(r.machine), (el) => el.child(this.onMachine(REMOTE, `on ${r.machine}`)));
     };
 
     const typing = Boolean(this.task ? this.whereFilter : this.filter);
+    const lead = this.task
+      ? div().id("picker-back").flex_none().cursor_pointer().on_click((_e, cx) => this.back(cx))
+        .child(svg("mods/workspace-chrome/chevron-left.svg").size(16).text_color(t.accent))
+      : svg("mods/workspace-chrome/search.svg").size(16).flex_none().text_color(typing ? t.accent : t.dim);
+    const input = Input.new(this.task ? this.where : this.input).flex_1().h_full().text_size(14.5).text_color(t.foreground);
+    const searching = !this.loaded.sessions || !this.loaded.panes;
+    const esc = div().id("picker-esc").flex_none().cursor_pointer().on_click((_e, cx) => (this.task ? this.back(cx) : this.close())).child(this.keycap(t, "esc"));
+    const rule = this.hud ? t.accent + "33" : t.border;
     return v_flex()
       .id("picker")
       .track_focus(this.handle)
       .w_full()
       .min_h(0)
-      .bg(t.popover)
       .text_size(13)
+      // The popup is opened with frame "none", so it draws its own: Herdr's look in ash, the HUD's modal frame in netrunner.
+      .when(!this.hud, (el) => el.bg(solid(t.popover)).border_1().border_color(t.border).rounded(10).overflow_hidden().shadow_2xl())
+      .when(this.hud, (el) => el.relative().children(modalFrame(t, 14)))
       .on_key_down((e, cx) => {
         const k = e.key;
         if (k === "escape") return this.task ? this.back(cx) : this.close();
@@ -636,16 +674,13 @@ export default class Picker extends View {
         cx.stop_propagation();
         cx.notify();
       })
-      .child(h_flex().h(54).flex_none().px(16).gap(10).items_center().border_b(1).border_color(t.border)
-        .child(this.task
-          ? div().id("picker-back").flex_none().cursor_pointer().on_click((_e, cx) => this.back(cx))
-            .child(svg("mods/workspace-chrome/chevron-left.svg").size(16).text_color(t.accent))
-          : svg("mods/workspace-chrome/search.svg").size(16).flex_none().text_color(typing ? t.accent : t.dim))
-        .child(Input.new(this.task ? this.where : this.input).flex_1().h_full().text_size(14.5).text_color(t.foreground))
-        .when(!this.loaded.sessions || !this.loaded.panes, (el) => el.child(this.spinner(t)))
-        .child(div().id("picker-esc").flex_none().cursor_pointer().on_click((_e, cx) => (this.task ? this.back(cx) : this.close())).child(this.keycap(t, "esc"))))
-      .when(Boolean(this.task), (el) => el.child(h_flex().h(38).flex_none().px(16).gap(10).items_center().border_b(1).border_color(t.border).bg(t.accent + "12")
-        .child(div().flex_none().text_size(10.5).font_semibold().text_color(t.accent).child("TASK"))
+      .child(h_flex().h(54).flex_none().px(16).gap(10).items_center().border_b(1).border_color(rule)
+        .when(!this.hud, (el) => el.child(lead).child(input).when(searching, (e) => e.child(this.spinner(t))).child(esc))
+        .when(this.hud, (el) => el.child(h_flex().relative().flex_1().h(38).px(12).gap(10).items_center()
+          .children(frame(7, { bg: t.accent + "0d", line: t.accent + (typing || this.task ? "cc" : "66") }))
+          .child(lead).child(input).when(searching, (e) => e.child(this.spinner(t, t.accent)))).child(esc)))
+      .when(Boolean(this.task), (el) => el.child(h_flex().h(38).flex_none().px(16).gap(10).items_center().border_b(1).border_color(rule).bg(t.accent + "12")
+        .child(this.hud ? hudTitle(t, "Task", 13) : div().flex_none().text_size(10.5).font_semibold().text_color(t.accent).child("TASK"))
         .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(this.task ?? ""))))
       .child(
         v_flex()
@@ -669,7 +704,7 @@ export default class Picker extends View {
           })
           .children([highlight, ...rows.map((r, i) => (visible(i) ? place(row(r), i) : null))].filter(Boolean)),
       )
-      .child(h_flex().h(36).flex_none().px(16).gap(14).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.dim)
+      .child(h_flex().h(36).flex_none().px(16).gap(14).items_center().border_t(1).border_color(rule).text_size(11).text_color(t.dim)
         .child(this.hint(t, ["\u2191", "\u2193"], "move"))
         .child(this.hint(t, ["\u21b5"], this.enterLabel(sel)))
         .when(sel?.kind === "ctx", (el) => el.child(this.hint(t, ["\u2303D"], "close tab")))

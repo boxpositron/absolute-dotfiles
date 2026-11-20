@@ -13,6 +13,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, v_virtual_list } from "gpui-base";
 import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, shared, run, notify, nextCommand, terminals } from "herdr";
+import { INK, isHud, mono, display, caps, readout, button as hudButton } from "./hud.js";
 
 function location() {
   const space = spaces().find((s) => s.active), f = focused();
@@ -319,27 +320,28 @@ export default class Changes extends View {
       .child(div().flex_1().min_w(0).truncate().child(text));
   }
 
-  action(t, id, label, onClick) {
+  action(t, id, label, onClick, tone) {
+    if (this.hud) return hudButton(t, id, label, { tone }).on_click(() => onClick());
     return div().id(id).h(22).px(8).flex().flex_none().items_center().rounded(5).border_1().border_color(t.border).text_size(11).text_color(t.muted)
       .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => onClick()).child(label);
   }
 
   actions(t) {
     if (!this.open) return null;
-    const bar = h_flex().h(32).flex_none().px(10).gap(6).items_center().border_b(1).border_color(t.border).text_size(11.5);
+    const bar = h_flex().h(32).flex_none().px(10).gap(6).items_center().border_b(1).border_color(this.hud ? t.accent + "33" : t.border).text_size(11.5);
     if (this.mode === "commits") {
       const c = this.commits.find((x) => x.sha === this.open);
       if (!c) return null;
-      return bar.child(div().flex_none().text_color(t.dim).child(c.abbrev)).child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(c.subject))
-        .child(this.action(t, "ca-copy", "Copy hash", () => this.copy(c.sha)));
+      return bar.child(div().flex_none().text_color(this.hud ? t.working : t.dim).when(this.hud, (e) => e.font_family(mono())).child(c.abbrev)).child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(c.subject))
+        .child(this.action(t, "ca-copy", "Copy hash", () => this.copy(c.sha), t.muted));
     }
     const f = this.files.find((x) => x.path === this.open);
     if (!f) return null;
     const line = this.firstLine, file = f.status !== "D" && !f.sub, where = file ? `${f.path}:${line}` : f.path;
-    return bar.child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(f.sub ? `${f.path} (submodule)` : where))
+    return bar.child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(this.hud, (e) => e.font_family(mono())).child(f.sub ? `${f.path} (submodule)` : where))
       .when(!this.on && file, (el) => el.child(this.action(t, "ca-preview", "Preview", () => this.preview(f.path))))
       .when(file, (el) => el.child(this.action(t, "ca-edit", `Edit at ${line}`, () => this.edit(f.path, line))))
-      .child(this.action(t, "ca-copy", "Copy path", () => this.copy(where)));
+      .child(this.action(t, "ca-copy", "Copy path", () => this.copy(where), t.muted));
   }
 
   empty() {
@@ -355,38 +357,48 @@ export default class Changes extends View {
 
   render(cx) {
     if (key() !== this.context) this.refresh(cx);
-    const t = theme(), commits = this.mode === "commits";
+    const t = theme(), commits = this.mode === "commits", hud = isHud();
+    this.hud = hud;
     const add = this.files.reduce((n, f) => n + f.add, 0), del = this.files.reduce((n, f) => n + f.del, 0);
     const count = commits ? this.commits.length : this.files.length;
     const items = commits ? this.commits.length : this.files.length;
     const main = short(this.info?.base) || "main";
     const tips = { working: "The work tree against the last commit", branch: `Everything this branch changes since it left ${main}, uncommitted work included`, commits: `The commits that aren't on ${main}` };
-    return v_flex().id("changes").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
-      .child(h_flex().h(42).flex_none().px(10).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(h_flex().h(26).p(2).gap(2).flex_none().rounded(7).bg(t.raised).children(VIEWS.map(([id, label]) =>
-          div().id(`cv-${id}`).h(22).px(9).flex().items_center().rounded(5).text_size(11.5).cursor_pointer().tooltip(tips[id])
-            .when((this.mode ?? "working") === id, (el) => el.bg(t.selected).font_medium().text_color(t.foreground))
-            .when((this.mode ?? "working") !== id, (el) => el.text_color(t.dim).hover((s) => s.text_color(t.foreground)))
-            .on_click((_e, cx) => this.setView(id, cx)).child(label))))
-        .child(div().px(5).py(1).flex_none().rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${count} ${commits ? "commit" : "file"}${count === 1 ? "" : "s"}`))
+    // netrunner's HUD: the views are buttons (the shown one yellow), the count a readout, a status letter a square tone block.
+    const hot = hud ? t.accent + "1f" : t.selected, warm = hud ? t.accent + "0d" : t.hover;
+    const num = (color, text) => div().text_size(11).text_color(color).when(hud, (e) => e.font_family(mono()).font_weight(700)).child(text);
+    return v_flex().id("changes").size_full().min_h(0).rounded(hud ? 0 : 10).overflow_hidden().bg(t.background).border_1().border_color(hud ? t.accent + "4d" : t.border).text_color(t.foreground).text_size(13)
+      .child(h_flex().h(42).flex_none().px(10).gap(8).items_center().border_b(1).border_color(hud ? t.accent + "59" : t.border)
+        .child(hud
+          ? h_flex().gap(4).flex_none().children(VIEWS.map(([id, label]) => hudButton(t, `cv-${id}`, label, { on: (this.mode ?? "working") === id, h: 24 })
+            .tooltip(tips[id]).on_click((_e, cx) => this.setView(id, cx))))
+          : h_flex().h(26).p(2).gap(2).flex_none().rounded(7).bg(t.raised).children(VIEWS.map(([id, label]) =>
+            div().id(`cv-${id}`).h(22).px(9).flex().items_center().rounded(5).text_size(11.5).cursor_pointer().tooltip(tips[id])
+              .when((this.mode ?? "working") === id, (el) => el.bg(t.selected).font_medium().text_color(t.foreground))
+              .when((this.mode ?? "working") !== id, (el) => el.text_color(t.dim).hover((s) => s.text_color(t.foreground)))
+              .on_click((_e, cx) => this.setView(id, cx)).child(label))))
+        .child(hud ? readout(t, count) : div().px(5).py(1).flex_none().rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted).child(`${count} ${commits ? "commit" : "file"}${count === 1 ? "" : "s"}`))
         .child(div().flex_1())
-        .when(!commits, (el) => el.child(div().text_size(11).text_color(t.ansi2).child(`+${add}`)).child(div().text_size(11).text_color(t.ansi1).child(`−${del}`))))
+        .when(!commits, (el) => el.child(num(t.ansi2, `+${add}`)).child(num(t.ansi1, `−${del}`))))
       // overflow_y_scrollbar() wraps the list, so its flex sizing never reached the panel's layout.
-      .child(div().flex_1().min_h(44).max_h(items * 28 + 12).relative().border_b(1).border_color(t.border)
+      .child(div().flex_1().min_h(44).max_h(items * 28 + 12).relative().border_b(1).border_color(hud ? t.accent + "33" : t.border)
         .child(v_flex().id("changes-list").absolute().inset_0().overflow_y_scroll().p(6)
-          .when(commits, (el) => el.children(this.commits.map((c) => h_flex().id(`commit-${c.sha}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer()
-            .when(this.open === c.sha, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.pick(c.sha, cx))
-            .child(div().w(58).flex_none().text_size(11).text_color(t.dim).font_family(settings().font_family ?? "JetBrains Mono").child(c.abbrev))
+          .when(commits, (el) => el.children(this.commits.map((c) => h_flex().id(`commit-${c.sha}`).h(28).flex_none().px(8).gap(8).items_center().when(!hud, (e) => e.rounded(7)).cursor_pointer()
+            .when(this.open === c.sha, (e) => e.bg(hot)).hover((s) => s.bg(warm)).on_click((_e, cx) => this.pick(c.sha, cx))
+            .child(div().w(58).flex_none().text_size(11).text_color(hud ? t.working : t.dim).font_family(settings().font_family ?? "JetBrains Mono").child(c.abbrev))
             .child(div().flex_1().min_w(0).truncate().child(c.subject))
             .child(div().flex_none().text_size(11).text_color(t.dim).child(c.when)))))
           .when(!commits, (el) => el.children(this.files.map((f) => {
             const parts = f.path.split("/"), name = parts.pop();
-            return h_flex().id(`change-${f.path}`).h(28).flex_none().px(8).gap(8).items_center().rounded(7).cursor_pointer().when(this.open === f.path, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.pick(f.path, cx))
-              .child(div().w(14).text_size(11).text_color(f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked).child(f.status))
-              .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().child(name)))
-              .when(f.add > 0, (e) => e.child(div().text_size(11).text_color(t.ansi2).child(`+${f.add}`))).when(f.del > 0, (e) => e.child(div().text_size(11).text_color(t.ansi1).child(`−${f.del}`)));
+            const tone = f.status === "A" ? t.ansi2 : f.status === "D" ? t.ansi1 : f.status === "U" ? t.ansi1 : t.blocked;
+            return h_flex().id(`change-${f.path}`).h(28).flex_none().px(8).gap(8).items_center().when(!hud, (e) => e.rounded(7)).cursor_pointer().when(this.open === f.path, (e) => e.bg(hot)).hover((s) => s.bg(warm)).on_click((_e, cx) => this.pick(f.path, cx))
+              .child(hud
+                ? div().size(14).flex_none().flex().items_center().justify_center().bg(tone).text_color(INK).font_family(mono()).text_size(10).font_weight(700).child(f.status)
+                : div().w(14).text_size(11).text_color(tone).child(f.status))
+              .child(h_flex().flex_1().min_w(0).child(div().text_color(t.dim).truncate().when(hud, (e) => e.font_family(mono()).text_size(11.5)).child(parts.length ? parts.join("/") + "/" : "")).child(div().max_w(260).min_w(0).truncate().when(hud, (e) => e.font_family(display()).text_size(14)).child(name)))
+              .when(f.add > 0, (e) => e.child(num(t.ansi2, `+${f.add}`))).when(f.del > 0, (e) => e.child(num(t.ansi1, `−${f.del}`)));
           })))
-          .when(!items, (e) => e.child(div().p(8).text_color(t.dim).child(this.empty()))))
+          .when(!items, (e) => e.child((hud && !this.error ? caps(this.empty(), 12.5) : div().child(this.empty())).p(8).text_color(t.dim))))
         .child(Scrollbar.vertical("changes-list").absolute().inset_0()))
       .when(this.limited, el => el.child(div().px(12).py(4).text_size(11).text_color(t.dim).child(commits ? `Showing the latest ${MAX_COMMITS} commits` : `Showing the first ${MAX_FILES} changed files`)))
       .when(Boolean(this.actions(t)), (el) => el.child(this.actions(t)))
@@ -395,7 +407,10 @@ export default class Changes extends View {
           .child(div().w_full().min_w(this.diffWidth).h_full().child(v_virtual_list("changes-diff", this.rows.length, 20, (i) => String(i),
             (range) => this.rows.slice(range.start, range.end).map((row) => this.diffRow(row, t))).size_full())))
         .child(Scrollbar.vertical("changes-diff").viewport_from_layout().absolute().inset_0())
-        .when(!this.open && items > 0, (e) => e.child(div().absolute().top(6).px(12).text_color(t.dim).child(commits ? "Select a commit to view its changes" : "Select a file to view its changes"))))
+        .when(!this.open && items > 0, (e) => {
+          const hint = commits ? "Select a commit to view its changes" : "Select a file to view its changes";
+          return e.child((hud ? caps(hint, 12.5) : div().child(hint)).absolute().top(6).px(12).text_color(t.dim));
+        }))
       .when(Boolean(this.note), (e) => e.child(div().px(10).pb(8).text_size(11).text_color(t.ansi1).child(this.note)));
   }
 }

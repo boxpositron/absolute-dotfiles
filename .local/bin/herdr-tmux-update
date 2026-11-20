@@ -2,9 +2,9 @@
 # herdr-tmux-update: carry our Herdr copies onto a new Herdr release.
 #
 # picker-tmux, workspace-chrome-tmux, agents-tmux, files-tmux, changes-tmux, pane-tmux,
-# workspace-status-tmux, tabs-tmux and the netrunner layout are copies of Herdr's picker,
-# workspace-chrome, agents, files, changes, pane, workspace-status, tabs and main layout with our
-# changes, and Herdr never updates a copy. agents-tmux/spaces.js holds what was Herdr's spaces mod, which
+# workspace-status-tmux, tabs-tmux, menu-tmux, new-menu-tmux, toast-tmux and the netrunner and ash layouts are
+# copies of Herdr's picker, workspace-chrome, agents, files, changes, pane, workspace-status, tabs, menu, new-menu,
+# toast and main layout with our changes, and Herdr never updates a copy. Each copy keeps a base of its own, since a merge moves it. agents-tmux/spaces.js holds what was Herdr's spaces mod, which
 # this doesn't merge. This merges what Herdr changed in its own versions
 # since we copied them (kept in .config/herdr-app/base/) into ours, with git merge-file,
 # then records the new versions as the base. Run it after Herdr updates.
@@ -38,7 +38,11 @@ changes-tmux|$dot/mods/changes-tmux/main.js|$app/mods/changes/main.js|$base/chan
 pane-tmux|$dot/mods/pane-tmux/main.js|$app/mods/pane/main.js|$base/pane.js
 workspace-status-tmux|$dot/mods/workspace-status-tmux/main.js|$app/mods/workspace-status/main.js|$base/workspace-status.js
 tabs-tmux|$dot/mods/tabs-tmux/main.js|$app/mods/tabs/main.js|$base/tabs.js
-netrunner-layout|$dot/layouts/netrunner.json|$app/layouts/main.json|$base/main.json"
+menu-tmux|$dot/mods/menu-tmux/main.js|$app/mods/menu/main.js|$base/menu.js
+new-menu-tmux|$dot/mods/new-menu-tmux/main.js|$app/mods/new-menu/main.js|$base/new-menu.js
+toast-tmux|$dot/mods/toast-tmux/main.js|$app/mods/toast/main.js|$base/toast.js
+netrunner-layout|$dot/layouts/netrunner.json|$app/layouts/main.json|$base/main.json
+ash-layout|$dot/layouts/ash.json|$app/layouts/main.json|$base/ash-main.json"
 
 clear_pending() {
   rm -f "$pending/$1.diff" "$pending/$1.merged"
@@ -87,7 +91,7 @@ fi
 while IFS='|' read -r name ours shipped was; do
   merge "$name" "$ours" "$shipped" "$was"
 done <<<"$copies"
-for mod in picker-tmux workspace-chrome-tmux agents-tmux files-tmux changes-tmux pane-tmux workspace-status-tmux tabs-tmux; do
+for mod in picker-tmux workspace-chrome-tmux agents-tmux files-tmux changes-tmux pane-tmux workspace-status-tmux tabs-tmux menu-tmux new-menu-tmux toast-tmux; do
   herdr-app check "$app/mods/$mod" || status=1
 done
 exit "$status"

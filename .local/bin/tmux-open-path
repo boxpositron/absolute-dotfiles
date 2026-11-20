@@ -209,7 +209,7 @@ fi
 # the environment it started with.
 herdr=
 [[ $client == <-> ]] && herdr=$(ps eww -o command= -p $client 2>/dev/null | tr ' ' '\n' | sed -n 's/^HC_TERMINAL_ID=//p' | head -n 1)
-if [[ -n $herdr && $(jq -r '.layout // empty' ~/.config/herdr-app/shared.json 2>/dev/null) == netrunner ]]; then
+if [[ -n $herdr && $(jq -r '.layout // empty' ~/.config/herdr-app/shared.json 2>/dev/null) == (netrunner|ash) ]]; then
     req=${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/open kind=file
     [[ -d $file ]] && kind=dir
     mkdir -p $req && jq -n --arg kind $kind --arg path $file --arg terminal $herdr \

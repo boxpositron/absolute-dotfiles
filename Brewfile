@@ -160,6 +160,7 @@ brew "teamookla/speedtest/speedtest", trusted: true
 # Fonts, terminals and CLI apps
 cask "font-fira-code-nerd-font"
 cask "font-hack-nerd-font"
+cask "font-rajdhani"
 cask "font-symbols-only-nerd-font"
 cask "ghostty"
 cask "wezterm"
