@@ -19,6 +19,7 @@ OpenCode-era evaluation notes and rollback steps are in git history at
 | `stageshow` | [benjitaylor/skills](https://github.com/benjitaylor/skills) (`stageshow/`) | `802057409787133703c56001080169e347305572` | MIT, included; app icons and brand artwork keep their own terms (`NOTICE.md`, `kit/brands/`) |
 | `frontend-workflow` | local | - | - |
 | `sound-design` | local | - | - |
+| `pr-review` | local | - | - |
 
 The ten marketing skills are `product-marketing`, `copywriting`, `copy-editing`,
 `emails`, `cold-email`, `content-strategy`, `seo-audit`, `ai-seo`, `launch` and

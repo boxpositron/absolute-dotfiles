@@ -27,6 +27,10 @@ Every file path or link you show must open as written: the user clicks paths and
 
 Agents share the machine with the user's apps and with other agents, and test runners start one worker per CPU core by default. Cap test workers at 3: `jest --maxWorkers=3`, `vitest --maxWorkers=3`, and `pytest -n 3` with pytest-xdist instead of `-n auto`. Keep a project's own limit when it is lower.
 
+## Pull request reviews
+
+When you review a GitHub or Gitea pull request, or a gate or code review finishes on work that has an open PR, use the `pr-review` skill and submit the findings with `pr-review submit`. Each PR's mode (manual, semi or auto) decides whether you review on your own and whether your findings wait for the user in Herdr's Reviews panel or post to the PR at once. Don't post review comments with `gh` or `tea` directly.
+
 ## Client work
 
 Some work is done for clients and is tracked. In omo, the `omo-work` hook names the client in each prompt's context when a session works in a client's code, and the user may also say that work is for a client. Before changing anything for that work, read `~/.config/omo-work/rules.md` and follow it: it says how the work is scoped, billed and tracked, and it stays out of this shared file. A question or a read-only look needs none of this. If that file is missing, say so and ask the user how to proceed.
