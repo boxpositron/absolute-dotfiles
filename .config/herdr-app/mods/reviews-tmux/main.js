@@ -1,8 +1,8 @@
 // reviews-tmux: open PRs and their reviews from pr-review, for the tmux pane's folder or every
 // folder in its session. A hidden copy reads the CLI and publishes "pr.reviews"; the panel only
 // draws. Open shows the review file in a solid dialog, with findings to select and post.
-import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, Button, Checkbox, TextView, Editor, EditorState, Input, InputState, Textarea, TextareaState } from "gpui-base";
+import { View, div, svg, list } from "gpui-kit";
+import { v_flex, h_flex, Scrollbar, Button, Checkbox, TextView, Editor, EditorState, Input, InputState, Textarea, TextareaState } from "gpui-base";
 import { exec, home, theme, props, shared, setShared, checking, readTextFile, openOverlay, closeOverlay, nextCommand } from "herdr";
 import { INK, isHud, spinner, display, mono, fill, frame, modalFrame, caps, readout, button as hudButton, title as hudTitle } from "./hud.js";
 
@@ -14,6 +14,17 @@ const UI = { body: 13, small: 11.5, title: 16, prose: 14, gap: 8, inset: 12, rad
 const solid = (c) => typeof c === "string" && c.length === 9 ? c.slice(0, 7) : c;
 const message = (e) => e instanceof Error ? e.message : String(e);
 const refresh = () => setShared("pr.reviews.refresh", (shared("pr.reviews.refresh") ?? 0) + 1);
+// The diff as one run of rows for the dialog's lazy list: each file's header, then its hunks' headers and lines, keyed by
+// the file's path so a click names its line.
+function diffRows(diff) {
+  return (diff?.files ?? []).flatMap((file, fi) => [
+    { key: `f:${file.path}`, kind: "file", file, fi },
+    ...file.hunks.flatMap((hunk, hi) => [
+      { key: `h:${file.path}:${hi}`, kind: "hunk", hunk, hi },
+      ...hunk.lines.map((line, li) => ({ key: `l:${file.path}:${hi}:${li}`, kind: "line", path: file.path, line })),
+    ]),
+  ]);
+}
 const postedIds = (r) => new Set((r?.posted ?? []).flatMap((p) => [...p.ids, ...p.in_summary]));
 const running = (data) => (data?.repos ?? []).some((r) => r.prs.some((p) => p.review?.state === "running"));
 function elapsed(ms) {
@@ -200,6 +211,7 @@ export default class Reviews extends View {
         const text = await readTextFile(r.diff_file);
         if (text === null) throw new Error("The review diff is unavailable.");
         this.diff = JSON.parse(text);
+        this.diffRows = diffRows(this.diff);
         this.diffPath = r.diff_file;
         this.diffProblem = null;
       } catch (e) { this.diffProblem = message(e); }
@@ -508,35 +520,50 @@ export default class Reviews extends View {
           .child(this.action(t, `remove-${f.id}`, "Remove", (cx) => this.remove(cx, f), this.saving || this.posting)))));
   }
 
+  // The diff in a lazy list that draws only the rows on screen: a PR of 4,000 lines, each its own Button, ran past
+  // Herdr's render limit. Rows may hold no handlers, so a click on a new-side line reaches the list's one handler.
   diffView(t) {
-    return v_flex().gap(UI.inset)
+    const rows = this.diffRows ?? [];
+    return v_flex().flex_1().min_h(0).gap(UI.inset)
       .when(Boolean(this.diffProblem), (el) => el.child(div().text_color(t.ansi1).child(this.diffProblem)))
       .when(!this.diff && !this.diffProblem, (el) => el.child(div().text_color(t.muted).child("The diff will appear after the PR is fetched.")))
-      .when(Boolean(this.diff), (el) => el.child(div().text_size(UI.small).text_color(t.muted)
+      .when(Boolean(this.diff), (el) => el.child(div().flex_none().text_size(UI.small).text_color(t.muted)
         .child(this.review.state === "done" ? "Click a new-side line to write a comment." : "You can write comments when this review finishes.")))
-      .children((this.diff?.files ?? []).map((file, fi) => v_flex().gap(6)
+      .when(rows.length > 0, (el) => el.child(div().relative().flex_1().min_h(0)
+        .child(list("review-diff", rows.length, (i) => rows[i].key, (i) => this.diffRow(t, rows[i])).size_full()
+          .on_item_click((key, cx) => {
+            const row = rows.find((r) => r.key === key);
+            if (row?.kind === "line" && row.line.new !== null) this.editLine(cx, row.path, row.line.new);
+          }))
+        .child(Scrollbar.vertical("review-diff").absolute().inset_0())));
+  }
+
+  // One row of the diff: a file's path and status, a hunk's header, or a line with its old and new numbers.
+  diffRow(t, row) {
+    if (row.kind === "file") {
+      const { file } = row;
+      return v_flex().gap(6).pt(row.fi ? UI.inset : 0).pb(6)
         .child(div().font_semibold().when(this.hud, (el) => el.font_family(mono())).child(file.old_path && file.old_path !== file.path ? `${file.old_path} → ${file.path}` : file.path))
         .child(this.hud && !file.skipped ? this.label(t, file.status, t.muted)
-          : div().text_size(UI.small).text_color(t.muted).child(file.skipped ? `Skipped: ${file.skipped}` : file.status))
-        .children(file.hunks.map((hunk, hi) => v_flex().gap(1)
-          .when(this.hud, (el) => el.relative().px(1).pt(1).pb(8).children(frame(8, { line: t.accent + "66" })))
-          .child(div().px(UI.gap).py(4).text_color(t.working).font_family(this.hud ? mono() : "Menlo").text_size(UI.small)
-            .when(!this.hud, (el) => el.bg(solid(t.selected)))
-            .when(this.hud, (el) => el.border_b(1).border_color(t.accent + "33")).child(hunk.header))
-          .children(hunk.lines.map((line, li) => {
-            const color = line.kind === "+" ? t.done : line.kind === "-" ? t.ansi1 : t.foreground;
-            return Button.new(`diff-${fi}-${hi}-${li}`).w_full().min_h(24).flex().items_start().gap(UI.gap).px(6).py(2)
-              .disabled(line.new === null || this.review.state !== "done" || Boolean(this.commentAt) || this.saving || this.posting)
-              .bg(line.kind === "+" || line.kind === "-" ? solid(color) + "12" : solid(t.background))
-              .text_color(color).font_family("Menlo").text_size(UI.small).rounded(this.hud ? 0 : 3).border_1().border_color(solid(t.background))
-              .focus((s) => s.border_color(t.working)).when(line.new !== null, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)))
-              .accessibility_label(`${file.path}, old ${line.old ?? "none"}, new ${line.new ?? "none"}: ${line.text}`)
-              .on_click((_e, cx) => this.editLine(cx, file.path, line.new))
-              .child(div().w(40).flex_none().text_color(t.muted).child(line.old === null ? "" : String(line.old)))
-              .child(div().w(40).flex_none().text_color(t.muted).child(line.new === null ? "" : String(line.new)))
-              .child(div().w(12).flex_none().child(line.kind))
-              .child(div().min_w(0).flex_1().child(line.text));
-          }))))));
+          : div().text_size(UI.small).text_color(t.muted).child(file.skipped ? `Skipped: ${file.skipped}` : file.status));
+    }
+    if (row.kind === "hunk") return div().pt(row.hi ? 6 : 0).pb(1)
+      .child(div().px(UI.gap).py(4).text_color(t.working).font_family(this.hud ? mono() : "Menlo").text_size(UI.small)
+        .when(!this.hud, (el) => el.bg(solid(t.selected)))
+        .when(this.hud, (el) => el.relative().children(frame(6, { bg: t.accent + "12", line: t.accent + "66" })))
+        .child(row.hunk.header));
+    const { line, path } = row;
+    const color = line.kind === "+" ? t.done : line.kind === "-" ? t.ansi1 : t.foreground;
+    const open = line.new !== null && this.review.state === "done" && !this.commentAt && !this.saving && !this.posting;
+    return div().pb(1).child(h_flex().w_full().min_h(24).items_start().gap(UI.gap).px(6).py(2)
+      .bg(line.kind === "+" || line.kind === "-" ? solid(color) + "12" : solid(t.background))
+      .text_color(color).font_family("Menlo").text_size(UI.small).rounded(this.hud ? 0 : 3)
+      .when(open, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)))
+      .accessibility_label(`${path}, old ${line.old ?? "none"}, new ${line.new ?? "none"}: ${line.text}`)
+      .child(div().w(40).flex_none().text_color(t.muted).child(line.old === null ? "" : String(line.old)))
+      .child(div().w(40).flex_none().text_color(t.muted).child(line.new === null ? "" : String(line.new)))
+      .child(div().w(12).flex_none().child(line.kind))
+      .child(div().min_w(0).flex_1().child(line.text)));
   }
 
   commentForm(t) {
@@ -596,7 +623,7 @@ export default class Reviews extends View {
         .child(this.action(t, "history-older", "Older", (cx) => this.selectReview(cx, this.history[index + 1].file), historyBusy || index < 0 || index >= this.history.length - 1))))
       .child(h_flex().flex_none().px(20).pb(UI.gap).gap(6)
         .children(["findings", "diff"].map((tab) => this.action(t, `tab-${tab}`, tab === "diff" ? "Diff" : "Findings", (cx) => { this.tab = tab; cx.notify(); }, false, this.tab === tab))))
-      .child(v_flex().id("review-content").flex_1().min_h(0).overflow_y_scrollbar().px(20).py(UI.inset).gap(UI.inset)
+      .child(v_flex().id("review-content").flex_1().min_h(0).when(this.tab !== "diff", (el) => el.overflow_y_scrollbar()).px(20).py(UI.inset).gap(UI.inset)
         .when(Boolean(this.problem), (el) => el.child(div().text_color(t.ansi1).child(this.problem)))
         .when(!r && !this.problem, (el) => el.child(div().text_color(t.muted).child("Reading review...")))
         .when(r?.state === "running", (el) => el.child(h_flex().gap(UI.gap).items_center()
