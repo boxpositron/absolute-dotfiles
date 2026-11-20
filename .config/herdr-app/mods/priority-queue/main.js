@@ -1,5 +1,6 @@
-// priority-queue: what needs you, in a column of its own at the right of the netrunner layout (block
-// "queue"), which opens by itself when something new needs you and closes when nothing does. One card
+// priority-queue: what needs you, at the top of the netrunner layout's right column (block "queue";
+// side-fit folds it or the side panel to a bar when both are open), which opens by itself when something new
+// needs you and closes when nothing does. One card
 // per omo agent in tmux, on this Mac or another machine:
 //   - a question (omo-status's "input"): each question with its options as buttons. A click on an option
 //     answers it; with several questions or a multiple choice, the picks go with Send. Reply sends an

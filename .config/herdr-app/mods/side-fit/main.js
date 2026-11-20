@@ -1,23 +1,30 @@
-// side-fit: keeps the terminal wide when the window narrows (the netrunner layout).
+// side-fit: keeps the terminal wide when the window narrows, and arranges the right column (the netrunner layout).
 //
-// With room for everything, the sidebar, the side panel and the priority queue dock beside the terminal as the layout
-// has them. Without it they float over the terminal instead of squeezing it, as drawers: a click on the terminal closes
-// them (a faint backdrop under them takes that click). Narrowing on, they fold one at a time:
-// 1. the side panel and the queue float at the right edge (the sidebar too, if docking it would squeeze the terminal);
+// The side panel and the priority queue share one column at the right (`right`) as an accordion: one part is expanded
+// and the other, when open, folds to a 40 px bar of its own (`queue-bar`, `panel-bar`, drawn by this mod with props
+// {bar}). Toggles still show and hide `panel` and `queue`, so a part shown from anywhere (its status chip, Files and
+// Changes, Cmd+Alt+B, Cmd+Shift+J, a new queue card, a click on its bar) expands and the other folds, and the expanded
+// part hidden closes while the folded one expands again. A folded queue with no cards left closes. The column keeps the
+// side panel's width while the panel is open, expanded or folded, so switching parts never resizes the terminal.
+//
+// With room for everything, the sidebar and the right column dock beside the terminal as the layout has them. Without
+// it they float over the terminal instead of squeezing it, as drawers: a click on the terminal closes them (a faint
+// backdrop under them takes that click). Narrowing on, they fold one at a time:
+// 1. the right column floats at the right edge (the sidebar too, if docking it would squeeze the terminal);
 // 2. once too little terminal shows beside them, the sidebar folds to its rail;
-// 3. then the side panel and the queue close, leaving the terminal nearly the whole window.
+// 3. then the right column closes, leaving the terminal nearly the whole window.
 // What folded comes back as the window widens again, unless you opened or closed it yourself in between.
 //
-// While they float, the side panel and the queue keep their slots in the layout, shown or hidden as before but 0 px wide,
-// so every toggle that shows, hides or switches them (status chips, Files and Changes, Cmd+Alt+B, Cmd+Shift+J, a
-// Ctrl+clicked file, a new queue card) still acts on the layout, and this copies what the slots show into windows: Herdr's
-// layout commands never reach a window's own nodes. The sidebar's toggle (workspace-chrome-tmux) runs
-// `side-fit.sidebar`, so expanding knows whether to dock or float.
+// While it floats, the right column keeps its slot in the layout, shown or hidden as before but 0 px wide, so every
+// toggle still acts on the layout, and this copies what the slot shows into a window: Herdr's layout commands never
+// reach a window's own nodes. The sidebar's toggle (workspace-chrome-tmux) runs `side-fit.sidebar`, so expanding knows
+// whether to dock or float.
 //
 // Two copies measure: `fit-width` (0 px tall, across the work column), which also steers, and `fit-height` (0 px wide,
 // beside the terminal). Copies share this module's state, the backdrop's too.
-import { View, div } from "gpui-kit";
-import { layout, run, openOverlay, closeOverlay, props, shared, setShared, window, nextCommand, checking } from "herdr";
+import { View, div, svg } from "gpui-kit";
+import { h_flex } from "gpui-base";
+import { layout, run, openOverlay, closeOverlay, props, shared, setShared, window, nextCommand, checking, theme, settings } from "herdr";
 
 // netrunner.json's fixed sizes: tab bar, status bar, the work row's padding and gap, the focus edge, the sidebar divider,
 // the expanded sidebar's brand row.
@@ -26,13 +33,18 @@ const TABS = 42, STATUS = 28, PAD = 8, GAP = 8, EDGE = 3, DIVIDER = 1, BRAND = 4
 const TERMINAL_MIN = 720;
 // Least terminal left showing beside what floats over it; narrower, the sidebar folds, then the right side closes.
 const VISIBLE_MIN = 420;
-// The side panel and the queue floating together narrow (down to FLOAT_MIN each) to leave this much terminal to click.
+// The floating right column narrows (down to FLOAT_MIN) to leave this much terminal to click.
 const CLICK_MIN = 160, FLOAT_MIN = 240;
 const PANEL_MIN = 280, QUEUE_MIN = 340, PANEL_WIDTH = 420, QUEUE_WIDTH = 460, SIDEBAR_WIDTH = 268, SIDEBAR_OPEN = 160;
 // What floats gets a solid base under the layout's glass, or the terminal's text would show through it.
 const BASE = "#0a0a14f5", LINE = { width: 1, color: "#00f0ff40" }, SCRIM = "#05050b40";
+// The right column's parts, top to bottom, and the side panel's views as its bar names them.
+const PARTS = ["queue", "panel"];
+const VIEWS = { files: "Files", changes: "Changes", mcp: "MCP", omo: "omo in tmux", jobs: "Jobs", prds: "PRDs", reviews: "Reviews" };
 
-const S = { body: 0, win: 0, lastWin: 0, folded: {}, windows: {}, sigs: {}, dueAt: 0, armed: false };
+// acc: the right column as this last arranged it. rightPx, rightFor: the docked width this last gave the column, and the
+// part it was sized for, so a drag of its edge can be told from its own resizes.
+const S = { body: 0, win: 0, lastWin: 0, folded: {}, windows: {}, sigs: {}, dueAt: 0, armed: false, passes: 0, acc: null, rightPx: null, rightFor: null };
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -79,27 +91,92 @@ function place(part, spec) {
   return true;
 }
 
+// A part of the right column as the layout shows it: "open" (expanded), "bar" (folded to its bar) or "closed".
+const partOf = (node, bar) => (!node.hidden ? "open" : !bar.hidden ? "bar" : "closed");
+
 function read() {
   const root = layout();
-  const sidebar = find(root, "sidebar"), panel = find(root, "panel"), queue = find(root, "queue");
-  if (!sidebar || !panel || !queue) return null;
+  const nodes = Object.fromEntries(["sidebar", "right", "queue", "queue-bar", "panel", "panel-bar"].map((id) => [id, find(root, id)]));
+  if (Object.values(nodes).some((node) => !node)) return null;
+  const { sidebar, right } = nodes;
   const p = prefs();
-  const sbPx = sidebar.size?.px ?? 0, pPx = panel.size?.px ?? 0, qPx = queue.size?.px ?? 0;
+  const sbPx = sidebar.size?.px ?? 0, rPx = right.size?.px ?? 0;
   const left = !sidebar.hidden, floating = left && Boolean(p.float);
+  const acc = { queue: partOf(nodes.queue, nodes["queue-bar"]), panel: partOf(nodes.panel, nodes["panel-bar"]) };
   return {
-    sidebar, panel, queue, p, sbPx, pPx, qPx, left, floating,
+    nodes, sidebar, right, p, sbPx, rPx, left, floating, acc,
     expanded: left && (floating || sbPx >= SIDEBAR_OPEN),
     open: sbPx >= SIDEBAR_OPEN ? sbPx : shared("sidebar.width") ?? SIDEBAR_WIDTH,
-    pOpen: !panel.hidden, qOpen: !queue.hidden,
-    pW: p.right !== "float" && pPx >= PANEL_MIN ? pPx : p.panel ?? PANEL_WIDTH,
-    qW: p.right !== "float" && qPx >= QUEUE_MIN ? qPx : p.queue ?? QUEUE_WIDTH,
+    pOpen: acc.panel !== "closed", qOpen: acc.queue !== "closed",
+    pW: p.panel ?? PANEL_WIDTH, qW: p.queue ?? QUEUE_WIDTH,
   };
 }
+
+// The right column's width with these parts open: the side panel's while it is open, else the queue's; 0 with neither.
+const rightWidth = (st, pOpen = st.pOpen, qOpen = st.qOpen) => (pOpen ? st.pW : qOpen ? st.qW : 0);
 
 // The terminal that shows beside the sidebar and the right side: docked or floating, they take the same width of it.
 function visible(st, { expanded = st.expanded, pOpen = st.pOpen, qOpen = st.qOpen } = {}) {
   const left = st.left ? (expanded ? st.open : rail()) + DIVIDER : 0;
-  return S.win - left - 2 * PAD - EDGE - (pOpen ? st.pW + GAP : 0) - (qOpen ? st.qW + GAP : 0);
+  const right = rightWidth(st, pOpen, qOpen);
+  return S.win - left - 2 * PAD - EDGE - (right ? right + GAP : 0);
+}
+
+// Shows and hides the parts, their bars and the column so the right column is `want` ({queue, panel}: open, bar or
+// closed). True when it changed the layout.
+function arrange(st, want) {
+  S.acc = want;
+  const shown = {
+    right: want.queue !== "closed" || want.panel !== "closed",
+    "queue-bar": want.queue === "bar", queue: want.queue === "open",
+    "panel-bar": want.panel === "bar", panel: want.panel === "open",
+  };
+  let acted = false;
+  for (const [id, on] of Object.entries(shown)) {
+    if (Boolean(st.nodes[id].hidden) === !on) continue;
+    run(on ? "layout.show" : "layout.hide", { id });
+    acted = true;
+  }
+  // Both parts fill the column. Herdr keeps a node's size across layout changes, so a width saved while they were
+  // columns of their own would read as a height here.
+  for (const id of PARTS) {
+    if (!st.nodes[id].size?.px) continue;
+    run("layout.resize", { id, weight: 1 });
+    acted = true;
+  }
+  return acted;
+}
+
+// The layout against what this last arranged: a part that came open expands and the other folds (both at once, as when
+// Herdr starts, keep the queue), and an expanded part that closed hands the column to the folded one.
+function accordion(st) {
+  const now = st.acc, was = S.acc ?? now, want = { ...now };
+  const other = (part) => (part === "queue" ? "panel" : "queue");
+  if (now.queue === "open" && now.panel === "open") {
+    const opened = PARTS.filter((part) => was[part] !== "open");
+    want[other(opened.length === 1 ? opened[0] : "queue")] = "bar";
+  }
+  for (const part of PARTS) {
+    if (was[part] === "open" && now[part] === "closed" && want[other(part)] === "bar") want[other(part)] = "open";
+  }
+  if (want.queue === "bar" && shared("omo.queue")?.items?.length === 0) {
+    want.queue = "closed";
+    if (want.panel === "bar") want.panel = "open";
+  }
+  return arrange(st, want);
+}
+
+// The docked column's width is the width of the part it is sized for, and a drag of its edge sets that part's width.
+// Until the side panel has a width of its own, the layout's counts as its.
+function widths(st) {
+  const { p, rPx } = st, docked = p.right !== "float" && rPx > 0;
+  if (docked && S.rightPx === null && p.panel === undefined && rPx >= PANEL_MIN) setPrefs({ panel: rPx });
+  else if (docked && S.rightPx !== null && Math.abs(rPx - S.rightPx) > 0.5) {
+    if (S.rightFor === "panel" && rPx >= PANEL_MIN) setPrefs({ panel: rPx });
+    if (S.rightFor === "queue" && rPx >= QUEUE_MIN) setPrefs({ queue: rPx });
+  }
+  const q = prefs();
+  return { ...st, p: q, pW: q.panel ?? PANEL_WIDTH, qW: q.queue ?? QUEUE_WIDTH };
 }
 
 function foldSidebar(st) {
@@ -129,10 +206,7 @@ function closeDrawers() {
   const st = read();
   if (!st) return;
   if (st.floating) foldSidebar(st);
-  if (st.p.right === "float") {
-    if (st.pOpen) run("layout.hide", { id: "panel" });
-    if (st.qOpen) run("layout.hide", { id: "queue" });
-  }
+  if (st.p.right === "float") arrange(st, { queue: "closed", panel: "closed" });
 }
 
 // As the window narrows, fold what leaves too little terminal showing, the sidebar first; as it widens, bring back what
@@ -151,17 +225,16 @@ function fold(st) {
       st = { ...st, expanded: false, floating: false };
     }
     if ((st.pOpen || st.qOpen) && visible(st) < VISIBLE_MIN) {
-      f.right = { panel: st.pOpen, queue: st.qOpen };
-      if (st.pOpen) run("layout.hide", { id: "panel" });
-      if (st.qOpen) run("layout.hide", { id: "queue" });
+      f.right = { ...st.acc };
+      arrange(st, { queue: "closed", panel: "closed" });
       acted = true;
     }
     return acted;
   }
-  if (f.right && visible(st, { pOpen: f.right.panel, qOpen: f.right.queue }) >= VISIBLE_MIN) {
-    if (f.right.panel) run("layout.show", { id: "panel" });
-    if (f.right.queue) run("layout.show", { id: "queue" });
-    st = { ...st, pOpen: f.right.panel || st.pOpen, qOpen: f.right.queue || st.qOpen };
+  const back = f.right && { pOpen: f.right.panel !== "closed", qOpen: f.right.queue !== "closed" };
+  if (back && visible(st, back) >= VISIBLE_MIN) {
+    arrange(st, f.right);
+    st = { ...st, ...back };
     f.right = null;
     acted = true;
   }
@@ -173,27 +246,26 @@ function fold(st) {
   return acted;
 }
 
+// True when it changed the layout, so another pass should follow once the change shows.
 function steer() {
-  const st = read();
-  if (!st || !S.win || !S.body) return;
-  if (S.win !== S.lastWin && fold(st)) return;
-  const { p } = st;
+  let st = read();
+  if (!st || !S.win || !S.body) return false;
+  if (accordion(st)) return true;
+  st = widths(st);
+  if (S.win !== S.lastWin && fold(st)) return true;
   const fixed = 2 * PAD + EDGE, W = S.win, R = rail();
 
   const leftFloats = st.expanded && W - st.open - DIVIDER - fixed < TERMINAL_MIN;
   const leftDocked = !st.left ? 0 : (st.expanded && !leftFloats ? st.open : R) + DIVIDER;
   // With nothing open on the right it decides for the side panel alone, so opening it lands where it will stay.
-  const rightW = st.pOpen || st.qOpen ? (st.pOpen ? st.pW + GAP : 0) + (st.qOpen ? st.qW + GAP : 0) : st.pW + GAP;
-  const rightFloats = W - leftDocked - fixed - rightW < TERMINAL_MIN;
+  const rightOpen = st.pOpen || st.qOpen;
+  const rightFloats = W - leftDocked - fixed - (rightOpen ? rightWidth(st) : st.pW) - GAP < TERMINAL_MIN;
 
-  if (!rightFloats && p.right !== "float") {
-    if (st.pOpen && st.pPx >= PANEL_MIN && st.pPx !== p.panel) setPrefs({ panel: st.pPx });
-    if (st.qOpen && st.qPx >= QUEUE_MIN && st.qPx !== p.queue) setPrefs({ queue: st.qPx });
-  }
   setPrefs({ right: rightFloats ? "float" : "dock", float: leftFloats });
-  const pPx = rightFloats ? 0 : st.pW, qPx = rightFloats ? 0 : st.qW;
-  if (Math.abs(st.pPx - pPx) > 0.5) run("layout.resize", { id: "panel", px: pPx });
-  if (Math.abs(st.qPx - qPx) > 0.5) run("layout.resize", { id: "queue", px: qPx });
+  const rPx = rightFloats ? 0 : rightOpen ? rightWidth(st) : st.rPx;
+  if (Math.abs(st.rPx - rPx) > 0.5) run("layout.resize", { id: "right", px: rPx });
+  S.rightPx = rPx;
+  S.rightFor = st.pOpen ? "panel" : "queue";
   if (st.left && Math.abs(st.sbPx - (leftDocked - DIVIDER)) > 0.5) {
     if (st.sbPx >= SIDEBAR_OPEN) setShared("sidebar.width", st.sbPx);
     run("layout.resize", { id: "sidebar", px: leftDocked - DIVIDER });
@@ -202,30 +274,22 @@ function steer() {
   // Backdrop first, over the terminal's row and beside the docked sidebar; the drawers above it. A new backdrop would
   // land on top of them, so they reopen after it.
   const top = TABS, height = 2 * PAD + S.body;
-  const sidebarOut = st.left && leftFloats, queueOut = rightFloats && st.qOpen, panelOut = rightFloats && st.pOpen;
-  const anyOut = sidebarOut || queueOut || panelOut;
-  if (place("backdrop", anyOut ? { x: leftDocked, y: top, width: W - leftDocked, height, layout: { type: "block", background: SCRIM, content: { mod: "side-fit", props: { backdrop: true } } } } : null)) {
-    for (const part of ["sidebar", "queue", "panel"]) S.sigs[part] = undefined;
+  const sidebarOut = st.left && leftFloats, rightOut = rightFloats && rightOpen;
+  if (place("backdrop", sidebarOut || rightOut ? { x: leftDocked, y: top, width: W - leftDocked, height, layout: { type: "block", background: SCRIM, content: { mod: "side-fit", props: { backdrop: true } } } } : null)) {
+    for (const part of ["sidebar", "right"]) S.sigs[part] = undefined;
   }
   place("sidebar", sidebarOut ? {
     x: 0, y: 0, width: st.open, height: TABS + height + STATUS,
     layout: solid(copy(st.sidebar), { radius: 0, border: { width: 1, color: LINE.color } }),
   } : null);
-  const room = W - (sidebarOut ? st.open : leftDocked) - 2 * PAD - CLICK_MIN - (queueOut && panelOut ? GAP : 0);
-  const wide = (queueOut ? st.qW : 0) + (panelOut ? st.pW : 0);
-  const fit = (w) => (wide > room ? Math.max(FLOAT_MIN, Math.floor((w * room) / wide)) : w);
-  const qW = fit(st.qW), pW = fit(st.pW);
-  let right = W - PAD;
-  if (queueOut) {
-    right -= qW;
-    place("queue", { x: right, y: top + PAD, width: qW, height: S.body, layout: solid(copy(st.queue)) });
-    right -= GAP;
-  } else place("queue", null);
-  right -= pW;
-  place("panel", panelOut ? { x: right, y: top + PAD, width: pW, height: S.body, layout: solid(copy(st.panel), { radius: 10 }) } : null);
+  const room = W - (sidebarOut ? st.open : leftDocked) - 2 * PAD - CLICK_MIN;
+  const w = Math.min(rightWidth(st), Math.max(FLOAT_MIN, room));
+  place("right", rightOut ? { x: W - PAD - w, y: top + PAD, width: w, height: S.body, layout: solid(copy(st.right), { radius: 10 }) } : null);
+  return false;
 }
 
 // Steers once the size has held still a moment, so dragging the window's edge doesn't reopen the windows every frame.
+// A pass that changed the layout steers again shortly, a few times at most.
 function later(cx, ms) {
   S.dueAt = Date.now() + ms;
   if (S.armed) return;
@@ -234,9 +298,34 @@ function later(cx, ms) {
     const left = S.dueAt - Date.now();
     if (left > 0) return wait(cx, left);
     S.armed = false;
-    steer();
+    if (steer() && ++S.passes < 6) later(cx, 60);
+    else S.passes = 0;
   });
   wait(cx, ms);
+}
+
+// A folded part's bar: its name and what it holds. A click expands it (the other part folds); its x closes it.
+function bar(part) {
+  const t = theme(), queue = part === "queue";
+  const items = queue ? shared("omo.queue")?.items ?? [] : [];
+  const needs = items.filter((i) => i.kind === "input" || i.kind === "error" || i.kind === "blocked").length;
+  const title = queue ? "PRIORITY QUEUE" : VIEWS[find(layout(), "panel-body")?.active] ?? "Side panel";
+  const detail = queue
+    ? needs ? `${needs} need${needs === 1 ? "s" : ""} you` : `${items.length} card${items.length === 1 ? "" : "s"}`
+    : shared("tmux.where")?.cwd?.split("/").filter(Boolean).pop() ?? "";
+  return h_flex().id(`side-fit-${part}-bar`).size_full().px(12).gap(10).items_center().rounded(10).overflow_hidden().cursor_pointer()
+    .hover((s) => s.bg(t.hover)).tooltip(`Expand ${queue ? "the priority queue" : title}`)
+    .on_click(() => run("layout.show", { id: part }))
+    .child(svg("mods/workspace-chrome/chevron-right.svg").size(13).flex_none().text_color(t.dim))
+    .when(queue, (el) => el.child(h_flex().h(16).gap(3).flex_none().items_end()
+      .child(div().w(3).h(16).bg(t.accent)).child(div().w(3).h(10).bg(t.working))))
+    .child(div().flex_none().text_size(12.5).font_bold().text_color(t.foreground)
+      .when(queue, (el) => el.font_family(settings().font_family ?? "JetBrains Mono")).child(title))
+    .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(needs ? t.accent : t.dim).child(detail))
+    .child(div().id(`side-fit-${part}-close`).size(24).flex().flex_none().items_center().justify_center().rounded(4)
+      .hover((s) => s.bg(t.hover)).tooltip("Close")
+      .on_click((_e, cx) => { cx.stop_propagation(); run("layout.hide", { id: `${part}-bar` }); })
+      .child(svg("mods/workspace-chrome/x.svg").size(13).text_color(t.dim)));
 }
 
 export default class SideFit extends View {
@@ -255,6 +344,7 @@ export default class SideFit extends View {
     if (props()?.backdrop) {
       return div().id("side-fit-backdrop").size_full().on_mouse_down("left", (_e, cx) => { cx.stop_propagation(); closeDrawers(); });
     }
+    if (props()?.bar) return bar(props().bar);
     if (this.measure === "width" && !checking()) later(cx, 0);
     return div().id("side-fit").size_full().on_size_change((size, cx) => {
       if (this.measure === "height") {

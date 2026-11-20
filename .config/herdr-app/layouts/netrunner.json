@@ -154,110 +154,167 @@
               ]
             },
             {
-              "id": "panel",
+              "id": "right",
               "type": "column",
               "gap": 8,
-              "resizable": false,
               "children": [
                 {
-                  "id": "panel-context",
+                  "id": "queue-bar",
                   "type": "block",
                   "content": {
-                    "mod": "tmux-context"
+                    "mod": "side-fit",
+                    "props": {
+                      "bar": "queue"
+                    }
                   },
                   "size": {
-                    "px": 116
+                    "px": 40
                   },
+                  "hidden": true,
                   "background": "#0a0a144d",
                   "radius": 10
                 },
                 {
-                  "id": "panel-body",
-                  "type": "stack",
+                  "id": "queue",
+                  "type": "block",
+                  "content": {
+                    "mod": "priority-queue"
+                  },
+                  "hidden": true,
                   "background": "#0a0a144d",
-                  "radius": 10,
+                  "radius": 10
+                },
+                {
+                  "id": "panel-bar",
+                  "type": "block",
+                  "content": {
+                    "mod": "side-fit",
+                    "props": {
+                      "bar": "panel"
+                    }
+                  },
+                  "size": {
+                    "px": 40
+                  },
+                  "hidden": true,
+                  "background": "#0a0a144d",
+                  "radius": 10
+                },
+                {
+                  "id": "panel",
+                  "type": "column",
+                  "gap": 8,
+                  "resizable": false,
                   "children": [
                     {
-                      "id": "files",
+                      "id": "panel-context",
+                      "type": "block",
+                      "content": {
+                        "mod": "tmux-context"
+                      },
+                      "size": {
+                        "px": 116
+                      },
+                      "background": "#0a0a144d",
+                      "radius": 10
+                    },
+                    {
+                      "id": "panel-body",
                       "type": "stack",
+                      "background": "#0a0a144d",
+                      "radius": 10,
                       "children": [
                         {
-                          "id": "files-tree",
+                          "id": "files",
+                          "type": "stack",
+                          "children": [
+                            {
+                              "id": "files-tree",
+                              "type": "block",
+                              "content": {
+                                "mod": "files-tmux"
+                              }
+                            },
+                            {
+                              "id": "files-preview",
+                              "type": "block",
+                              "content": {
+                                "mod": "preview",
+                                "props": {
+                                  "panel": "files"
+                                }
+                              },
+                              "background": "background",
+                              "border": {
+                                "width": 1,
+                                "color": "border"
+                              },
+                              "radius": 10
+                            },
+                            {
+                              "id": "files-edit",
+                              "type": "block",
+                              "content": {
+                                "terminal": "files-nvim"
+                              },
+                              "background": "background",
+                              "border": {
+                                "width": 1,
+                                "color": "border"
+                              },
+                              "radius": 10,
+                              "padding": 6
+                            }
+                          ],
+                          "active": "files-tree"
+                        },
+                        {
+                          "id": "changes",
                           "type": "block",
                           "content": {
-                            "mod": "files-tmux"
+                            "mod": "changes-tmux"
                           }
                         },
                         {
-                          "id": "files-preview",
+                          "id": "mcp",
                           "type": "block",
                           "content": {
-                            "mod": "preview",
-                            "props": {
-                              "panel": "files"
-                            }
-                          },
-                          "background": "background",
-                          "border": {
-                            "width": 1,
-                            "color": "border"
-                          },
-                          "radius": 10
+                            "mod": "mcp-tmux"
+                          }
                         },
                         {
-                          "id": "files-edit",
+                          "id": "omo",
                           "type": "block",
                           "content": {
-                            "terminal": "files-nvim"
-                          },
-                          "background": "background",
-                          "border": {
-                            "width": 1,
-                            "color": "border"
-                          },
-                          "radius": 10,
-                          "padding": 6
+                            "mod": "omo-tmux"
+                          }
+                        },
+                        {
+                          "id": "jobs",
+                          "type": "block",
+                          "content": {
+                            "mod": "jobs-tmux"
+                          }
+                        },
+                        {
+                          "id": "prds",
+                          "type": "block",
+                          "content": {
+                            "mod": "prds-tmux"
+                          }
+                        },
+                        {
+                          "id": "reviews",
+                          "type": "block",
+                          "content": {
+                            "mod": "reviews-tmux"
+                          }
                         }
                       ],
-                      "active": "files-tree"
-                    },
-                    {
-                      "id": "changes",
-                      "type": "block",
-                      "content": {
-                        "mod": "changes-tmux"
-                      }
-                    },
-                    {
-                      "id": "mcp",
-                      "type": "block",
-                      "content": {
-                        "mod": "mcp-tmux"
-                      }
-                    },
-                    {
-                      "id": "omo",
-                      "type": "block",
-                      "content": {
-                        "mod": "omo-tmux"
-                      }
-                    },
-                    {
-                      "id": "jobs",
-                      "type": "block",
-                      "content": {
-                        "mod": "jobs-tmux"
-                      }
-                    },
-                    {
-                      "id": "prds",
-                      "type": "block",
-                      "content": {
-                        "mod": "prds-tmux"
-                      }
+                      "active": "files"
                     }
                   ],
-                  "active": "files"
+                  "hidden": true
                 }
               ],
               "size": {
@@ -266,21 +323,6 @@
               "min": 0,
               "max": 900,
               "hidden": true
-            },
-            {
-              "id": "queue",
-              "type": "block",
-              "content": {
-                "mod": "priority-queue"
-              },
-              "size": {
-                "px": 460
-              },
-              "min": 0,
-              "max": 760,
-              "hidden": true,
-              "background": "#0a0a144d",
-              "radius": 10
             }
           ],
           "padding": 8,
@@ -361,6 +403,19 @@
               },
               "content": {
                 "mod": "prds-tmux",
+                "props": {
+                  "headless": true
+                }
+              }
+            },
+            {
+              "id": "data-reviews-tmux",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "reviews-tmux",
                 "props": {
                   "headless": true
                 }
