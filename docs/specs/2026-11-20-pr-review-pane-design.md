@@ -24,7 +24,7 @@ An internal, CodeRabbit-style reviewer for pull requests on GitHub and Gitea. om
 - No watcher or webhook: automatic reviews come only from agents that use the tool.
 - No incremental "only the new commits" review: a new head commit means a fresh review.
 - No editing of findings in the dialog.
-- This Mac only. A pane on another machine shows "Reviews run on this Mac only".
+- Any machine Herdr reaches. For a pane on another machine the panel runs the CLI there (Herdr's `exec` with `on`, as `$HOME/.bun/bin/bun $HOME/.local/bin/pr-review`) and the dialog reads that machine's review and diff files (`readTextFile` with `on`), so a review runs where the checkout is, with that machine's omo and forge logins. The machine needs bun, omo, the dotfiles' `pr-review`, and `gh` or a tea login for the forges its repos use.
 
 ## Architecture
 

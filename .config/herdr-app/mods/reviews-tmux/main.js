@@ -43,19 +43,23 @@ function scope() {
     : w?.cwd ? [w.cwd] : [];
   return { dirs, merged, on: w?.on ?? null, refresh: shared("pr.reviews.refresh"), key: JSON.stringify([w, dirs, all, merged]) };
 }
-async function cli(args) {
-  const [command, ...prefix] = COMMAND();
-  const r = await exec(command, [...prefix, ...args], { timeout: 30000 });
+// `on` runs it on another machine (a space's `machine`), started from that machine's home, which home() does not name.
+async function cli(args, on = null) {
+  const [command, ...prefix] = on ? ["sh", "-c", 'exec "$HOME/.bun/bin/bun" "$HOME/.local/bin/pr-review" "$@"', "pr-review"] : COMMAND();
+  const r = await exec(command, [...prefix, ...args], { timeout: 30000, on });
   const data = r.stdout.trim() ? JSON.parse(r.stdout) : null;
   if (r.code !== 0 || data?.error || !data) throw new Error(data?.error || r.stderr.trim() || `pr-review failed (${r.code})`);
   return data;
 }
+// The machine the listed pull requests are on, null for this Mac.
+const machine = () => shared("pr.reviews")?.data?.on ?? null;
 
 export default class Reviews extends View {
   init(_props, cx) {
     this.headless = Boolean(props()?.headless);
     this.file = props()?.file ?? null;
     this.history = props()?.history ?? [];
+    this.on = props()?.on ?? null;
     this.data = null;
     this.problem = null;
     this.busy = false;
@@ -108,7 +112,7 @@ export default class Reviews extends View {
     if (changed) {
       this.scopeKey = s.key;
       this.data = null;
-      this.problem = s.on ? "Reviews run on this Mac only" : null;
+      this.problem = null;
       this.share();
     }
     if (this.busy || (!changed && !requested && Date.now() - this.lastRead < (running(this.data) ? 3000 : 60000))) return;
@@ -117,9 +121,9 @@ export default class Reviews extends View {
     this.share();
     cx.spawn(async (cx) => {
       try {
-        const data = await cli(["list", ...(s.merged ? ["--merged"] : []), ...s.dirs]);
+        const data = await cli(["list", ...(s.merged ? ["--merged"] : []), ...s.dirs], s.on);
         data.repos = data.repos.map((repo) => ({ ...repo, prs: repo.prs.filter((pr) => s.merged ? pr.state === "merged" : !pr.state || pr.state === "open") }));
-        if (scope().key === s.key) { this.data = data; this.problem = null; }
+        if (scope().key === s.key) { this.data = { ...data, on: s.on }; this.problem = null; }
       } catch (e) {
         if (scope().key === s.key) this.problem = message(e);
       }
@@ -135,8 +139,8 @@ export default class Reviews extends View {
     setShared("pr.reviews", { data: this.data, problem: this.problem, busy: this.busy });
   }
 
-  open(file, tab = "findings", history = []) {
-    openOverlay({ mod: "reviews-tmux", kind: "dialog", frame: "none", width: 0.8, height: 0.78, props: { file, tab, history } });
+  open(file, tab = "findings", history = [], on = machine()) {
+    openOverlay({ mod: "reviews-tmux", kind: "dialog", frame: "none", width: 0.8, height: 0.78, props: { file, tab, history, on } });
   }
 
   selectReview(cx, file) {
@@ -168,11 +172,11 @@ export default class Reviews extends View {
     if (this.starting || pr.review?.state === "running") return;
     this.starting = `${repo.dir}:${pr.number}`;
     cx.notify();
-    this.run(cx, async () => { await cli(["review", repo.dir, String(pr.number)]); refresh(); });
+    this.run(cx, async () => { await cli(["review", repo.dir, String(pr.number)], machine()); refresh(); });
   }
 
   mode(cx, dir, number, mode) {
-    this.run(cx, async () => { await cli(["mode", dir, number, mode]); refresh(); });
+    this.run(cx, async () => { await cli(["mode", dir, number, mode], machine()); refresh(); });
   }
 
   write(cx, repo, pr) {
@@ -180,14 +184,14 @@ export default class Reviews extends View {
     this.starting = `${repo.dir}:${pr.number}`;
     cx.notify();
     this.run(cx, async () => {
-      const result = await cli(["manual", repo.dir, String(pr.number)]);
+      const result = await cli(["manual", repo.dir, String(pr.number)], machine());
       refresh();
       this.open(result.file, "diff", [{ file: result.file, source: { name: "you" }, started_at: new Date().toISOString() }, ...(pr.history ?? [])]);
     });
   }
 
   async readReview() {
-    const text = await readTextFile(this.file);
+    const text = await readTextFile(this.file, { on: this.on });
     if (text === null) throw new Error("Review file is unavailable. Close and open the review again.");
     const r = JSON.parse(text);
     if (r.version !== 1 || !["running", "done", "failed"].includes(r.state) || !Array.isArray(r.findings)) {
@@ -208,7 +212,7 @@ export default class Reviews extends View {
     this.problem = null;
     if (r.diff_file && this.diffPath !== r.diff_file) {
       try {
-        const text = await readTextFile(r.diff_file);
+        const text = await readTextFile(r.diff_file, { on: this.on });
         if (text === null) throw new Error("The review diff is unavailable.");
         this.diff = JSON.parse(text);
         this.diffRows = diffRows(this.diff);
@@ -240,7 +244,7 @@ export default class Reviews extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        const result = await cli(["post", this.file, "--ids", ids.join(",")]);
+        const result = await cli(["post", this.file, "--ids", ids.join(",")], this.on);
         this.postUrl = result.url;
         for (const id of result.ids) this.selected.delete(id);
         await this.readReview();
@@ -268,7 +272,7 @@ export default class Reviews extends View {
     cx.spawn(async (cx) => {
       try {
         await cli(["add", this.file, "--path", path, "--line", String(line),
-          "--severity", this.severity, "--title", this.commentTitle.value().trim(), "--body", this.commentBody.value().trim()]);
+          "--severity", this.severity, "--title", this.commentTitle.value().trim(), "--body", this.commentBody.value().trim()], this.on);
         this.commentAt = null;
         this.commentTitle.set_value("");
         this.commentBody.set_value("");
@@ -288,7 +292,7 @@ export default class Reviews extends View {
     cx.notify();
     cx.spawn(async (cx) => {
       try {
-        await cli(["remove", this.file, f.id]);
+        await cli(["remove", this.file, f.id], this.on);
         this.selected.delete(f.id);
         this.seen.delete(f.id);
         this.code.delete(f.id);
@@ -445,8 +449,7 @@ export default class Reviews extends View {
     const other = filter === "open" ? "merged" : "open";
     const retry = this.action(t, "retry", "Try again", () => refresh());
     const onlyTrouble = only && this.trouble(only);
-    const notice = s.on ? this.notice(t, { icon: "server", tone: t.blocked, title: "Reviews run on this Mac only", body: `This pane is on ${s.on}. Focus a pane on this Mac to see its pull requests.` })
-      : failed && !repos.length ? this.notice(t, { icon: "x", tone: t.ansi1, title: "Couldn't read pull requests", body: failed, action: retry })
+    const notice = failed && !repos.length ? this.notice(t, { icon: "x", tone: t.ansi1, title: "Couldn't read pull requests", body: failed, action: retry })
       : !state || (state.busy && !repos.length) ? this.notice(t, { icon: "spinner", tone: t.working, title: "Reading pull requests", spin: true })
       : !s.dirs.length ? this.notice(t, { icon: "terminal", tone: t.muted, title: "No tmux pane in focus", body: "Focus a tmux pane inside a git repository to list its pull requests." })
       : only ? this.notice(t, { ...onlyTrouble, tone: t.ansi1, action: onlyTrouble.kind === "access" ? retry
