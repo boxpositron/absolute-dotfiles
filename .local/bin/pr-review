@@ -1,0 +1,8 @@
+#!/usr/bin/env bun
+// pr-review: CodeRabbit-style reviews of GitHub and Gitea pull requests by omo, for Herdr's Reviews
+// panel (mods/reviews-tmux in the dotfiles' herdr-app config) and for agents that review PRs.
+// `pr-review` alone prints the commands. The code is in pr-review.d/ beside this file; the design is
+// docs/specs/2026-11-20-pr-review-pane-design.md in the dotfiles.
+import { main } from "./pr-review.d/main.ts";
+
+await main(process.argv.slice(2));
