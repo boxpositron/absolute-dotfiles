@@ -1,6 +1,6 @@
 // pr-review's commands. Each prints one JSON value on stdout (an error as {"error"} with exit 1),
 // since the Herdr panel and agents read it.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -249,7 +249,16 @@ async function startReview(dir: string, number: number, foreground: boolean) {
     return { file, state: done.state, error: done.error };
   }
   const log = openSync(review.log, "a");
-  const child = spawn(process.execPath, [Bun.main, "run", "--file", file], { detached: true, stdio: ["ignore", log, log], env: process.env });
+  const run = [process.execPath, Bun.main, "run", "--file", file];
+  // A caller can end whatever its command leaves running, detached or not: Herdr's exec on another machine runs under
+  // hc's service, which does. So on Linux the run gets its own systemd user unit when there is one; it records its pid.
+  if (process.platform === "linux" && Bun.which("systemd-run")) {
+    const env = Object.keys(process.env).filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k)).flatMap((k) => ["-E", k]);
+    const unit = spawnSync("systemd-run", ["--user", "--collect", "--quiet", `--property=StandardOutput=append:${review.log}`,
+      `--property=StandardError=append:${review.log}`, ...env, ...run], { env: process.env, stdio: ["ignore", log, log] });
+    if (unit.status === 0) return { file, state: "running" };
+  }
+  const child = spawn(run[0], run.slice(1), { detached: true, stdio: ["ignore", log, log], env: process.env });
   child.unref();
   writeJson(file, { ...review, pid: child.pid ?? null });
   return { file, state: "running" };
