@@ -3,7 +3,7 @@ description: Check Studio's PRDs and tasks against the work sessions did, and st
 argument-hint: "[client name | PRD id]"
 requires-arguments: false
 ---
-Run the Studio audit: load the Studio audit skill and follow it step by step.
+Run the Studio audit: read the `boxmarshall-studio-audit` guide with Studio's `get_guide` tool and follow it step by step.
 
 Scope: $ARGUMENTS (a client name or a PRD id; with nothing, every client with work in the last 30 days).
 

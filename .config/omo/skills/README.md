@@ -69,6 +69,13 @@ check the `skills` section. Hide skills you only call by name with
 off entirely, per user or per project, but its choices live in
 `~/.omo/agent/settings.json`, outside dotfiles.
 
+That file has `"skills": ["!boxmarshall-studio*"]`, which turns off the
+Boxmarshall Studio skills linked into `~/.agents/skills/` from the Studio repo. The
+Studio MCP server serves the same files as guides (`list_guides`, `get_guide`), and
+its instructions say when to read each, so OmO listed them twice. Their 3.4 KB of
+descriptions pushed the catalog back over 16 KiB in projects with skills of their
+own. Claude Code still loads them through `~/.claude/skills/`.
+
 ## Upgrading
 
 Re-copy the same directories from a newer upstream revision, update the revision
