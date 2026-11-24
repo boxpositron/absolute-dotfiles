@@ -1,7 +1,23 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
-import { INK, PLATE, isHud, spinner, display, frame, button as hudButton } from "./hud.js";
+import { spaces, panes, agents, run, openOverlay, theme, window, shared, layout, settings, fonts } from "herdr";
+import { INK, PLATE, isHud, spinner, display, frame, fill, caps, readout, button as hudButton } from "./hud.js";
+
+// The Alfred and Agents chips at the right end draw Nerd Font glyphs (a tie for Alfred, the butler, and a robot), as
+// workspace-status-tmux does, since Herdr loads only its shipped icons through the dotfiles link.
+const TIE = "\u{F0CE3}", ROBOT = "\u{F06A9}";
+const PREFERRED = ["Symbols Nerd Font", "JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGM Nerd Font"];
+let nerd = null;
+function glyph(char) {
+  if (nerd === null) {
+    const have = fonts().filter((f) => /Nerd Font/.test(f));
+    nerd = PREFERRED.find((f) => have.includes(f)) ?? have.find((f) => !/Caskaydia|Mono|Propo/.test(f)) ?? "";
+  }
+  if (!nerd) return svg("icons/agent.svg").size(13).flex_none();
+  return div().w(15).flex_none().flex().items_center().justify_center().font_family(nerd).text_size(13).child(char);
+}
+// Agents in the gauge, most urgent first; more than MAX_TICKS show as a count only.
+const GAUGE = ["blocked", "working", "done", "idle"], MAX_TICKS = 24;
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -56,6 +72,54 @@ export default class Tabs extends View {
     s.steps++;
     s.last = now;
     run(e.delta.y > 0 ? "tab.prev" : "tab.next");
+  }
+
+  // Alfred's tab in the right column (mods/alfred): the messages from Alfred not seen yet, pink and pulsing while one
+  // has buttons waiting on you, cyan while Alfred works, red when the board can't be read.
+  alfred(t, hud, panel, body, stop) {
+    const s = shared("alfred.chat");
+    const on = panel && !panel.hidden && body?.active === "alfred";
+    const status = s?.problem ? t.ansi1 : s?.waiting ? t.blocked : s?.typing ? t.working : null;
+    const tip = s?.problem ? `Alfred: ${s.problem}`
+      : `Alfred on Telegram: ${s?.unread ? `${s.unread} new` : "nothing new"}${s?.waiting ? `, ${s.waiting} waiting on you` : ""}${s?.typing ? ", working" : ""}`;
+    const toggle = () => {
+      if (on) run("layout.hide", { id: "panel" });
+      else { run("layout.select", { stack: "panel-body", child: "alfred" }); run("layout.show", { id: "panel" }); }
+    };
+    const n = s?.unread ?? 0;
+    // On, the button is yellow: the count goes in its dark ink rather than a cyan frame.
+    if (hud) return hudButton(t, "panel-alfred", "Alfred", { on, icon: glyph(TIE).relative(), h: 24 })
+      .child(on ? div().relative().font_family(settings().font_family ?? "JetBrains Mono").font_weight(700).text_size(12.5).child(String(n))
+        : readout(t, n, { status, pulse: Boolean(s?.waiting), h: 16 }).relative())
+      .tooltip(tip).on_mouse_down("left", stop).on_click(toggle);
+    return h_flex().id("panel-alfred").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
+      .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
+      .hover(st => st.bg(t.hover)).on_mouse_down("left", stop).tooltip(tip).on_click(toggle)
+      .child(glyph(TIE)).child("Alfred")
+      .when(n > 0 || Boolean(status), el => el.child(div().px(5).h(16).flex().items_center().rounded(4).font_family(settings().font_family ?? "JetBrains Mono")
+        .text_size(11).bg(status ?? t.accent).text_color(t.chrome.slice(0, 7)).child(String(n))));
+  }
+
+  // Every agent Herdr knows of, with a gauge of one slanted tick per agent in its state's colour in the HUD.
+  agents(t, hud) {
+    const list = agents();
+    const needs = list.filter(a => a.status === "blocked").length;
+    const tip = `${list.length} agent${list.length === 1 ? "" : "s"}${needs ? `, ${needs} need${needs === 1 ? "s" : ""} you` : ""}`;
+    if (!hud) return h_flex().id("agents-chip").h(26).px(8).gap(5).flex_none().items_center().rounded(6).text_size(12).text_color(needs ? t.blocked : t.muted).tooltip(tip)
+      .child(glyph(ROBOT)).child("Agents")
+      .child(div().px(5).h(16).flex().items_center().rounded(4).font_family(settings().font_family ?? "JetBrains Mono").text_size(11)
+        .bg(needs ? t.blocked : t.raised).text_color(needs ? t.chrome.slice(0, 7) : t.foreground).child(String(list.length)));
+    const rank = (a) => { const i = GAUGE.indexOf(a.status); return i < 0 ? GAUGE.length - 1 : i; };
+    const ticks = [...list].sort((a, b) => rank(a) - rank(b)).slice(0, MAX_TICKS);
+    const W = 3, SLANT = 3, GAP = 2, H = 12;
+    const tone = { blocked: t.blocked, working: t.working, done: t.done, idle: t.idle + "99" };
+    const groups = GAUGE.map((s) => ticks.map((a, i) => [rank(a), i]).filter(([r]) => GAUGE[r] === s)
+      .map(([, i]) => { const x = i * (W + GAP); return [[x + SLANT, 0], [x + SLANT + W, 0], [x + W, H], [x, H]]; }));
+    return h_flex().id("agents-chip").h(24).px(6).gap(7).flex_none().items_center().tooltip(tip)
+      .child(h_flex().items_center().gap(6).text_color(needs ? t.blocked : t.accent).child(glyph(ROBOT)).child(caps("Agents", 14)))
+      .child(readout(t, list.length, { status: needs ? t.blocked : null, pulse: needs > 0, h: 16 }))
+      .when(ticks.length > 0, el => el.child(div().relative().w(ticks.length * (W + GAP) + SLANT).h(H).flex_none()
+        .children(GAUGE.map((s, i) => groups[i].length ? fill(groups[i], tone[s]).when(s === "blocked", (g) => g.loop("opacity", { from: 0.45, to: 1, period: 1400 })) : null).filter(Boolean))));
   }
 
   render() {
@@ -135,6 +199,8 @@ export default class Tabs extends View {
       .child(button("tab-new", "+", () => openOverlay({ mod: hud ? "new-menu-tmux" : "new-menu", kind: "popup", width: 250, height: 512, ...(hud ? { frame: "none" } : {}) })))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
+      .when(Boolean(find(root, "alfred")), el => el.child(this.alfred(t, hud, panel, body, stop)))
+      .child(this.agents(t, hud))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));

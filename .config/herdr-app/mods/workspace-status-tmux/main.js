@@ -5,7 +5,8 @@
 // the omo chip counts the panes running omo in tmux (shared "omo.tmux" from omo-tmux) and opens those;
 // the jobs chip counts their background jobs (shared "omo.jobs" from jobs-tmux) and opens them; the
 // queue chip counts what needs you (shared "omo.queue" from priority-queue) and shows or hides its column.
-// The reviews chip counts PRs in view (shared "pr.reviews") and opens their review panel.
+// The reviews chip counts PRs in view (shared "pr.reviews") and opens their review panel. Agents (with its gauge)
+// sits at the right of the tab bar, beside Alfred (tabs-tmux).
 //
 // Two looks, chosen by the layout block's props. Without props (ash): each item is | key | number |, side by side
 // with a slim black line after each, in bold: the key (icon and label) in black on cream, the number on a uniform
@@ -13,18 +14,15 @@
 // With {style: "cyberpunk"} (netrunner), a Cyberpunk 2077 HUD on a near-black plate under a thin pink line: the
 // machine as a yellow tag with a slanted edge, the branch in cyan, then each item as a pink condensed label and its
 // number in a cyan readout frame with two corners cut, slashes between them. A status fills the frame in the state
-// colour, pulsing while something needs you, and Agents adds a gauge of one slanted tick per agent in its state's
-// colour. The palette hint is a key prompt. Agents, PRDs and reviews draw Nerd Font glyphs (a robot, a checklist
-// and a pull request), since Herdr loads only its shipped icons through the dotfiles link.
+// colour, pulsing while something needs you. The palette hint is a key prompt. PRDs and reviews draw Nerd Font glyphs
+// (a checklist and a pull request), since Herdr loads only its shipped icons through the dotfiles link.
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, theme, run, window as appWindow, keys, focused, shared, terminals, layout, fonts, settings } from "herdr";
+import { spaces, theme, run, window as appWindow, keys, focused, shared, terminals, layout, fonts, settings } from "herdr";
 import { INK, PLATE, isHud, fill, outline, cut, caps, slash, readout } from "./hud.js";
 
-const CHECKLIST = "\u{F45E}", PULL_REQUEST = "\u{F407}", ROBOT = "\u{F06A9}";
+const CHECKLIST = "\u{F45E}", PULL_REQUEST = "\u{F407}";
 const WHITE = "#ffffff", BLACK = "#000000", GREY = "#2f323c", CREAM = "#f4ecd8", CREAM_HOVER = "#e3d8bd";
-// Agents in the gauge, most urgent first; more than MAX_TICKS show as a count only.
-const GAUGE = ["blocked", "working", "done", "idle"], MAX_TICKS = 24;
 
 // As files-tmux/file-icons.js: a full-size Nerd Fonts 3 family, or "" when none is installed.
 const PREFERRED = ["Symbols Nerd Font", "JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGM Nerd Font"];
@@ -68,8 +66,6 @@ export default class WorkspaceStatus extends View {
   render() {
     const t = theme();
     const space = spaces().find(s => s.active);
-    const list = agents();
-    const needs = list.filter(a => a.status === "blocked").length;
     const f = focused(), where = shared("tmux.where");
     // A mod pane (a preview beside a tmux client), or the Files panel's nvim, keeps the branch its tab's client showed.
     const editor = f?.terminal === "files-nvim" || (Boolean(f?.terminal) && terminals().some((x) => x.address === f.terminal && x.name === "files-nvim"));
@@ -99,9 +95,6 @@ export default class WorkspaceStatus extends View {
         status: mcp.attention > 0 || mcp.configChanged ? t.blocked : null,
         tip: `MCP servers of the omo session in ${mcp.target}${mcp.attention ? `: ${mcp.attention} need${mcp.attention === 1 ? "s" : ""} you` : ""}`,
         click: () => toggle("mcp") },
-      { id: "agents", mark: glyph(ROBOT, "square"), label: "Agents", n: list.length,
-        status: needs > 0 ? t.blocked : null, pulse: needs > 0,
-        tip: `${list.length} agent${list.length === 1 ? "" : "s"}${needs ? `, ${needs} need${needs === 1 ? "s" : ""} you` : ""}` },
       omo && { id: "omo", mark: icon("terminal"), label: "omo", n: omo.panes,
         status: omo.needs > 0 ? t.blocked : null, pulse: omo.needs > 0,
         tip: `omo in tmux: ${omo.panes} pane${omo.panes === 1 ? "" : "s"}${omo.needs ? `, ${omo.needs} need${omo.needs === 1 ? "s" : ""} you` : ""}${omo.working ? `, ${omo.working} working` : ""}`,
@@ -126,7 +119,7 @@ export default class WorkspaceStatus extends View {
     const machine = { mark: icon(space?.machine ? "server" : "monitor"), label: space?.machine ?? "This Computer" };
     const mono = settings().font_family ?? "JetBrains Mono";
     return isHud()
-      ? this.hud(t, machine, branch, items, list, mono)
+      ? this.hud(t, machine, branch, items, mono)
       : this.blocks(t, machine, branch, items, mono);
   }
 
@@ -150,21 +143,10 @@ export default class WorkspaceStatus extends View {
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(key ? `${key}  Commands` : "Commands"));
   }
 
-  hud(t, machine, branch, items, list, mono) {
-    const gauge = () => {
-      const rank = (a) => { const i = GAUGE.indexOf(a.status); return i < 0 ? GAUGE.length - 1 : i; };
-      const ticks = [...list].sort((a, b) => rank(a) - rank(b)).slice(0, MAX_TICKS);
-      const W = 3, SLANT = 3, GAP = 2, H = 12;
-      const tone = { blocked: t.blocked, working: t.working, done: t.done, idle: t.idle + "99" };
-      const groups = GAUGE.map((s) => ticks.map((a, i) => [rank(a), i]).filter(([r]) => GAUGE[r] === s)
-        .map(([, i]) => { const x = i * (W + GAP); return [[x + SLANT, 0], [x + SLANT + W, 0], [x + W, H], [x, H]]; }));
-      return div().relative().w(ticks.length * (W + GAP) + SLANT).h(H).flex_none()
-        .children(GAUGE.map((s, i) => groups[i].length ? fill(groups[i], tone[s]).when(s === "blocked", (el) => el.loop("opacity", { from: 0.45, to: 1, period: 1400 })) : null).filter(Boolean));
-    };
+  hud(t, machine, branch, items, mono) {
     const item = (c) => h_flex().id(`${c.id}-chip`).h_full().flex_none().items_center().gap(7).px(8)
       .child(h_flex().items_center().gap(6).text_color(c.status && c.pulse ? c.status : t.accent).child(c.mark).child(caps(c.label, 14)))
       .child(readout(t, c.n, { status: c.status, pulse: Boolean(c.pulse) }))
-      .when(c.id === "agents" && list.length > 0, (el) => el.child(gauge()))
       .when(Boolean(c.tip), (el) => el.tooltip(c.tip))
       .when(Boolean(c.click), (el) => el.cursor_pointer().on_click(c.click).hover((s) => s.bg(t.accent + "1f")));
     const key = this.paletteKey();
