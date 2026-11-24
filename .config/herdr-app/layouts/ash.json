@@ -325,6 +325,13 @@
                           "content": {
                             "mod": "reviews-tmux"
                           }
+                        },
+                        {
+                          "id": "alfred",
+                          "type": "block",
+                          "content": {
+                            "mod": "alfred"
+                          }
                         }
                       ],
                       "active": "files",
@@ -436,6 +443,19 @@
               },
               "content": {
                 "mod": "reviews-tmux",
+                "props": {
+                  "headless": true
+                }
+              }
+            },
+            {
+              "id": "data-alfred",
+              "type": "block",
+              "size": {
+                "px": 0
+              },
+              "content": {
+                "mod": "alfred",
                 "props": {
                   "headless": true
                 }
