@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# Puts tmux's default socket back on the server that lost it. tmux listens on
+# $TMUX_TMPDIR/tmux-<uid>/default; when that file or its folder is removed, the
+# server keeps running but no new client reaches it, and the next
+# `tmux new-session` starts a second, empty server there. omo-status, Herdr's
+# lists and the agent-state collector then see only the new one: sessions on
+# the old server lose their omo states and spinners, though their open Herdr
+# tabs keep drawing.
+#
+# `check` looks for a tmux server started on the default socket that no socket
+# in that folder reaches any more, and sends it SIGUSR1, which makes tmux
+# create its socket again. When a newer server has taken the default socket
+# meanwhile, that socket first moves aside to displaced-<time>-<pid>, so its
+# sessions keep running and stay reachable with `tmux -S <that path>`, and
+# omo-status and omo-notify (omo's hooks) find it for their panes, so their
+# Herdr tabs keep getting their states. Nothing is killed. Then each omo pane gets its state back from agent-state's view of
+# its session (working, in the background, or waiting on you), since omo's own
+# updates went to the other server meanwhile. With several lost servers, or a
+# lost one newer than the server on the socket, it only says so. What it does
+# is logged and shown as a notification.
+#
+# Usage: tmux-rehome check       (run by the launchd agent; quiet when all is well)
+#        tmux-rehome status      (each server, how long it has run, the sockets that reach it)
+#        tmux-rehome sync        (only the last step: omo pane states from agent-state)
+#        tmux-rehome install     (install and start the launchd agent: a check every minute)
+#        tmux-rehome uninstall   (stop and remove the launchd agent)
+
+set -u
+
+label="local.tmux-rehome"
+domain="gui/$(id -u)"
+log="${TMUX_REHOME_LOG:-$HOME/.local/state/tmux-rehome.log}"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+tmpdir="${TMUX_TMPDIR:-/tmp}"
+dir="$tmpdir/tmux-$(id -u)"
+agent_state="${AGENT_STATE_URL:-http://127.0.0.1:4747}"
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+logline() { mkdir -p "$(dirname "$log")"; printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$log"; }
+say() {
+  logline "$1"
+  [[ $(uname) == Darwin ]] && osascript -e "display notification \"$1\" with title \"tmux-rehome\"" >/dev/null 2>&1
+  return 0
+}
+
+# tmux outside any tmux client, so -S alone picks the server.
+tm() { env -u TMUX -u TMUX_PANE tmux "$@"; }
+
+# Seconds a process has run, from ps's [[dd-]hh:]mm:ss.
+age() { ps -o etime= -p "$1" | awk '{ n = split($1, a, /[-:]/); d = n == 4 ? a[1] : 0; h = n >= 3 ? a[n - 2] : 0; print ((d * 24 + h) * 60 + a[n - 1]) * 60 + a[n] }'; }
+
+# The tmux servers started on the default socket: tmux processes without a terminal whose socket was bound there.
+# The bound name stays even when the file is gone or was moved.
+servers() {
+  local real pid tty comm
+  real="$(cd "$tmpdir" && pwd -P)/tmux-$(id -u)/default"
+  ps -U "$(id -u)" -o pid=,tty=,comm= | while read -r pid tty comm; do
+    [[ ${comm##*/} == tmux && ($tty == "??" || $tty == "?") ]] || continue
+    lsof -a -U -p "$pid" -Fn 2>/dev/null | grep -qx "n$real" && echo "$pid"
+  done
+}
+
+# "<pid> <socket>" for each socket in the folder that a server answers on.
+reached() {
+  local s pid
+  for s in "$dir"/*; do
+    [[ -S $s ]] || continue
+    pid=$(tm -S "$s" display-message -p '#{pid}' 2>/dev/null) && echo "$pid $s"
+  done
+}
+
+# Each omo pane's state from agent-state's view of its session, matched by the session id in the pane's transcript
+# name. Only what is under way is set; a finished turn or failure the pane holds is left for you to see. Each pane
+# once (Herdr's grouped sessions list it again), and only panes with an omo state: a shell where omo ran before keeps
+# that transcript's name.
+resync() {
+  local lives pane transcript state sid life want
+  lives=$(curl -s -m 5 "$agent_state/api/sessions?alive=1&compact=1" | python3 -I -c 'import json, sys
+for s in json.load(sys.stdin): print(s.get("sid"), s.get("lifecycle"))' 2>/dev/null)
+  [[ -n $lives ]] || { logline "agent-state didn't answer: omo pane states not synced"; return; }
+  tm list-panes -a -F '#{pane_id}|#{@omo_transcript}|#{@omo_state}' | awk -F'|' '!seen[$1]++' | while IFS='|' read -r pane transcript state; do
+    [[ -n $transcript && -n $state ]] || continue
+    sid=${transcript##*/}; sid=${sid%.jsonl}; sid=${sid##*_}
+    life=$(awk -v s="$sid" '$1 == s { print $2; exit }' <<<"$lives")
+    case $life in
+      active) want=working ;;
+      background) want=background ;;
+      blocked) [[ $state == input || $state == error ]] && continue; want=input ;;
+      idle) [[ $state == working || $state == background ]] || continue; want=idle ;;
+      *) continue ;;
+    esac
+    [[ $want == "$state" ]] && continue
+    "$HOME/.local/bin/omo-status" set "$pane" "$want" >/dev/null && logline "pane $pane was ${state:-unset}, its session is $life: set it $want"
+  done
+}
+
+check() {
+  local all reach pid lost="" n=0 owner aside=""
+  all=$(servers)
+  [[ -n $all ]] || return 0
+  reach=$(reached)
+  for pid in $all; do
+    awk -v p="$pid" '$1 == p { found = 1 } END { exit !found }' <<<"$reach" && continue
+    lost="$lost $pid"
+    n=$((n + 1))
+  done
+  ((n == 0)) && return 0
+  if ((n > 1)); then
+    say "Several tmux servers lost their socket ($lost ); left as they are"
+    return 1
+  fi
+  pid=${lost# }
+  owner=$(awk -v s="$dir/default" '$2 == s { print $1 }' <<<"$reach")
+  if [[ -n $owner ]]; then
+    # The newer server started because the socket had gone; a lost server newer than it is not that case.
+    if (($(age "$pid") <= $(age "$owner"))); then
+      say "tmux server $pid lost its socket but is newer than $owner on it; left as they are"
+      return 1
+    fi
+    aside="$dir/displaced-$(date +%Y%m%d-%H%M%S)-$owner"
+    mv "$dir/default" "$aside" || return 1
+    logline "moved server $owner's socket to $aside"
+  else
+    # A socket file nothing answers on, or none: tmux needs its folder, private, to bind again.
+    rm -f "$dir/default"
+    [[ -d $dir ]] || mkdir -m 700 "$dir"
+  fi
+  kill -USR1 "$pid"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -S $dir/default ]] && break
+    sleep 0.3
+  done
+  if [[ $(tm -S "$dir/default" display-message -p '#{pid}' 2>/dev/null) != "$pid" ]]; then
+    say "tmux server $pid didn't take the default socket back"
+    return 1
+  fi
+  say "tmux server $pid has the default socket again${aside:+; $owner moved to ${aside##*/}}"
+  resync
+}
+
+status() {
+  local reach pid where
+  reach=$(reached)
+  for pid in $(servers); do
+    where=$(awk -v p="$pid" '$1 == p { printf "%s ", $2 }' <<<"$reach")
+    printf '%s  up %s  %s\n' "$pid" "$(ps -o etime= -p "$pid" | tr -d ' ')" "${where:-LOST: no socket reaches it}"
+  done
+}
+
+case ${1:-} in
+  check) check ;;
+  status) status ;;
+  sync) resync ;;
+  install)
+    mkdir -p "$(dirname "$log")" "$(dirname "$plist")"
+    cat >"$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$label</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$HOME/.local/bin/tmux-rehome</string>
+    <string>check</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>$log</string>
+  <key>StandardErrorPath</key>
+  <string>$log</string>
+</dict>
+</plist>
+PLIST
+    launchctl bootout "$domain/$label" 2>/dev/null
+    launchctl bootstrap "$domain" "$plist" && echo "tmux-rehome: checking tmux's default socket every minute ($plist)"
+    ;;
+  uninstall)
+    launchctl bootout "$domain/$label" 2>/dev/null
+    rm -f "$plist"
+    echo "tmux-rehome: removed $plist"
+    ;;
+  *)
+    sed -n '2,/^$/s/^# \{0,1\}//p' "$0" >&2
+    exit 2
+    ;;
+esac
