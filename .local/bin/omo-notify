@@ -68,16 +68,24 @@ esac
 pane="${OMO_NOTIFY_PANE:-}"
 own_tty=""
 # Not the sessions of tab mode's Herdr tabs ("<session>~<window>"), which list each pane again.
-panes=$(tmux list-panes -a -f '#{?#{m:*~[0-9]*,#{session_name}},0,1}' -F '#{pane_tty} #{pane_id}' 2>/dev/null)
+own='#{?#{m:*~[0-9]*,#{session_name}},0,1}'
+panes=$(tmux list-panes -a -f "$own" -F '#{pane_tty} #{pane_id}' 2>/dev/null)
+# A server tmux-rehome moved off the default socket (displaced-<time>-<pid>) keeps its panes running: they are
+# listed too, with that socket, which $TMUX then names for the calls below.
+for sock in "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"/displaced-*; do
+  [[ -S $sock ]] && panes+=$'\n'$(tmux -S "$sock" list-panes -a -f "$own" -F "#{pane_tty} #{pane_id} $sock" 2>/dev/null)
+done
+sock=""
 pid=$PPID
 while [[ -z "$pane" && "${pid:-1}" -gt 1 ]]; do
   tty=$(ps -o tty= -p "$pid" | tr -d ' ')
   if [[ -n "$tty" && "$tty" != "??" ]]; then
     [[ -n "$own_tty" ]] || own_tty="/dev/$tty"
-    [[ -n "$panes" ]] && pane=$(awk -v t="/dev/$tty" '$1 == t { print $2 }' <<<"$panes")
+    [[ -n "$panes" ]] && read -r pane sock < <(awk -v t="/dev/$tty" '$1 == t { print $2, $3; exit }' <<<"$panes")
   fi
   pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
 done
+[[ -n $sock ]] && export TMUX="$sock,${sock##*-},0"
 
 # omo-status prints the message it settled on ("Finished: <task>"). Outside
 # tmux, omo in a Herdr terminal reports to that terminal itself.

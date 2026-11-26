@@ -112,6 +112,16 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin:$PA
 # characters as "_", which destroys the tab and \x1f field separators used below.
 tmux() { command tmux -u "$@"; }
 
+# A pane whose tmux server lost the default socket to another server, which tmux-rehome then moved aside to
+# displaced-<time>-<server pid>, still reaches its own server: $TMUX names the socket's path and the server's pid,
+# and only the path changed.
+if [[ -n ${TMUX:-} ]]; then
+  tmux_rest=${TMUX#*,}
+  for moved in "${TMUX%/*}"/displaced-*-"${tmux_rest%%,*}"; do
+    [[ -S $moved ]] && export TMUX="$moved,$tmux_rest"
+  done
+fi
+
 # The spaces `show` and `spaces` made, one "<session>\t<space id>" line each, so
 # `spaces` can close them once their session ends.
 spaces_file="${XDG_STATE_HOME:-$HOME/.local/state}/omo-status/spaces"
