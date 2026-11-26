@@ -310,7 +310,7 @@ function later(cx, ms) {
 function bar(part) {
   const t = theme(), queue = part === "queue";
   const items = queue ? shared("omo.queue")?.items ?? [] : [];
-  const needs = items.filter((i) => i.kind === "input" || i.kind === "error" || i.kind === "blocked").length;
+  const needs = items.filter((i) => !i.pinned && (i.kind === "input" || i.kind === "error" || i.kind === "blocked")).length;
   const title = queue ? "PRIORITY QUEUE" : VIEWS[find(layout(), "panel-body")?.active] ?? "Side panel";
   const detail = queue
     ? needs ? `${needs} need${needs === 1 ? "s" : ""} you` : `${items.length} card${items.length === 1 ? "" : "s"}`

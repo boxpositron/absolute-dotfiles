@@ -83,7 +83,7 @@ export default class WorkspaceStatus extends View {
     const reviewRunning = reviewPrs.some((p) => p.review?.state === "running");
     const reviewProblem = reviews?.problem || reviewRepos.some((r) => r.problem && !r.idle) || reviewPrs.some((p) => p.review?.state === "failed" || p.review?.error);
     const queue = shared("omo.queue")?.items;
-    const asks = queue?.filter((i) => i.kind === "input" || i.kind === "error" || i.kind === "blocked").length ?? 0;
+    const asks = queue?.filter((i) => !i.pinned && (i.kind === "input" || i.kind === "error" || i.kind === "blocked")).length ?? 0;
     const toggle = (id) => {
       const root = layout(), panel = find(root, "panel");
       if (panel && !panel.hidden && find(root, "panel-body")?.active === id) run("layout.hide", { id: "panel" });

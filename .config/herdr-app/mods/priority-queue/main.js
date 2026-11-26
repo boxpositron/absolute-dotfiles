@@ -3,8 +3,10 @@
 // needs you and closes when nothing does. One card
 // per omo agent in tmux, on this Mac or another machine:
 //   - a question (omo-status's "input"): each question with its options as buttons. A click on an option
-//     answers it; with several questions or a multiple choice, the picks go with Send. Reply sends an
-//     answer typed out instead.
+//     answers it; with several questions or a multiple choice, the picks go with Send. Comment opens a box whose
+//     text goes with the picks as omo's one comment covering everything (a last "Comment:" paragraph, which the
+//     board extension hands the question as its comment), or alone as an answer typed out; while the box is open, a
+//     click on an option picks it rather than sending it.
 //   - a failure ("error"), a finished turn ("done") or a finished step ("partial": tasks still open): the
 //     "For you" part of the agent's last reply, the whole reply a click away. Seen clears it
 //     (`omo-status ack`) as looking at the pane does; Reply sends the agent its next prompt.
@@ -31,6 +33,11 @@
 // draws. The hidden copy shows the column (layout.show) when a card it hasn't shown before arrives, and
 // hides it when the queue empties. Cmd+Shift+J and the status bar's queue chip toggle it. Seen adds the
 // card to shared "omo.queue.dismissed", so it goes at once, and a new state of that pane comes back.
+//
+// The pin in a card's header keeps the card in the queue, in a Pinned group below the rest, until you unpin it or
+// answer it from here: shared "omo.queue.pinned" keeps the cards as they were when pinned, and the hidden copy adds
+// back those its pane no longer has, marked stale. A pinned card never opens the column, and the column doesn't
+// close by itself while one is pinned.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input } from "gpui-base";
 import { exec, home, appHome, theme, props, settings, shared, setShared, run, readTextFile, layout, window } from "herdr";
@@ -317,7 +324,10 @@ export default class PriorityQueue extends View {
       .sort((a, b) => KINDS[b.kind].rank - KINDS[a.kind].rank || a.since - b.since);
     // The pane Herdr shows is in front of you: it gets no card, and won't open the column later.
     for (const it of shown) if (it.looking) this.opened.add(it.key);
-    return shown.filter((it) => !it.looking);
+    const live = shown.filter((it) => !it.looking), keys = new Set(live.map((it) => it.key));
+    const pins = shared("omo.queue.pinned") ?? [], pinned = new Set(pins.map((p) => p.key));
+    return [...live.map((it) => (pinned.has(it.key) ? { ...it, pinned: true } : it)),
+      ...pins.filter((p) => !keys.has(p.key)).map((p) => ({ ...p, pinned: true, stale: true }))];
   }
 
   // The omo session id in each queued pane, from its transcript's name: one tmux listing per machine.
@@ -361,7 +371,7 @@ export default class PriorityQueue extends View {
   // Shows the column for a card it hasn't shown before; hides it when the last card goes.
   steer(items) {
     const block = find(layout(), "queue");
-    const fresh = items.filter((it) => !this.opened.has(it.key));
+    const fresh = items.filter((it) => !it.pinned && !this.opened.has(it.key));
     for (const it of fresh) this.opened.add(it.key);
     this.opened = new Set([...this.opened].slice(-300));
     localStorage.setItem("opened", JSON.stringify([...this.opened]));
@@ -430,7 +440,9 @@ export default class PriorityQueue extends View {
       let res = null;
       try { res = JSON.parse(r.stdout); } catch {}
       this.status.set(it.key, res?.ok ? "sent" : res?.error ?? (r.stderr.trim() || "agent-state didn't answer"));
-      if (!res?.ok) {
+      // An answer is the card handled, so its pin goes.
+      if (res?.ok) this.unpin(it.key);
+      else {
         this.answered.delete(it.key);
         setShared("omo.queue.answered", (shared("omo.queue.answered") ?? []).filter((a) => a.sid !== answer.sid || a.at !== answer.at));
       }
@@ -461,13 +473,28 @@ export default class PriorityQueue extends View {
     cx.notify();
   }
 
+  // The box's text, with the card's picks when it has any: the picks first, the text as a comment on them.
   sendTyped(cx) {
     const it = (shared("omo.queue")?.items ?? []).find((x) => x.key === this.replyTo);
-    const text = this.input.value();
-    if (!it || !text.trim()) return;
-    this.reply(it, text, cx);
+    const text = this.input.value().trim(), picks = it ? this.answerOf(it) : "";
+    if (!it || !(text || picks)) return;
+    this.reply(it, picks && text ? `${picks}\n\nComment: ${text}` : picks || text, cx);
     this.input.set_value("");
     this.replyTo = null;
+  }
+
+  // A pin keeps the card as it is now, whatever its pane does next.
+  togglePin(it) {
+    const pins = shared("omo.queue.pinned") ?? [];
+    if (pins.some((p) => p.key === it.key)) return this.unpin(it.key);
+    const card = { ...it };
+    delete card.looking; delete card.pinned; delete card.stale;
+    setShared("omo.queue.pinned", [...pins, card].slice(-30));
+  }
+
+  unpin(key) {
+    const pins = shared("omo.queue.pinned") ?? [];
+    if (pins.some((p) => p.key === key)) setShared("omo.queue.pinned", pins.filter((p) => p.key !== key));
   }
 
   pick(it, qi, label, multi, cx) {
@@ -510,7 +537,8 @@ export default class PriorityQueue extends View {
   question(t, it, q, qi, count) {
     const chosen = this.picks.get(it.key)?.[qi] ?? [];
     const known = Boolean(it.sid && it.at), can = known && !this.answered.has(it.key);
-    const now = count === 1 && !q.multiSelect;
+    // One question with one answer sends on a click, unless the comment box is open to go with it.
+    const now = count === 1 && !q.multiSelect && this.replyTo !== it.key;
     return v_flex().gap(6)
       .when(Boolean(q.header), (el) => el.child(this.hud ? caps(q.header, 12, 700).text_color(t.dim)
         : div().font_family(mono()).text_size(10).font_bold().text_color(t.dim).child(q.header.toUpperCase())))
@@ -541,7 +569,7 @@ export default class PriorityQueue extends View {
       const answer = this.answerOf(it);
       return v_flex().gap(14)
         .children(qs.map((q, i) => this.question(t, it, q, i, qs.length)))
-        .when(Boolean(answer) && (qs.length > 1 || qs[0].multiSelect) && !this.answered.has(it.key), (el) => el.child(h_flex()
+        .when(Boolean(answer) && (qs.length > 1 || qs[0].multiSelect) && !this.answered.has(it.key) && this.replyTo !== it.key, (el) => el.child(h_flex()
           .child((this.hud ? hudButton(t, `picks-${it.key}`, "Send answer", { on: true, h: 26 })
             : div().id(`picks-${it.key}`).px(10).h(26).flex().items_center().bg(t.accent).text_color(solid(t.background))
               .font_family(mono()).text_size(10.5).font_bold().cursor_pointer().hover((s) => s.opacity(0.85)).child("SEND ANSWER"))
@@ -573,12 +601,14 @@ export default class PriorityQueue extends View {
   actions(t, it) {
     const st = this.status.get(it.key), held = this.answered.has(it.key);
     const canReply = Boolean(it.sid && it.at) && !held;
+    const options = Boolean(it.questions?.some((q) => q.options?.length));
     return h_flex().gap(6).items_center().pt(2)
       .when(Boolean(it.pane || it.tmux), (el) => el.child(this.button(t, `go-${it.key}`, "GO TO", "terminal", "Show this pane in Herdr", (cx) => this.goTo(it, cx))))
-      .when(it.kind !== "input" && !held, (el) => el.child(this.button(t, `seen-${it.key}`, "SEEN", "check",
+      .when(it.kind !== "input" && !held && !it.stale, (el) => el.child(this.button(t, `seen-${it.key}`, "SEEN", "check",
         it.pane ? "Clear it, as looking at the pane would" : "Hide it until it changes", (cx) => this.seen(it, cx), t.done)))
-      .when(canReply, (el) => el.child(this.button(t, `reply-${it.key}`, "REPLY", "square-pen",
-        it.kind === "input" ? "Type your own answer" : "Send it a message: the next prompt, or a steer while it works", (cx) => this.openReply(it, cx))))
+      .when(canReply, (el) => el.child(this.button(t, `reply-${it.key}`, options ? "COMMENT" : "REPLY", "square-pen",
+        options ? "Add a comment to your picks, or type your own answer"
+          : it.kind === "input" ? "Type your own answer" : "Send it a message: the next prompt, or a steer while it works", (cx) => this.openReply(it, cx))))
       .child(div().flex_1())
       .when(Boolean(st) && !held, (el) => el.child(div().min_w(0).truncate().font_family(mono()).text_size(10.5)
         .text_color(t.ansi1).tooltip(st).child(st)));
@@ -598,7 +628,18 @@ export default class PriorityQueue extends View {
       .child(div().text_size(11.5).line_height(1.4).text_color(t.muted).child(said.length > 240 ? `${said.slice(0, 239)}\u2026` : said));
   }
 
+  // The reply box; on a question with options, a line over it says what goes with the text.
   replyBox(t, it) {
+    const options = it.questions?.some((q) => q.options?.length), picks = options ? this.answerOf(it) : "";
+    const box = this.typeBox(t, it);
+    if (!options) return box;
+    return v_flex().gap(5)
+      .child(div().text_size(11).line_height(1.4).text_color(t.dim)
+        .child(picks ? `Goes with your picks: ${picks.replace(/\n/g, " \u00b7 ")}` : "Pick options above to send them with your comment, or type your own answer."))
+      .child(box);
+  }
+
+  typeBox(t, it) {
     return h_flex().h(34).pl(10).pr(4).gap(6).items_center()
       .when(!this.hud, (el) => el.border_1().border_color(t.accent + "b3").bg(t.background))
       .when(this.hud, (el) => el.relative().children(frame(6, { bg: t.accent + "0d", line: t.accent + "b3" })))
@@ -617,7 +658,7 @@ export default class PriorityQueue extends View {
     const kind = KINDS[it.kind], tone = t[kind.tone] ?? t.accent;
     const tint = it.session ? shared("tmux.tints")?.[it.machine ? `${it.machine}/${it.session}` : it.session] ?? null : null;
     const sent = this.answered.get(it.key);
-    const band = (tint ?? tone).slice(0, 7), urgent = kind.rank === 2 && !sent;
+    const band = (tint ?? tone).slice(0, 7), urgent = kind.rank === 2 && !sent && !this.pinned.has(it.key);
     const title = it.name || it.project || "omo";
     // The header names the session, so a project of the same name isn't repeated.
     const where = [it.project !== title && it.project !== it.session ? it.project : null, it.window && !GENERIC.has(it.window) && it.window !== it.project && it.window !== title ? it.window : null]
@@ -632,7 +673,8 @@ export default class PriorityQueue extends View {
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(div().flex_none().text_color(REMOTE).child(it.machine)))
         .child(div().flex_1())
-        .child(div().flex_none().text_color(t.muted).child(ago(now - it.since))))
+        .child(div().flex_none().text_color(t.muted).child(ago(now - it.since)))
+        .child(this.pinButton(t, it)))
       .child(h_flex().items_stretch().bg(mix(band, "#ffffff", 0.35) + "14")
         .child(div().w(3).flex_none().bg(sent ? band + "66" : band))
         .child(this.inside(t, it, now, title, where, sent)));
@@ -655,10 +697,30 @@ export default class PriorityQueue extends View {
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_family(display()).font_weight(600).text_size(14.5).text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(caps(it.machine, 12.5).flex_none().text_color(REMOTE)))
         .child(div().flex_1())
-        .child(div().flex_none().font_family(mono()).text_size(10.5).text_color(t.muted).child(ago(now - it.since))))
+        .child(div().flex_none().font_family(mono()).text_size(10.5).text_color(t.muted).child(ago(now - it.since)))
+        .child(this.pinButton(t, it)))
       .child(h_flex().items_stretch()
         .child(div().w(3).mb(C).flex_none().bg(sent ? band + "66" : band))
         .child(this.inside(t, it, now, title, where, sent)));
+  }
+
+  // The pin in a card's header, lit while the card is pinned.
+  pinButton(t, it) {
+    const on = this.pinned.has(it.key);
+    return div().id(`pin-${it.key}`).size(20).flex().flex_none().items_center().justify_center().cursor_pointer()
+      .when(!this.hud, (el) => el.rounded(4)).hover((s) => s.bg(t.hover))
+      .tooltip(on ? "Unpin: it goes once it's handled" : "Pin: keep it in the queue until you unpin it")
+      .on_click((_e, cx) => { cx.stop_propagation(); this.togglePin(it); })
+      .child(svg("mods/workspace-chrome/pin.svg").size(12).text_color(on ? t.accent : t.dim));
+  }
+
+  // The line over the pinned cards.
+  pinRule(t, n) {
+    return h_flex().id("pinned-rule").flex_none().gap(8).items_center().pt(4)
+      .child(svg("mods/workspace-chrome/pin.svg").size(12).flex_none().text_color(t.accent))
+      .child(this.hud ? caps(`Pinned \u00b7 ${n}`, 12.5, 700).flex_none().text_color(t.accent)
+        : div().flex_none().font_family(mono()).text_size(10.5).font_bold().text_color(t.accent).child(`PINNED \u00b7 ${n}`))
+      .child(div().flex_1().h(1).bg(t.accent + "4d"));
   }
 
   // A card below its header: your answer while it is held, the title and where, the body, actions and reply box.
@@ -677,23 +739,27 @@ export default class PriorityQueue extends View {
 
   render(cx) {
     if (this.headless) {
-      // omo's state, a Seen, or where you are looking changed: read again.
+      // omo's state, a Seen, a pin, or where you are looking changed: read again.
       const w = shared("tmux.where");
-      const sig = JSON.stringify([shared("omo.list")?.out ?? null, shared("omo.queue.dismissed") ?? null, w?.on ?? null, w?.pane ?? null, Boolean(window()?.active)]);
+      const sig = JSON.stringify([shared("omo.list")?.out ?? null, shared("omo.queue.dismissed") ?? null, shared("omo.queue.pinned") ?? null, w?.on ?? null, w?.pane ?? null, Boolean(window()?.active)]);
       if (sig !== this.sig) { this.sig = sig; this.refresh(cx); }
       return div();
     }
     const t = theme();
     this.hud = isHud();
     const data = shared("omo.queue");
-    // Cards you answered go below the ones still waiting on you.
-    const items = [...data?.items ?? []].sort((a, b) => Number(this.answered.has(a.key)) - Number(this.answered.has(b.key)));
+    this.pinned = new Set((shared("omo.queue.pinned") ?? []).map((p) => p.key));
+    // Cards you answered go below the ones still waiting on you, and pinned ones below those. A card you unpinned that
+    // its pane no longer has goes at once.
+    const group = (it) => (this.pinned.has(it.key) ? 2 : this.answered.has(it.key) ? 1 : 0);
+    const items = (data?.items ?? []).filter((it) => !it.stale || this.pinned.has(it.key)).sort((a, b) => group(a) - group(b));
     this.release(items, cx);
     this.wantDiagrams(items, cx);
     const now = Date.now();
-    const held = items.filter((it) => this.answered.has(it.key)).length;
-    const needs = items.filter((it) => KINDS[it.kind].rank === 2 && !this.answered.has(it.key)).length, finished = items.length - needs - held;
-    const count = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : null, finished ? `${finished} finished` : null, held ? `${held} answered` : null].filter(Boolean).join(" \u00b7 ");
+    const held = items.filter((it) => group(it) === 1).length, pins = items.filter((it) => group(it) === 2).length;
+    const needs = items.filter((it) => group(it) === 0 && KINDS[it.kind].rank === 2).length, finished = items.length - needs - held - pins;
+    const count = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : null, finished ? `${finished} finished` : null, held ? `${held} answered` : null,
+      pins ? `${pins} pinned` : null].filter(Boolean).join(" \u00b7 ");
     return v_flex().id("priority-queue").size_full().min_h(0).rounded(this.hud ? 0 : 10).overflow_hidden().bg(t.background).border_1()
       .border_color(needs ? t.accent + "99" : this.hud ? t.accent + "4d" : t.border).text_size(13).text_color(t.foreground)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 4) { this.width = size.width; cx.notify(); } })
@@ -716,6 +782,7 @@ export default class PriorityQueue extends View {
         .child(div().text_size(13).text_color(t.muted).child("Nothing needs you."))
         .child(div().text_size(11.5).text_center().text_color(t.dim).child("This column opens when an agent asks you something, fails or finishes."))))
       .when(items.length > 0, (el) => el.child(v_flex().id("queue-list").flex_1().min_h(0).px(10).py(10).gap(10).overflow_y_scrollbar()
-        .children(items.map((it) => this.card(t, it, now)))));
+        .children(items.flatMap((it, i) => (group(it) === 2 && (i === 0 || group(items[i - 1]) !== 2)
+          ? [this.pinRule(t, pins), this.card(t, it, now)] : [this.card(t, it, now)])))));
   }
 }
