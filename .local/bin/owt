@@ -177,6 +177,30 @@ ws_title() {
   if [[ -f "$file" ]]; then cat "$file"; fi
 }
 
+# Whether the tmux server this shell runs in answers. Its socket, even its folder,
+# can be deleted while the server runs on: attached clients carry on, but a new tmux
+# command fails to connect, or reaches a second server a later command started at
+# the same path. TMUX is "<socket>,<pid>,<session>", so the server's pid tells them
+# apart. A socket tmux-rehome moved aside for this server (displaced-<time>-<pid>)
+# is followed; a deleted one is made again with SIGUSR1, which needs its folder.
+# The pid is checked to be tmux first, because SIGUSR1 ends most other programs.
+tmux_answers() {
+  local socket="${TMUX%%,*}" rest="${TMUX#*,}" pid moved
+  pid="${rest%%,*}"
+  for moved in "${socket%/*}"/displaced-*-"$pid"; do
+    [[ -S "$moved" ]] && { socket="$moved"; export TMUX="$moved,$rest"; }
+  done
+  [[ "$(tmux display-message -p '#{pid}' 2>/dev/null)" == "$pid" ]] && return 0
+  [[ ! -e "$socket" && "$(ps -o comm= -p "$pid" 2>/dev/null)" == *tmux ]] || return 1
+  [[ -d "${socket%/*}" ]] || mkdir -m 700 "${socket%/*}" || return 1
+  kill -USR1 "$pid" || return 1
+  for _ in {1..20}; do
+    [[ -S "$socket" ]] && break
+    sleep 0.05
+  done
+  [[ "$(tmux display-message -p '#{pid}' 2>/dev/null)" == "$pid" ]] && say "recreated the deleted tmux socket $socket"
+}
+
 # Herdr (its desktop app herdr-app, and herdr-core's hc) stands in for tmux when
 # owt runs in a Herdr terminal outside tmux: herdr-core gives its programs
 # HC_TERMINAL_ID. Inside tmux, tmux wins even when its client is in Herdr.
@@ -362,6 +386,7 @@ launch() {
   window="$(ws_title "$dir")"
   window="${window:-$name}"
   if [[ -n "${TMUX:-}" ]]; then
+    tmux_answers || die "this pane's tmux server does not answer at ${TMUX%%,*} (tmux-rehome check gives it back its socket); run owt from a working tmux pane"
     tmux new-window -n "$window" -c "$dir" -- "$OWT_AGENT" "${args[@]}"
     say "opened tmux window '$window' running $OWT_AGENT"
   elif in_herdr; then
@@ -816,7 +841,7 @@ cmd_done() {
     cmd="sleep 5; cd $(printf '%q' "$root") && OWT_ROOT=$(printf '%q' "$OWT_ROOT") $(printf '%q' "$self") done $(printf '%q' "$name")"
     [[ $force -eq 0 ]] || cmd+=" --force"
     cmd+=" >>$(printf '%q' "$log") 2>&1"
-    if [[ -n "${TMUX:-}" ]]; then
+    if [[ -n "${TMUX:-}" ]] && tmux_answers; then
       tmux run-shell -b "$cmd"
     elif [[ -n "${HC_TERMINAL_ID:-}" ]] && command -v hc >/dev/null; then
       # A terminal of herdr-core's own, apart from the tab the cleanup closes.
