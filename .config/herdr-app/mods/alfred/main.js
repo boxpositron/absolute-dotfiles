@@ -14,11 +14,13 @@
 // and puts the keyboard in its box.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Input, InputState, TextView, ScrollHandle } from "gpui-base";
-import { exec, home, theme, props, shared, setShared, checking, readTextFile, nextCommand, notify, layout, run } from "herdr";
+import { exec, home, theme, props, shared, setShared, settings, checking, readTextFile, nextCommand, notify, layout, run } from "herdr";
 import { INK, isHud, display, mono, frame, caps, readout, spinner, button as hudButton, title as hudTitle } from "./hud.js";
 
-// Messages read at the start, kept, and drawn before "Earlier" adds as many again.
-const PAGE = 200, KEEP = 400, SHOWN = 60;
+// Messages read at the start, and kept.
+const PAGE = 200, KEEP = 400;
+// The chat builds only the rows within OVERSCAN px of the screen; GAP is the space under each row.
+const OVERSCAN = 900, GAP = 8;
 // Seconds one read waits on the hub for news; a read not back by STALL is left behind.
 const WAIT = 25, STALL = 60000;
 const NOTICE_MS = 8000, DAY = 86400000;
@@ -179,7 +181,7 @@ class Feed {
   }
 
   messages() {
-    return [...this.byMid.values()].sort((a, b) => a.mid - b.mid);
+    return (this.sorted ??= [...this.byMid.values()].sort((a, b) => a.mid - b.mid));
   }
 
   // Starts a read unless one is out (and not stalled), then the next as soon as it is back; after a failure the next
@@ -215,6 +217,7 @@ class Feed {
 
   apply(data) {
     // The hub's copy started over (head behind what was read): read it afresh.
+    this.sorted = null;
     if (this.loaded && data.head < this.seq) {
       this.loaded = false;
       this.seq = 0;
@@ -261,7 +264,12 @@ export default class Alfred extends View {
     this.scroll = ScrollHandle.new();
     this.input = InputState.new({ placeholder: "Message Alfred \u00b7 Enter sends" });
     this.input.on("submit", (_e, cx) => this.send(cx));
-    this.shown = SHOWN;
+    // Each row's last measured height, by key, for the spacers that stand in for rows off screen; and each message's
+    // Markdown, converted once.
+    this.heights = new Map();
+    this.md = new Map();
+    this.drawnAt = 0;
+    this.pinned = true;
     this.replyTo = null;
     // Sent from here and not yet in the chat: {id, text, replyTo}, until the bridge's echo of it arrives.
     this.outbox = [];
@@ -480,7 +488,7 @@ export default class Alfred extends View {
       .when(!m.deleted && Boolean(m.media), (el) => el.child(h_flex().relative().gap(6).items_center()
         .child(this.chip(t, mediaLabel(m.media), t.muted))))
       .when(!m.deleted && Boolean(m.html), (el) => el.child(div().relative().min_w(0).text_size(13).line_height(1.45).text_color(t.foreground)
-        .child(TextView.markdown(`m-${m.mid}`, markdownOf(m.html)).selectable(true))))
+        .child(TextView.markdown(`m-${m.mid}`, this.markdown(m)).selectable(true))))
       .when(!m.deleted && (m.buttons?.length ?? 0) > 0, (el) => el.child(div().relative().child(this.buttons(t, m, tone))));
     return h_flex().id(`msg-${m.mid}`).w_full().when(own, (el) => el.pl(28).justify_end()).when(!own, (el) => el.pr(12))
       .child(body.when(own, (el) => el.max_w_full()).when(!own, (el) => el.flex_1()));
@@ -525,31 +533,96 @@ export default class Alfred extends View {
         })));
   }
 
-  list(t, msgs) {
-    const shown = msgs.slice(-this.shown);
+  // A message's Markdown, converted from its HTML once rather than on every render.
+  markdown(m) {
+    const done = this.md.get(m.mid);
+    if (done?.html === m.html) return done.md;
+    const md = markdownOf(m.html);
+    this.md.set(m.mid, { html: m.html, md });
+    return md;
+  }
+
+  // The chat's rows, each a key and how to draw it: a line before each day's first message, the messages, what is on
+  // its way, and Alfred working.
+  rows(t, msgs) {
     const rows = [];
-    if (msgs.length > shown.length) rows.push(h_flex().id("earlier").justify_center().py(4)
-      .child(this.button(t, "earlier-button", `Earlier (${msgs.length - shown.length})`, { tone: t.muted })
-        .on_click((_e, cx) => { this.shown += SHOWN; cx.notify(); })));
     let day = null;
-    for (const m of shown) {
+    for (const m of msgs) {
       const label = dayLabel(m.at);
       if (label !== day) {
         day = label;
-        rows.push(h_flex().id(`day-${m.mid}`).gap(8).items_center().pt(6)
+        rows.push({ key: `day-${m.mid}`, draw: () => h_flex().gap(8).items_center().pt(6)
           .child(div().flex_1().h(1).bg(this.hud ? tint(t.accent, "33") : t.border))
           .child(this.label(t, label, t.dim))
-          .child(div().flex_1().h(1).bg(this.hud ? tint(t.accent, "33") : t.border)));
+          .child(div().flex_1().h(1).bg(this.hud ? tint(t.accent, "33") : t.border)) });
       }
-      rows.push(this.bubble(t, m));
+      rows.push({ key: `msg-${m.mid}`, draw: () => this.bubble(t, m) });
     }
-    for (const o of this.outbox) rows.push(this.pending(t, o));
-    if (Date.now() < this.feed.typingUntil) rows.push(this.typingRow(t));
-    if (this.stick) {
-      this.stick = false;
-      this.scroll.scroll_to_item(rows.length - 1);
+    for (const o of this.outbox) rows.push({ key: `out-${o.id}`, draw: () => this.pending(t, o) });
+    if (Date.now() < this.feed.typingUntil) rows.push({ key: "typing", draw: () => this.typingRow(t) });
+    return rows;
+  }
+
+  // Herdr renders this tab again whenever its live data changes, so a long chat built whole on every render stalled
+  // it. Only the rows within OVERSCAN of the screen are built; the rest are spacers of the height they last measured
+  // (a message not drawn yet counts as the average). A scroll that nears the edge of what is built draws again.
+  // The chat is pinned to its end until a scroll or a press in it, and again once back at the end or when a message
+  // arrives. Pinned, it reveals a mark after the last row, and does again when a drawn row grows (a message's
+  // Markdown is laid out after it first shows), so a tall message shows to its bottom.
+  list(t, msgs) {
+    const rows = this.rows(t, msgs), z = Number(settings().zoom);
+    let sum = 0, n = 0;
+    for (const [key, h] of this.heights) if (key.startsWith("msg-")) { sum += h; n++; }
+    const height = (key) => this.heights.get(key) ?? (key.startsWith("day-") ? 30 : n ? sum / n : 90);
+    const tops = [];
+    let total = 0;
+    for (const r of rows) {
+      tops.push(total);
+      total += height(r.key);
     }
-    return v_flex().id("alfred-list").flex_1().min_h(0).px(8).py(8).gap(8).overflow_y_scrollbar().track_scroll(this.scroll).children(rows);
+    const at = this.scroll.offset().y, view = this.scroll.viewport_size().height || 600;
+    if (this.stick || at + view >= this.scroll.content_size().height - 1) this.pinned = true;
+    const [lo, hi] = this.pinned ? [total - view - OVERSCAN, total] : [at - OVERSCAN, at + view + OVERSCAN];
+    let from = 0, to = rows.length;
+    while (from < rows.length - 1 && tops[from + 1] <= lo) from++;
+    while (to > from + 1 && tops[to - 1] >= hi) to--;
+    const after = to < rows.length ? total - tops[to] : 0;
+    const children = [];
+    if (tops[from] > 0) children.push(div().flex_none().h(tops[from]));
+    for (let i = from; i < to; i++) {
+      const { key, draw } = rows[i];
+      children.push(div().id(`row-${key}`).flex_none().pb(GAP)
+        .on_size_change((size, cx) => {
+          const h = size.height / z;
+          if (Math.abs((this.heights.get(key) ?? 0) - h) < 0.5) return;
+          this.heights.set(key, h);
+          if (this.pinned) cx.notify();
+        })
+        .child(draw()));
+    }
+    if (after > 0) children.push(div().flex_none().h(after));
+    children.push(div().id("end").flex_none().h(1));
+    this.drawnAt = at;
+    this.stick = false;
+    if (this.pinned) this.scroll.scroll_to_item(children.length - 1);
+    // Rows and messages that left the chat.
+    if (this.heights.size > rows.length + 50) {
+      const keys = new Set(rows.map((r) => r.key));
+      for (const key of this.heights.keys()) if (!keys.has(key)) this.heights.delete(key);
+      for (const mid of this.md.keys()) if (!this.feed.byMid.has(mid)) this.md.delete(mid);
+    }
+    return v_flex().id("alfred-list").flex_1().min_h(0).px(8).py(8).overflow_y_scrollbar().track_scroll(this.scroll)
+      .on_scroll_wheel((_e, cx) => {
+        this.pinned = false;
+        this.follow(cx);
+      })
+      .on_mouse_down("left", () => { this.pinned = false; })
+      .on_mouse_move((_e, cx) => this.follow(cx))
+      .children(children);
+  }
+
+  follow(cx) {
+    if (Math.abs(this.scroll.offset().y - this.drawnAt) > OVERSCAN / 3) cx.notify();
   }
 
   composer(t) {
