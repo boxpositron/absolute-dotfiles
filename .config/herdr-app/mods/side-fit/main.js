@@ -81,13 +81,14 @@ function copy(node) {
 const solid = (inner, look = {}) => ({ type: "column", background: BASE, border: LINE, radius: inner.radius ?? 0, shadow: "lg", ...look, children: [{ ...inner, size: undefined }] });
 
 // A window over the terminal, or none (spec null). The same spec keeps the open one, so its mods keep their state.
-// A new one opens before the old one closes, so nothing blinks; Herdr puts the newest window on top.
+// A new one opens before the old one closes, so nothing blinks; Herdr puts the newest window on top. The spec is in
+// layout px, as Herdr sizes the window, but a window's `at` is in window px, so the zoom scales its place.
 function place(part, spec) {
   const sig = spec ? JSON.stringify(spec) : null;
   if (S.sigs[part] === sig) return false;
-  const old = S.windows[part];
+  const old = S.windows[part], z = Number(settings().zoom);
   S.sigs[part] = sig;
-  S.windows[part] = spec ? openOverlay({ kind: "window", frame: "none", width: spec.width, height: spec.height, at: { x: spec.x, y: spec.y }, layout: spec.layout }) : null;
+  S.windows[part] = spec ? openOverlay({ kind: "window", frame: "none", width: spec.width, height: spec.height, at: { x: spec.x * z, y: spec.y * z }, layout: spec.layout }) : null;
   if (old) closeOverlay(old);
   return true;
 }
@@ -355,13 +356,15 @@ export default class SideFit extends View {
     }
     if (props()?.bar) return bar(props().bar);
     if (this.measure === "width" && !checking()) later(cx, 0);
+    // Sizes come in window px; everything here is in layout px, which Herdr's zoom scales.
     return div().id("side-fit").size_full().on_size_change((size, cx) => {
+      const z = Number(settings().zoom);
       if (this.measure === "height") {
-        if (Math.abs(size.height - S.body) < 0.5) return;
-        S.body = size.height;
+        if (Math.abs(size.height / z - S.body) < 0.5) return;
+        S.body = size.height / z;
       } else {
         const sidebar = find(layout(), "sidebar");
-        const win = size.width + (sidebar && !sidebar.hidden ? (sidebar.size?.px ?? 0) + DIVIDER : 0);
+        const win = size.width / z + (sidebar && !sidebar.hidden ? (sidebar.size?.px ?? 0) + DIVIDER : 0);
         if (Math.abs(win - S.win) < 0.5) return;
         S.win = win;
       }
