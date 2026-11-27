@@ -50,13 +50,14 @@ tm() { env -u TMUX -u TMUX_PANE tmux "$@"; }
 age() { ps -o etime= -p "$1" | awk '{ n = split($1, a, /[-:]/); d = n == 4 ? a[1] : 0; h = n >= 3 ? a[n - 2] : 0; print ((d * 24 + h) * 60 + a[n - 1]) * 60 + a[n] }'; }
 
 # The tmux servers started on the default socket: tmux processes without a terminal whose socket was bound there.
-# The bound name stays even when the file is gone or was moved.
+# The bound name stays even when the file is gone or was moved. macOS names the server "tmux" and Linux "tmux: server",
+# and Linux's lsof follows the socket's path with " type=STREAM".
 servers() {
   local real pid tty comm
   real="$(cd "$tmpdir" && pwd -P)/tmux-$(id -u)/default"
   ps -U "$(id -u)" -o pid=,tty=,comm= | while read -r pid tty comm; do
-    [[ ${comm##*/} == tmux && ($tty == "??" || $tty == "?") ]] || continue
-    lsof -a -U -p "$pid" -Fn 2>/dev/null | grep -qx "n$real" && echo "$pid"
+    [[ ${comm##*/} == tmux* && ($tty == "??" || $tty == "?") ]] || continue
+    lsof -a -U -p "$pid" -Fn 2>/dev/null | grep -qFx -e "n$real" -e "n$real type=STREAM" && echo "$pid"
   done
 }
 
