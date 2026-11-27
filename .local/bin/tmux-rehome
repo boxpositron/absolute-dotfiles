@@ -13,17 +13,20 @@
 # meanwhile, that socket first moves aside to displaced-<time>-<pid>, so its
 # sessions keep running and stay reachable with `tmux -S <that path>`, and
 # omo-status and omo-notify (omo's hooks) find it for their panes, so their
-# Herdr tabs keep getting their states. Nothing is killed. Then each omo pane gets its state back from agent-state's view of
-# its session (working, in the background, or waiting on you), since omo's own
-# updates went to the other server meanwhile. With several lost servers, or a
-# lost one newer than the server on the socket, it only says so. What it does
-# is logged and shown as a notification.
+# Herdr tabs keep getting their states. Nothing is killed. Then each omo pane
+# gets its state back from agent-state's view of its session (working, in the
+# background, or waiting on you), since omo's own updates went to the other
+# server meanwhile. With several lost servers, or a lost one newer than the
+# server on the socket, it only says so. What it does is logged, and on macOS
+# shown as a notification.
 #
-# Usage: tmux-rehome check       (run by the launchd agent; quiet when all is well)
+# Usage: tmux-rehome check       (run every minute once installed; quiet when all is well)
 #        tmux-rehome status      (each server, how long it has run, the sockets that reach it)
 #        tmux-rehome sync        (only the last step: omo pane states from agent-state)
-#        tmux-rehome install     (install and start the launchd agent: a check every minute)
-#        tmux-rehome uninstall   (stop and remove the launchd agent)
+#        tmux-rehome install     (a check every minute: a launchd agent on macOS, a systemd
+#                                 user timer on Linux, which runs without a login when the
+#                                 user lingers)
+#        tmux-rehome uninstall   (stop and remove it)
 
 set -u
 
@@ -31,6 +34,7 @@ label="local.tmux-rehome"
 domain="gui/$(id -u)"
 log="${TMUX_REHOME_LOG:-$HOME/.local/state/tmux-rehome.log}"
 plist="$HOME/Library/LaunchAgents/$label.plist"
+units="$HOME/.config/systemd/user"
 tmpdir="${TMUX_TMPDIR:-/tmp}"
 dir="$tmpdir/tmux-$(id -u)"
 agent_state="${AGENT_STATE_URL:-http://127.0.0.1:4747}"
@@ -153,6 +157,33 @@ case ${1:-} in
   status) status ;;
   sync) resync ;;
   install)
+    if [[ $(uname) != Darwin ]]; then
+      mkdir -p "$units" "$(dirname "$log")"
+      cat >"$units/tmux-rehome.service" <<UNIT
+[Unit]
+Description=Give tmux's default socket back to the server that lost it
+
+[Service]
+Type=oneshot
+ExecStart=$HOME/.local/bin/tmux-rehome check
+StandardOutput=append:$log
+StandardError=append:$log
+UNIT
+      cat >"$units/tmux-rehome.timer" <<UNIT
+[Unit]
+Description=Check tmux's default socket every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+UNIT
+      systemctl --user daemon-reload && systemctl --user enable --now tmux-rehome.timer \
+        && echo "tmux-rehome: checking tmux's default socket every minute ($units/tmux-rehome.timer)"
+      exit
+    fi
     mkdir -p "$(dirname "$log")" "$(dirname "$plist")"
     cat >"$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -188,6 +219,13 @@ PLIST
     launchctl bootstrap "$domain" "$plist" && echo "tmux-rehome: checking tmux's default socket every minute ($plist)"
     ;;
   uninstall)
+    if [[ $(uname) != Darwin ]]; then
+      systemctl --user disable --now tmux-rehome.timer 2>/dev/null
+      rm -f "$units/tmux-rehome.service" "$units/tmux-rehome.timer"
+      systemctl --user daemon-reload
+      echo "tmux-rehome: removed $units/tmux-rehome.timer"
+      exit
+    fi
     launchctl bootout "$domain/$label" 2>/dev/null
     rm -f "$plist"
     echo "tmux-rehome: removed $plist"
