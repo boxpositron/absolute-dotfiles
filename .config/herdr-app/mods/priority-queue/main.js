@@ -12,7 +12,10 @@
 //     (`omo-status ack`) as looking at the pane does; Reply sends the agent its next prompt.
 //   - a session agent-state holds blocked (a goal blocked with a reason) that no other card covers.
 // Questions, failures and blocks come first, then finished turns, each the longest waiting first, as
-// `omo-status next` goes. A card names its tmux session with the session's colour (tmux-session-tint).
+// `omo-status next` goes. A card names its tmux session with the session's colour (tmux-session-tint), and when it
+// joined the queue: a time of day, then how long ago. A card with a question open counts down to when omo stops waiting
+// (agent-state's deadlineAt: the agent then goes on without your answer, or, for a required question, leaves what it gates
+// undone and stops), and one whose session has a wake-up scheduled counts down to that (resumeAt), as a bar burning down.
 // Text is Markdown, and Mermaid fences are drawn by herdr-render into the preview's cache. Go to, or a
 // click on a card's top line, shows the pane in Herdr (`omo-status show`). A card you answered (an option, Send
 // or Reply) greys out under a spinner, below the rest, until the agent takes the answer: its pane works again,
@@ -91,6 +94,48 @@ const steps = (a, b, n) => Array.from({ length: n }, (_, i) => div().flex_1().h_
 // see-through layout (netrunner's frosted glass) clears that colour, which would leave them invisible.
 const solid = (c) => (typeof c === "string" && c.length === 9 ? c.slice(0, 7) : c);
 
+const pad = (n) => String(n).padStart(2, "0");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+// A time of day on the 24-hour clock, with the date in front when it isn't today: "14:32", "27 Nov 14:32".
+function stamp(ms, now) {
+  const d = new Date(ms);
+  return d.toDateString() === new Date(now).toDateString() ? hm(d) : `${d.getDate()} ${MONTHS[d.getMonth()]} ${hm(d)}`;
+}
+// The whole of it, for tooltips: "Fri 28 Nov, 14:32:05".
+function fullStamp(ms) {
+  const d = new Date(ms);
+  return `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}, ${hm(d)}:${pad(d.getSeconds())}`;
+}
+// Time left: "4:05", "23:41", "1:02:09".
+function clock(ms) {
+  const s = Math.ceil(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${m}:${pad(s % 60)}`;
+}
+
+// What a card's countdown runs to: omo stops waiting on a question and the agent goes on without your answer ("carry")
+// or, for a required one, leaves the action it gates undone and ends its turn ("pause"); or a scheduled wake-up ("resume").
+const gated = (c) => (c.what ? `"${c.what}"` : "what this decides");
+const FUSE = {
+  carry: { label: "Carries on in", then: () => "Unanswered, it goes on with its own call.", over: () => "Time's up: it goes on without your answer." },
+  pause: {
+    label: "Pauses in", then: (c) => `Unanswered, it leaves ${gated(c)} undone and stops.`,
+    over: (c) => `Time's up: it stops, leaving ${gated(c)} undone.`,
+  },
+  resume: { label: "Resumes in", then: () => "A wake-up is scheduled: it picks up by itself.", over: () => "Its wake-up is due: it picks up by itself." },
+};
+// netrunner's HUD draws the countdown as a row of cells going dark.
+const CELLS = 30;
+
+// What a card counts down to, if anything: omo giving up on the soonest of its open questions (from when it was asked),
+// else the session's scheduled wake-up (from when the card joined the queue).
+function countdownOf(it) {
+  const q = (it.questions ?? []).filter((x) => x.deadlineAt).sort((a, b) => a.deadlineAt - b.deadlineAt)[0];
+  if (q) return { from: q.askedAt, to: q.deadlineAt, then: q.required ? "pause" : "carry", what: q.header || null };
+  return it.resumeAt > it.since ? { from: it.since, to: it.resumeAt, then: "resume", what: null } : null;
+}
+
 // omo-status list: pane, session, window, folder, state, since, wake-up, message. Another machine's pane
 // and session carry its name in front ("server/%3", "server/work").
 function parse(out) {
@@ -125,9 +170,11 @@ function summaryOf(text) {
   return out;
 }
 
-// The questions open in an agent-state session, each {header?, question, multiSelect?, options, askedAt}.
+// The questions open in an agent-state session, each {header?, question, multiSelect?, options, askedAt, deadlineAt?,
+// required?} (older collectors leave the last two out).
 const questionsOf = (d) => (d.openQuestions ?? []).flatMap((q) =>
-  (q.items?.length ? q.items : q.questions.map((question) => ({ question, options: [] }))).map((item) => ({ ...item, askedAt: q.askedAt })));
+  (q.items?.length ? q.items : q.questions.map((question) => ({ question, options: [] })))
+    .map((item) => ({ ...item, askedAt: q.askedAt, deadlineAt: q.deadlineAt, required: q.required })));
 
 // The preview's cache key, so a diagram either of them drew is drawn once.
 function hash(text) {
@@ -227,8 +274,9 @@ export default class PriorityQueue extends View {
     this.split = new Map();
     this.input = InputState.new({ placeholder: "Type a reply, Enter sends" });
     this.input.on("submit", (_e, cx) => this.sendTyped(cx));
-    // The ages on the cards move on.
-    cx.timer.every(30000, (cx) => cx.notify());
+    // The ages on the cards move on, and a countdown each second while one shows (render sets ticking).
+    this.ticks = 0;
+    cx.timer.every(1000, (cx) => { if (this.ticking || ++this.ticks % 30 === 0) cx.notify(); });
   }
 
   // A change while a read runs reads again in the same task: a task started by one that is ending is dropped.
@@ -282,7 +330,7 @@ export default class PriorityQueue extends View {
       items.push({
         key: `${p.pane}|${p.state}|${p.since}`, kind: p.state, pane: p.pane, machine: p.machine, session: p.session,
         window: p.window, project: p.project, since: p.since, msg: p.msg, sid: s?.sid ?? null, at: s?.machine ?? null,
-        name: s?.name ?? null, looking: p.pane === looking,
+        name: s?.name ?? null, resumeAt: s?.resumeAt ?? null, looking: p.pane === looking,
       });
     }
     for (const s of this.sessions) {
@@ -292,7 +340,8 @@ export default class PriorityQueue extends View {
       items.push({
         key: `${s.machine}/${s.sid}|blocked|${s.lifecycleSince}`, kind: "blocked", pane: null, machine: s.machine === "mac" ? "" : s.machine,
         session: target?.split(":")[0] ?? null, window: null, project: s.project ?? "", since: s.lifecycleSince ?? s.lastActivity,
-        msg: s.needsDavid ?? "", sid: s.sid, at: s.machine, name: s.name ?? null, tmux: target, host: s.host ?? null, looking: false,
+        msg: s.needsDavid ?? "", sid: s.sid, at: s.machine, name: s.name ?? null, tmux: target, host: s.host ?? null,
+        resumeAt: s.resumeAt ?? null, looking: false,
       });
     }
     for (const it of items) {
@@ -673,7 +722,7 @@ export default class PriorityQueue extends View {
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(div().flex_none().text_color(REMOTE).child(it.machine)))
         .child(div().flex_1())
-        .child(div().flex_none().text_color(t.muted).child(ago(now - it.since)))
+        .child(this.queuedAt(t, it, now))
         .child(this.pinButton(t, it)))
       .child(h_flex().items_stretch().bg(mix(band, "#ffffff", 0.35) + "14")
         .child(div().w(3).flex_none().bg(sent ? band + "66" : band))
@@ -697,11 +746,52 @@ export default class PriorityQueue extends View {
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_family(display()).font_weight(600).text_size(14.5).text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(caps(it.machine, 12.5).flex_none().text_color(REMOTE)))
         .child(div().flex_1())
-        .child(div().flex_none().font_family(mono()).text_size(10.5).text_color(t.muted).child(ago(now - it.since)))
+        .child(this.queuedAt(t, it, now))
         .child(this.pinButton(t, it)))
       .child(h_flex().items_stretch()
         .child(div().w(3).mb(C).flex_none().bg(sent ? band + "66" : band))
         .child(this.inside(t, it, now, title, where, sent)));
+  }
+
+  // When the card joined the queue, as a time of day (with the date when it isn't today), then how long ago.
+  queuedAt(t, it, now) {
+    return h_flex().id(`at-${it.key}`).flex_none().gap(4).items_center().font_family(mono()).text_size(10.5)
+      .tooltip(`Queued ${fullStamp(it.since)}`)
+      .child(div().text_color(t.muted).child(stamp(it.since, now)))
+      .child(div().text_color(t.dim).child(`\u00b7 ${ago(now - it.since)}`));
+  }
+
+  // A card's countdown (countdownOf), but none once you've answered it, or on a pinned card its pane has moved past.
+  countdownFor(it) {
+    return this.answered.has(it.key) || it.stale ? null : countdownOf(it);
+  }
+
+  // A card's countdown, under its header: how long until the agent stops waiting on you and what it does then, the time it
+  // will, and a bar burning down from when it began waiting: cyan, yellow under half, red under a fifth, the clock pulsing
+  // in the last minute. The bar slides from one second's value to the next (a 1 s linear width transition); the HUD draws
+  // it as a row of cells going dark from the right, the last one lit flickering.
+  countdown(t, it, c, now) {
+    const left = Math.max(0, c.to - now), f = Math.min(1, left / Math.max(1, c.to - c.from)), lit = Math.ceil(f * CELLS);
+    const tone = (f > 0.5 ? t.working : f > 0.2 ? t.blocked : t.ansi1).slice(0, 7), fuse = FUSE[c.then];
+    const label = left ? fuse.label : c.then === "resume" ? "Waking up" : "Time's up";
+    const tip = c.then === "resume" ? `Its wake-up is due ${fullStamp(c.to)}.`
+      : `Asked ${fullStamp(c.from)}. omo stops waiting ${fullStamp(c.to)}; typing in its question box in the pane pushes that back.`;
+    return v_flex().id(`fuse-${it.key}`).gap(5).tooltip(tip)
+      .child(h_flex().gap(6).items_center()
+        .child(svg("mods/workspace-chrome/clock.svg").size(12).flex_none().text_color(tone))
+        .child(this.hud ? caps(label, 12.5, 700).flex_none().text_color(tone)
+          : div().flex_none().font_family(mono()).text_size(10.5).font_bold().text_color(tone).child(label.toUpperCase()))
+        .child(div().flex_none().font_family(mono()).text_size(12.5).font_bold().text_color(tone)
+          .when(left > 0 && left <= 60000, (el) => el.loop("opacity", { from: 0.35, to: 1, period: 1000 }))
+          .child(clock(left)))
+        .child(div().flex_1())
+        .child(div().flex_none().font_family(mono()).text_size(10.5).text_color(t.dim).child(`at ${stamp(c.to, now)}`)))
+      .child(this.hud
+        ? h_flex().h(6).gap(2).children(Array.from({ length: CELLS }, (_, i) => div().flex_1().h_full().bg(i < lit ? tone : tone + "1f")
+          .when(i === lit - 1, (el) => el.loop("opacity", { from: 0.4, to: 1, period: 1200 }))))
+        : div().h(4).w_full().bg(tone + "26")
+          .child(div().h_full().w(`${(f * 100).toFixed(3)}%`).bg(tone).transition("width", { duration: 1000, easing: "linear" })))
+      .child(div().text_size(11).line_height(1.4).text_color(t.muted).child(left ? fuse.then(c) : fuse.over(c)));
   }
 
   // The pin in a card's header, lit while the card is pinned.
@@ -723,9 +813,12 @@ export default class PriorityQueue extends View {
       .child(div().flex_1().h(1).bg(t.accent + "4d"));
   }
 
-  // A card below its header: your answer while it is held, the title and where, the body, actions and reply box.
+  // A card below its header: its countdown, or your answer while it is held, the title and where, the body, actions and
+  // reply box.
   inside(t, it, now, title, where, sent) {
+    const c = this.countdownFor(it);
     return v_flex().flex_1().min_w(0).px(12).py(10).gap(8)
+      .when(Boolean(c), (el) => el.child(this.countdown(t, it, c, now)))
       .when(Boolean(sent), (el) => el.child(this.heldNote(t, it, sent, now)))
       .child(v_flex().gap(8).when(Boolean(sent), (el) => el.opacity(0.45))
         .child(v_flex().gap(1)
@@ -758,7 +851,12 @@ export default class PriorityQueue extends View {
     const now = Date.now();
     const held = items.filter((it) => group(it) === 1).length, pins = items.filter((it) => group(it) === 2).length;
     const needs = items.filter((it) => group(it) === 0 && KINDS[it.kind].rank === 2).length, finished = items.length - needs - held - pins;
-    const count = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : null, finished ? `${finished} finished` : null, held ? `${held} answered` : null,
+    // The column redraws each second while a card counts down, and the soonest countdown goes on the line under the title.
+    const clocks = items.map((it) => this.countdownFor(it)).filter(Boolean);
+    this.ticking = clocks.length > 0;
+    const next = clocks.filter((c) => c.to > now).sort((a, b) => a.to - b.to)[0];
+    const count = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : null,
+      next ? `${FUSE[next.then].label.toLowerCase()} ${clock(next.to - now)}` : null, finished ? `${finished} finished` : null, held ? `${held} answered` : null,
       pins ? `${pins} pinned` : null].filter(Boolean).join(" \u00b7 ");
     return v_flex().id("priority-queue").size_full().min_h(0).rounded(this.hud ? 0 : 10).overflow_hidden().bg(t.background).border_1()
       .border_color(needs ? t.accent + "99" : this.hud ? t.accent + "4d" : t.border).text_size(13).text_color(t.foreground)
