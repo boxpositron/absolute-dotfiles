@@ -722,7 +722,6 @@ export default class PriorityQueue extends View {
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_semibold().text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(div().flex_none().text_color(REMOTE).child(it.machine)))
         .child(div().flex_1())
-        .child(this.queuedAt(t, it, now))
         .child(this.pinButton(t, it)))
       .child(h_flex().items_stretch().bg(mix(band, "#ffffff", 0.35) + "14")
         .child(div().w(3).flex_none().bg(sent ? band + "66" : band))
@@ -746,7 +745,6 @@ export default class PriorityQueue extends View {
         .when(Boolean(it.session), (el) => el.child(div().min_w(0).truncate().font_family(display()).font_weight(600).text_size(14.5).text_color(t.foreground).child(it.session)))
         .when(Boolean(it.machine), (el) => el.child(caps(it.machine, 12.5).flex_none().text_color(REMOTE)))
         .child(div().flex_1())
-        .child(this.queuedAt(t, it, now))
         .child(this.pinButton(t, it)))
       .child(h_flex().items_stretch()
         .child(div().w(3).mb(C).flex_none().bg(sent ? band + "66" : band))
@@ -813,8 +811,9 @@ export default class PriorityQueue extends View {
       .child(div().flex_1().h(1).bg(t.accent + "4d"));
   }
 
-  // A card below its header: its countdown, or your answer while it is held, the title and where, the body, actions and
-  // reply box.
+  // A card below its header: its countdown, or your answer while it is held, the title with when it was queued and where,
+  // the body, actions and reply box. The time sits on the title's line, so the header keeps its room for the session and
+  // another machine's name.
   inside(t, it, now, title, where, sent) {
     const c = this.countdownFor(it);
     return v_flex().flex_1().min_w(0).px(12).py(10).gap(8)
@@ -822,8 +821,10 @@ export default class PriorityQueue extends View {
       .when(Boolean(sent), (el) => el.child(this.heldNote(t, it, sent, now)))
       .child(v_flex().gap(8).when(Boolean(sent), (el) => el.opacity(0.45))
         .child(v_flex().gap(1)
-          .child(div().truncate().text_size(13.5).font_semibold().text_color(t.foreground)
-            .when(this.hud, (el) => el.font_family(display()).text_size(15.5)).child(title))
+          .child(h_flex().gap(8).items_center()
+            .child(div().flex_1().min_w(0).truncate().text_size(13.5).font_semibold().text_color(t.foreground)
+              .when(this.hud, (el) => el.font_family(display()).text_size(15.5)).child(title))
+            .child(this.queuedAt(t, it, now)))
           .when(Boolean(where), (el) => el.child(div().truncate().font_family(mono()).text_size(10.5).text_color(t.dim).child(where))))
         .child(this.body(t, it)))
       .child(this.actions(t, it))
